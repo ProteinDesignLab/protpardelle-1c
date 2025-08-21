@@ -1,0 +1,19 @@
+search_space:
+  models:
+    - ["cc83", "2616", "sampling_sidechain_conditional"] #* binder generation
+    - ["cc78", "1431", "sampling_sidechain_conditional"] #* intended for homodimer generation
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 7eow_B_atom_rot_128_A
+motif_contigs:
+  - A1-128;/;120-120 #;/;100-100
+total_lengths:
+  - [[128, 128], [120, 120]] #, [100, 100]]
+hotspots:
+  - "A19,A76,A80,A82"
+ssadj:
+  - null

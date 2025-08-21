@@ -1,0 +1,47 @@
+REMARK 1 Reference PDB ID: 1B73
+REMARK 2 Motif Segment Placement in Reference PDB: 6;A;61;B;107;C;72
+REMARK 3 Length for Designed Scaffolds: 125
+ATOM      1  N   ASP A   1       8.299   4.381   3.054  1.00  0.00           N  
+ATOM      2  CA  ASP A   1       7.215   3.544   2.500  1.00  0.00           C  
+ATOM      3  C   ASP A   1       7.784   2.763   1.322  1.00  0.00           C  
+ATOM      4  O   ASP A   1       8.952   2.957   0.939  1.00  0.00           O  
+ATOM      5  CB  ASP A   1       6.117   4.476   1.997  1.00  0.00           C  
+ATOM      6  CG  ASP A   1       4.790   3.796   1.707  1.00  0.00           C  
+ATOM      7  OD1 ASP A   1       4.733   2.617   1.326  1.00  0.00           O  
+ATOM      8  OD2 ASP A   1       3.782   4.515   1.737  1.00  0.00           O  
+ATOM      9  N   SER A   2       6.988   1.854   0.766  1.00  0.00           N  
+ATOM     10  CA  SER A   2       7.427   1.072  -0.368  1.00  0.00           C  
+ATOM     11  C   SER A   2       7.227   1.813  -1.655  1.00  0.00           C  
+ATOM     12  O   SER A   2       7.994   1.626  -2.609  1.00  0.00           O  
+ATOM     13  CB  SER A   2       6.664  -0.229  -0.457  1.00  0.00           C  
+ATOM     14  OG  SER A   2       5.324  -0.047  -0.062  1.00  0.00           O  
+TER
+ATOM     15  N   CYS B   1       3.708   2.105   5.828  1.00  0.00           N  
+ATOM     16  CA  CYS B   1       3.281   0.904   5.131  1.00  0.00           C  
+ATOM     17  C   CYS B   1       2.704  -0.040   6.194  1.00  0.00           C  
+ATOM     18  O   CYS B   1       3.346  -0.240   7.246  1.00  0.00           O  
+ATOM     19  CB  CYS B   1       4.531   0.307   4.401  1.00  0.00           C  
+ATOM     20  SG  CYS B   1       4.438  -1.280   3.479  1.00  0.00           S  
+TER
+ATOM     21  N   CYS C   1      -5.767  -1.381   2.968  1.00  0.00           N  
+ATOM     22  CA  CYS C   1      -5.204  -1.029   1.687  1.00  0.00           C  
+ATOM     23  C   CYS C   1      -6.154  -1.257   0.533  1.00  0.00           C  
+ATOM     24  O   CYS C   1      -6.510  -2.392   0.233  1.00  0.00           O  
+ATOM     25  CB  CYS C   1      -3.918  -1.794   1.542  1.00  0.00           C  
+ATOM     26  SG  CYS C   1      -2.918  -1.428   2.980  1.00  0.00           S  
+ATOM     27  N   UNK C   2      -6.498  -0.164  -0.139  1.00  0.00           N  
+ATOM     28  CA  UNK C   2      -7.446  -0.185  -1.243  1.00  0.00           C  
+ATOM     29  C   UNK C   2      -6.989  -0.454  -2.679  1.00  0.00           C  
+ATOM     30  O   UNK C   2      -6.329   0.373  -3.303  1.00  0.00           O  
+ATOM     31  N   HIS C   3      -7.443  -1.573  -3.230  1.00  0.00           N  
+ATOM     32  CA  HIS C   3      -7.141  -1.962  -4.603  1.00  0.00           C  
+ATOM     33  C   HIS C   3      -8.412  -2.180  -5.386  1.00  0.00           C  
+ATOM     34  O   HIS C   3      -9.376  -2.732  -4.865  1.00  0.00           O  
+ATOM     35  CB  HIS C   3      -6.387  -3.274  -4.641  1.00  0.00           C  
+ATOM     36  CG  HIS C   3      -4.917  -3.121  -4.574  1.00  0.00           C  
+ATOM     37  ND1 HIS C   3      -4.080  -4.153  -4.226  1.00  0.00           N  
+ATOM     38  CD2 HIS C   3      -4.128  -2.041  -4.784  1.00  0.00           C  
+ATOM     39  CE1 HIS C   3      -2.836  -3.719  -4.211  1.00  0.00           C  
+ATOM     40  NE2 HIS C   3      -2.837  -2.443  -4.544  1.00  0.00           N  
+TER
+END   

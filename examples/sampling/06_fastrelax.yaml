@@ -1,0 +1,23 @@
+#! For demonstration only, not properly benchmarked
+partial_diffusion:
+  enabled: true
+  rewind_steps: [90, 100, 110, 120, 130, 140, 150, 160, 170, 180]
+search_space:
+  models:
+    - ["cc89", "415", "sampling_fastrelax"] #* single chain model, allatom but must always give ground truth sequence
+    - ["cc94", "3100", "sampling_fastrelax"] #* multichain model, allatom
+  step_scales: [1.0]
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 7eow_B_atom
+motif_contigs:
+  - "seq/EVQLVESGGGLVQPGGSLRLSCAASGRTFSYNPMGWFRQAPGKGRELVAAISRTGGSTYYPDSVEGRFTISRDNAKRMVYLQMNSLRAEDTAVYYCLYSGVRYEDGRVRTLPSEYTFWGQGTQVTVSS"
+total_lengths:
+  - [[128, 128]]
+hotspots:
+  - null
+ssadj:
+  - null

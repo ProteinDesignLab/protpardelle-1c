@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "protpardelle"
+authors = [
+    { name = "Tianyu Lu", email = "tianyulu@stanford.edu" },
+    { name = "Richard W. Shuai", email = "rshuai@stanford.edu" },
+    { name = "Petr Kouba", email = "petrkouba3@gmail.com" },
+    { name = "Zhaoyang Li", email = "zhaoyangli@stanford.edu" },
+    { name = "Yilin Chen", email = "yilinc5@stanford.edu" },
+    { name = "Akio Shirali", email = "akios@stanford.edu" },
+    { name = "Jinho Kim", email = "zhkim216@stanford.edu" },
+    { name = "Possu Huang", email = "possu@stanford.edu" },
+]
+license = { file = "LICENSE" }
+dynamic = ["version"]
+description = "Conditional Protein Structure Generation with Protpardelle-1c"
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Required dependencies
+dependencies = [
+    "biopython",
+    "biotite",
+    "dm-tree",
+    "einops",
+    "hydra-core",
+    "jupyter",
+    "matplotlib",
+    "ml_collections",
+    "modelcif",
+    "numpy",
+    "omegaconf",
+    "pandas",
+    "platformdirs",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml",
+    "scipy",
+    "seaborn",
+    "torch",
+    "torchaudio",
+    "torchtyping",
+    "torchvision",
+    "tqdm",
+    "transformers",
+    "typer",
+    "wandb",
+    # OpenFold is also required but need to be installed separately
+    # "git+https://github.com/aqlaboratory/openfold.git"
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "pre-commit"]
+
+[tool.pytest.ini_options]
+addopts = "-v -s"
+testpaths = ["tests"]
+
+[tool.setuptools.dynamic]
+version = { attr = "protpardelle.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["protpardelle", "protpardelle.*"]
+
+# Ship small data files inside the package
+[tool.setuptools.package-data]
+protpardelle = ["common/**/*.txt", "configs/**/*.yaml"]
