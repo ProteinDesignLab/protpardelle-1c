@@ -21,7 +21,7 @@ import wandb
 from Bio import SeqIO
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 import protpardelle.data.pdb_io

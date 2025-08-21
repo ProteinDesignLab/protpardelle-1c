@@ -4,7 +4,7 @@ Authors: Alex Chu, Tianyu Lu, Zhaoyang Li
 """
 
 import torch
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 import protpardelle.data.sequence

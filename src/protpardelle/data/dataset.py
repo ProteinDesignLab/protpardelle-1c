@@ -16,7 +16,7 @@ from Bio.PDB import MMCIFParser
 from einops import rearrange, repeat
 from torch.utils.data import Dataset, RandomSampler, Sampler
 from torchtyping import TensorType
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 import protpardelle.data.pdb_io
 import protpardelle.utils

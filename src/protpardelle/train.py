@@ -22,7 +22,7 @@ import wandb
 import yaml
 from torch.amp import autocast
 from torch.distributed.elastic.multiprocessing.errors import record
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 import protpardelle.core.diffusion as diffusion
 import protpardelle.core.models as models

@@ -20,7 +20,7 @@ from Bio.PDB import PDBParser
 from einops import rearrange, repeat
 from omegaconf import DictConfig
 from torchtyping import TensorType
-from tqdm import tqdm
+from tqdm.auto import tqdm
 
 import protpardelle.core.diffusion as diffusion
 import protpardelle.core.modules as modules
