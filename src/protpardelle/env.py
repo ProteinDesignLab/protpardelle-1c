@@ -53,7 +53,7 @@ def _detect_project_root_dir() -> Path:
 PROJECT_ROOT_DIR = _detect_project_root_dir()
 
 _default_protpardelle_model_params = PROJECT_ROOT_DIR / "model_params"
-_default_esmfold_path = _default_protpardelle_model_params / "ESMFold/esmfold.model"
+_default_esmfold_path = _default_protpardelle_model_params / "ESMFold"
 _default_protein_mpnn_weights = (
     _default_protpardelle_model_params / "ProteinMPNN/vanilla_model_weights"
 )

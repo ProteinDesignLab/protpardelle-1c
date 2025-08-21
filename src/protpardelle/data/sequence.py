@@ -3,6 +3,8 @@
 Author: Alex Chu, Zhaoyang Li
 """
 
+from typing import Literal
+
 import torch
 import torch.nn.functional as F
 
@@ -39,15 +41,31 @@ def aatype_to_seq(aatype, seq_mask=None):
     return seqs
 
 
-def seq_to_aatype(seq, num_tokens=21):
+def seq_to_aatype(seq: str, num_tokens: Literal[20, 21, 22] = 21) -> torch.Tensor:
+    """Convert a protein sequence to its amino acid type representation.
+
+    Args:
+        seq (str): The protein sequence.
+        num_tokens (Literal[20, 21, 22], optional): The number of tokens to use. Defaults to 21.
+
+    Raises:
+        ValueError: If the number of tokens is not supported.
+
+    Returns:
+        torch.Tensor: The amino acid type representation of the sequence.
+    """
+
     if num_tokens == 20:
         mapping = residue_constants.restype_order
-    if num_tokens == 21:
+    elif num_tokens == 21:
         mapping = residue_constants.restype_order_with_x
-    if num_tokens == 22:
+    elif num_tokens == 22:
         mapping = residue_constants.restype_order_with_x
         mapping["<mask>"] = 21
-    return torch.Tensor([mapping[aa] for aa in seq]).long()
+    else:
+        raise ValueError(f"num_tokens {num_tokens} not supported")
+
+    return torch.tensor([mapping[aa] for aa in seq], dtype=torch.long)
 
 
 def batched_seq_to_aatype_and_mask(seqs, max_len=None):

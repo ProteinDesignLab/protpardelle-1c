@@ -16,6 +16,7 @@
 
 Authors: Alex Chu, Zhaoyang Li
 """
+# TODO: Compare AF2 original repo
 
 import collections
 import functools

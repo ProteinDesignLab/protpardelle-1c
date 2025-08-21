@@ -26,6 +26,7 @@ dependencies = [
     "biotite",
     "dm-tree",
     "einops",
+    "huggingface_hub",
     "hydra-core",
     "jupyter",
     "matplotlib",
@@ -34,22 +35,15 @@ dependencies = [
     "numpy",
     "omegaconf",
     "pandas",
-    "platformdirs",
-    "pydantic",
-    "pydantic-settings",
     "pyyaml",
     "scipy",
     "seaborn",
-    "torch",
-    "torchaudio",
+    "torch>=2.6.0",
     "torchtyping",
-    "torchvision",
     "tqdm",
     "transformers",
     "typer",
     "wandb",
-    # OpenFold is also required but need to be installed separately
-    # "git+https://github.com/aqlaboratory/openfold.git"
 ]
 
 [project.optional-dependencies]
@@ -66,6 +60,5 @@ version = { attr = "protpardelle.__version__" }
 where = ["src"]
 include = ["protpardelle", "protpardelle.*"]
 
-# Ship small data files inside the package
 [tool.setuptools.package-data]
 protpardelle = ["common/**/*.txt", "configs/**/*.yaml"]

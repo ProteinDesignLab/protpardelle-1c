@@ -183,3 +183,4 @@ pdbs/
 results/
 archive/
 model_params/
+tmp-*/

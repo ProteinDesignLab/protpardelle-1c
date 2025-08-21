@@ -84,7 +84,6 @@ def load_feats_from_pdb(
                 feats["atom_positions"],
                 feats["b_factors"],
                 feats["aatype"],
-                return_mask=True,
             )
         )
 

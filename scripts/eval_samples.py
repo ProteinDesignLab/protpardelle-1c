@@ -1,6 +1,6 @@
 """Entrypoint for Protpardelle-1c self-consistency evals.
 
-Authors: Alex Chu, Tianyu Lu
+Authors: Alex Chu, Tianyu Lu, Zhaoyang Li
 """
 
 import itertools
@@ -191,9 +191,6 @@ def generate(
             PROTEINMPNN_WEIGHTS,
             device=device,
         )
-        struct_pred_model = torch.load(ESMFOLD_PATH, weights_only=False).to(device)
-        struct_pred_model.esm = struct_pred_model.esm.half()
-        tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
     else:
         mpnn_model = None
         struct_pred_model = None
@@ -327,9 +324,6 @@ def generate(
             trimmed_chain_index=trimmed_chain_index,
             mpnn_model=mpnn_model,
             num_seqs=num_mpnn_seqs,
-            struct_pred_model=struct_pred_model,
-            tokenizer=tokenizer,
-            return_all_atom_plddt=True,
             motif_idx=motif_idx,
             motif_coords=motif_coords,
             motif_aatypes=motif_aatypes,

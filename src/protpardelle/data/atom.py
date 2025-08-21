@@ -1,6 +1,6 @@
 """Atom representation handling.
 
-Authors: Alex Chu, Richard Shuai
+Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 """
 
 import torch
@@ -33,31 +33,47 @@ def atom14_mask_from_aatype(aatype, seq_mask=None):
     return atom_mask
 
 
-def atom37_coords_from_atom14(atom14_coords, aatype, return_mask=False):
-    # Unbatched
+def atom37_coords_from_atom14(
+    atom14_coords: torch.Tensor, aatype: torch.Tensor
+) -> torch.Tensor:
+    """Convert atom14 coordinates to atom37 coordinates.
+
+    Args:
+        atom14_coords (torch.Tensor): Atom 14 coordinates. (B, L, 14, 3)
+        aatype (torch.Tensor): Amino acid type. (B, L)
+
+    Returns:
+        torch.Tensor: Atom 37 coordinates. (B, L, 37, 3)
+    """
+
     device = atom14_coords.device
-    atom37_coords = torch.zeros((atom14_coords.shape[0], 37, 3)).to(device)
-    for i in range(atom14_coords.shape[0]):  # per residue
-        aa = aatype[i]
-        if aa.item() < len(residue_constants.restypes):
-            aa_3name = residue_constants.restype_1to3[residue_constants.restypes[aa]]
-        else:
-            aa_3name = "UNK"
+    B, L = atom14_coords.shape[:2]
+    atom37_coords = torch.zeros((B, L, 37, 3), device=device)
+    for i in range(B):  # per batch
+        for j in range(L):  # per residue
+            aa = aatype[i, j]
+            if aa.item() < residue_constants.restype_num:
+                aa_3name = residue_constants.restype_1to3[
+                    residue_constants.restypes[aa]
+                ]
+            else:
+                aa_3name = "UNK"
 
-        atom14_atoms = residue_constants.restype_name_to_atom14_names[aa_3name]
-        for j in range(14):
-            atom_name = atom14_atoms[j]
-            if atom_name != "":
-                atom37_idx = residue_constants.atom_order[atom_name]
-                atom37_coords[i, atom37_idx, :] = atom14_coords[i, j, :]
+            atom14_atoms = residue_constants.restype_name_to_atom14_names[aa_3name]
+            for k in range(14):
+                atom_name = atom14_atoms[k]
+                if atom_name != "":
+                    atom37_idx = residue_constants.atom_order[atom_name]
+                    atom37_coords[i, j, atom37_idx, :] = atom14_coords[i, j, k, :]
 
-    if return_mask:
-        atom37_mask = atom37_mask_from_aatype(aatype)
-        return atom37_coords, atom37_mask
     return atom37_coords
 
 
-def atom37_coords_to_atom14(atom37_coords, b_factors_37, aatype, return_mask=False):
+def atom37_coords_to_atom14(
+    atom37_coords: TensorType["b 37 3"],
+    b_factors_37: TensorType["b 37"],
+    aatype: TensorType["b"],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # Unbatched
     device = atom37_coords.device
     atom14_coords = torch.zeros((atom37_coords.shape[0], 14, 3)).to(device)
@@ -73,10 +89,9 @@ def atom37_coords_to_atom14(atom37_coords, b_factors_37, aatype, return_mask=Fal
                 atom14_coords[i, j, :] = atom37_coords[i, atom37_idx, :]
                 b_factors_14[i, j] = b_factors_37[i, atom37_idx]
 
-    if return_mask:
-        atom14_mask = atom14_mask_from_aatype(aatype)
-        return atom14_coords, b_factors_14, atom14_mask
-    return atom14_coords
+    atom14_mask = atom14_mask_from_aatype(aatype)
+
+    return atom14_coords, b_factors_14, atom14_mask
 
 
 def atom37_coords_from_bb(

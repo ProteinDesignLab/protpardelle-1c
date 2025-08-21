@@ -9,12 +9,12 @@ fi
 
 # Download Protpadelle model params
 aria2c -x16 -s16 -o protpardelle-1c.tar.gz "https://zenodo.org/records/16817230/files/protpardelle-1c.tar.gz?download=1"
-tar -xzvf protpardelle-1c.tar.gz --strip-components=1  # there will be a `model_params/` directory
+tar -xzvf protpardelle-1c.tar.gz --strip-components=1 # there will be a `model_params/` directory
 rm protpardelle-1c.tar.gz
 
 # Download ESMFold model
 mkdir -p model_params/ESMFold
-aria2c -x16 -s16 -o model_params/ESMFold/esmfold.model "https://colabfold.steineggerlab.workers.dev/esm/esmfold.model"
+hf download facebook/esmfold_v1 --local-dir model_params/ESMFold
 
 # Download ProteinMPNN weights
 mkdir -p model_params/ProteinMPNN

@@ -1,6 +1,6 @@
 """Utils for computing evaluation metrics.
 
-Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu
+Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import json
@@ -205,13 +205,10 @@ def compute_self_consistency(
     trimmed_chain_index=None,
     sampled_sequences=None,
     mpnn_model=None,
-    struct_pred_model=None,
-    tokenizer=None,
-    num_seqs=1,
-    motif_idx: list[list[int]] = None,
+    num_seqs: int = 1,
+    motif_idx: list[list[int]] | None = None,
     motif_coords=None,
     motif_aatypes=None,
-    return_all_atom_plddt=False,
     tmp_prefix: str = "",
     allatom: bool = False,
     atom_mask=None,
@@ -261,16 +258,12 @@ def compute_self_consistency(
                 multichain_sequences.append(modified_sequence)
             seqs_to_predict = multichain_sequences
 
-        pred_coords, conf_metrics = predict_structures(
-            seqs_to_predict,
-            model=struct_pred_model,
-            tokenizer=tokenizer,
-            return_all_atom_plddt=return_all_atom_plddt,
-        )
-        if return_all_atom_plddt:
-            all_atom_plddts, plddts, paes = conf_metrics
-        else:
-            plddts, paes = conf_metrics
+        esmfold_predictions = predict_structures(seqs_to_predict)
+
+        pred_coords = esmfold_predictions["atom37_coords"]
+        all_atom_plddts = esmfold_predictions["all_atom_plddt"]
+        plddts = esmfold_predictions["plddt"]
+        paes = esmfold_predictions["pae"]
 
         # compute full protein rmsd
         ca_scaffold_scrmsds = []
@@ -346,8 +339,7 @@ def compute_self_consistency(
 
         aux["structure_index"].extend([i] * len(seqs_to_predict))
         aux["seqs"].extend(seqs_to_predict_arr)
-        if return_all_atom_plddt:
-            aux["all_atom_plddt"].extend(all_atom_plddts)
+        aux["all_atom_plddt"].extend(all_atom_plddts)
         aux["plddt"].extend(plddts)
         aux["pae"].extend(paes)
         aux["ca_scaffold_scrmsd"].extend(ca_scaffold_scrmsds)
