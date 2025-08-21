@@ -319,7 +319,7 @@ def generate(
                 "".join([residue_constants.restypes[aaint] for aaint in s_hat_bi])
             )
 
-    # * just need motif_idx and motif_aatype from samp_aux, don't need to keep anything else
+    # just need motif_idx and motif_aatype from samp_aux, don't need to keep anything else
     sc_aux = None
     if num_mpnn_seqs > 0:
         sc_aux = compute_self_consistency(
@@ -418,7 +418,7 @@ def runner(
         hotspots.append(hs)
         ssadj_fps.append(ssadj)
 
-    # * get all params, and optionally split into chunks for parallelization
+    # get all params, and optionally split into chunks for parallelization
     all_params = list(itertools.product(*search_space.values()))
     if array_id is not None:
         chunk_size = math.ceil(len(all_params) / num_arrays)
@@ -426,7 +426,7 @@ def runner(
         end_idx = min(start_idx + chunk_size, len(all_params))
         all_params = all_params[start_idx:end_idx]
 
-    # * for a given setting
+    # for a given setting
     for curr_params in tqdm(all_params, "Evaluating search space"):
 
         if partial_diffusion:
@@ -454,7 +454,7 @@ def runner(
 
         save_suffix = f"{model_name}-epoch{epoch}-{sampling_config_name}-ss{stepscale}-schurn{schurn}-ccstart{cc_start}-dx{dxs}-dy{dys}-dz{dzs}-rewind{rs}"
 
-        per_config_save_dir = save_dir / save_suffix  # * one config, all motifs
+        per_config_save_dir = save_dir / save_suffix  # one config, all motifs
         per_config_save_dir.mkdir(exist_ok=True)
 
         with initialize_config_dir(
@@ -500,7 +500,7 @@ def runner(
 
             per_motif_save_dir = (
                 per_config_save_dir / motif_fp.stem
-            )  # * one config, one motif
+            )  # one config, one motif
             per_motif_save_dir.mkdir(exist_ok=True)
 
             model_cfg = str(
@@ -527,7 +527,7 @@ def runner(
             sampling_config["sampling"]["dy"] = dy
             sampling_config["sampling"]["dz"] = dz
 
-            # * parse motif contig
+            # parse motif contig
             motif_idx, motif_placements, motif_placements_full, all_lengths = (
                 None,
                 None,
@@ -545,7 +545,7 @@ def runner(
                 sampling_config["sampling"]["conditional_cfg"][
                     "discontiguous_motif_assignment"
                 ]["strategy"] = "fixed"
-                # * Do for each chain
+                # Do for each chain
                 chain_motif_contigs = motif_contig.split(";/;")
                 assert len(chain_motif_contigs) == len(length_ranges_per_chain), print(
                     f"Contig {motif_contig} has {len(chain_motif_contigs)} chains but length ranges specify {len(length_ranges_per_chain)} chains."
@@ -633,7 +633,7 @@ def runner(
 
             print(f"Sampling {motif_fp.stem} took {curr_runtime:.2f} seconds.")
 
-            # * save motif placements
+            # save motif placements
             df_scaffold_info = defaultdict(list)
 
             df_scaffold_info["sample_num"] = list(range(n_samples))
@@ -659,7 +659,7 @@ def runner(
                 for motif_idx_bi in motif_idx:
                     curr_fix_pos.append(
                         " ".join([str(mi + 1) for mi in motif_idx_bi])
-                    )  #! adjust to be 1-indexed
+                    )  # adjust to be 1-indexed
                 all_fix_pos.extend(curr_fix_pos)
             else:
                 all_fix_pos.extend([""] * len(curr_samp_save_names))
@@ -715,7 +715,7 @@ def runner(
                                 & (
                                     per_structure_metrics["allatom_motif_pred_rmsd"]
                                     < 1.0
-                                )  #! More strict
+                                )  # More strict
                                 & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
                             ]
                             if not per_structure_df_best.empty:
@@ -755,7 +755,7 @@ def runner(
                     if not per_structure_df_best.empty:
                         best_per_structure_metric_dfs.append(per_structure_df_best)
 
-                # * compute number of unique successes
+                # compute number of unique successes
                 num_success = len(best_per_structure_metric_dfs)
                 if num_success > 0:
                     best_per_structure_metric_df = pd.concat(
@@ -765,7 +765,7 @@ def runner(
                     self_consistent_fps = best_per_structure_metric_df[
                         "save_name"
                     ].to_list()
-                    # * copy self-consistent structures to its own folder
+                    # copy self-consistent structures to its own folder
                     self_consistent_dir = (
                         per_motif_save_dir / "esm_successful_structures"
                     )
@@ -776,12 +776,12 @@ def runner(
                     for sc_fp in self_consistent_fps:
                         shutil.copy(sc_fp, self_consistent_dir)
 
-                    # * Foldseek clustering command from La-Proteina
+                    # Foldseek clustering command from La-Proteina
                     foldseek_dir = per_motif_save_dir / "foldseek"
                     foldseek_cmd = f"{FOLDSEEK_BIN} easy-cluster {self_consistent_dir} {foldseek_dir}/res {foldseek_dir} --alignment-type 1 --cov-mode 0 --min-seq-id 0 --tmscore-threshold 0.5 --single-step-clustering > /dev/null 2>&1"
                     os.system(foldseek_cmd)
 
-                    # * parse Foldseek output for unique successes
+                    # parse Foldseek output for unique successes
                     cluster_fp = foldseek_dir / "res_rep_seq.fasta"
                     num_unique_successes = 0
                     for _ in SeqIO.parse(cluster_fp, "fasta"):

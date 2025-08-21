@@ -99,7 +99,7 @@ def draw_samples(
         **sampling_kwargs,
     )
 
-    # * Stage 2 sampling is allatom partial diffusion given sequence from stage1 for more explicit sidechain-driven backbone change
+    # Stage 2 sampling is allatom partial diffusion given sequence from stage1 for more explicit sidechain-driven backbone change
     stage2_enabled = stage2_cfg.pop("enabled")
     if stage2_enabled:
         rewind_steps = stage2_cfg.pop("rewind_steps")
@@ -127,8 +127,8 @@ def draw_samples(
         sampling_kwargs["jump_steps"] = False
         sampling_kwargs["uniform_steps"] = True
 
-        # * Here, an alternative strategy is to set stage2 as partial diffusion conditioned on backbone
-        # * uncomment the subsequent lines to achieve this
+        # Here, an alternative strategy is to set stage2 as partial diffusion conditioned on backbone
+        # uncomment the subsequent lines to achieve this
         # sampling_kwargs['conditional_cfg']['enabled'] = False
         # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['enabled'] = False
         # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['strategy'] = 'backbone'
@@ -154,7 +154,7 @@ def draw_samples(
             dummy_fill_mode=model.config.data.dummy_fill_mode,
             motif_all_atom_stage1=aux[
                 "motif_all_atom"
-            ],  # * use the centering + random rotation sampled in stage1
+            ],  # use the centering + random rotation sampled in stage1
             motif_idx_stage1=aux["motif_idx"],
             stage2=True,
             **sampling_kwargs,

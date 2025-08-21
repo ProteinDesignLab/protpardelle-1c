@@ -158,14 +158,14 @@ def run_4stage_afdesign(
     binder_length = chain_lengths[-1]
     target_length = sum(chain_lengths[:-1])
 
-    # * option 1: fixbb protocol
+    # option 1: fixbb protocol
     target_chain_str = ",".join(chain.split(",")[:-1])
     # af_model = mk_afdesign_model(protocol="fixbb", num_recycles=1, data_dir=af2_param_dir,
     #                             use_multimer=True, use_initial_guess=True, use_initial_atom_pos=False)
     # af_model.prep_inputs(pdb_filename=str(input_pdb), chain=chain,
     #                      rm_template=False, rm_template_seq=True, rm_template_sc=True, rm_template_ic=False, fix_pos=target_chain_str)
 
-    # * option 2: binder protocol
+    # option 2: binder protocol
     # output sequence is only the binder chain sequence
     af_model = mk_afdesign_model(
         protocol="binder",
@@ -356,7 +356,7 @@ def design(pdb_csv: Path):
             print(f"Target for {str(pdb_path)} not found!")
             raise AssertionError
 
-        # * AF2 Multimer design
+        # AF2 Multimer design
         chain_lengths = []
         structure = parser.get_structure("s", pdb_path)
         for cc in Selection.unfold_entities(structure[0], "C"):
@@ -375,9 +375,9 @@ def design(pdb_csv: Path):
                 relax_dir.mkdir(exist_ok=True, parents=True)
                 relax_path = relax_dir / f"{pdb_path.stem}_{i}_relax.pdb"
 
-                # * Relax and get interface residues to fix during MPNN sequence design
-                #! afdesign relabels the target chain to A with 50 residue index gaps for missing regions
-                #! and binder chain is always B
+                # Relax and get interface residues to fix during MPNN sequence design
+                # afdesign relabels the target chain to A with 50 residue index gaps for missing regions
+                # and binder chain is always B
                 pr_relax(str(af_design_path), str(relax_path))
 
                 interface_scores, interface_AA, interface_residues = score_interface(

@@ -31,8 +31,8 @@ def inference_esmfold(
     huggingface=False,
     multichain=False,
 ):
-    # * code adapted from ESMFold colab notebook
-    # * https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/ESMFold.ipynb
+    # code adapted from ESMFold colab notebook
+    # https://colab.research.google.com/github/sokrypton/ColabFold/blob/main/ESMFold.ipynb
 
     if huggingface:
         inputs = tokenizer(
@@ -118,7 +118,7 @@ def inference_esmfold(
     if return_all_atom_plddt:
         return pred_coords, (all_atom_plddt, plddt, pae)
     else:
-        return pred_coords, (plddt, pae)  # * conf metrics is a tuple of lists
+        return pred_coords, (plddt, pae)  # conf metrics is a tuple of lists
 
 
 def predict_structures(

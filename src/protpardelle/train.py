@@ -244,7 +244,7 @@ class ProtpardelleRunner:
         bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
         bb_atom_mask = atom.atom37_mask_from_aatype(bb_seq, seq_mask)
 
-        #! some backbone atoms may be missing -- mask them to zeros!
+        # some backbone atoms may be missing -- mask them to zeros!
         bb_atom_mask = torch.logical_and(bb_atom_mask, atom_mask)
 
         if self.config.model.task == "backbone":
@@ -552,7 +552,7 @@ def train(opt):
         log_dir = Path(opt.out_dir, opt.project, f"debug_{wandb.run.name}")
 
     Path(log_dir, "results").mkdir(parents=True, exist_ok=True)
-    # Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=config.train.ckpt_path != "") #! CHANGED
+    # Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=config.train.ckpt_path != "") # CHANGED
     Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=True)
 
     # Preserve config

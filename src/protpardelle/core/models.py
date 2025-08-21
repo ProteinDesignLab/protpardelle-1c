@@ -80,10 +80,10 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
                         ]
                         inv_atom_idx = np.delete(np.arange(37), atom_idx)
                         crop_cond_coords[bi, motif_idx[bi][mi], inv_atom_idx, :] = 0
-        if "backbone" not in strategy:  # * given sc, not given bb
+        if "backbone" not in strategy:  # given sc, not given bb
             crop_cond_coords[:, :, (0, 1, 2, 4), :] = 0
         else:
-            pass  # * no need to zero-out anything
+            pass  # no need to zero-out anything
 
     return crop_cond_coords
 
@@ -106,7 +106,7 @@ def get_time_dependent_scale(
             scale = 0.9
         else:
             scale = 1.0
-    else:  # * custom step-wise guidance schedule
+    else:  # custom step-wise guidance schedule
         if stage2:
             if curr_step < 25:
                 scale = 0.01
@@ -367,7 +367,7 @@ class CoordinateDenoiser(nn.Module):
                 struct_crop_cond = rearrange(struct_crop_cond, "b n a c -> b c n a")
                 motif_cond = self.net.cond_to_patch_embedding(
                     struct_crop_cond
-                )  # * spacing info is leaked
+                )  # spacing info is leaked
                 if "noise_residual" in self.config.model.conditioning_style:
                     noise_cond = noise_cond + motif_cond
 
@@ -721,8 +721,8 @@ class Protpardelle(nn.Module):
         tqdm_pbar: Callable | None = None,
         return_last: bool = True,
         return_aux: bool = False,
-        jump_steps: bool = True,  # * used to be called "use_superposition"
-        uniform_steps: bool = False,  # * alternative to superposition
+        jump_steps: bool = True,  # used to be called "use_superposition"
+        uniform_steps: bool = False,  # alternative to superposition
         motif_file_path: str | None = None,
         dx: float | None = None,
         dy: float | None = None,
@@ -789,7 +789,7 @@ class Protpardelle(nn.Module):
         stage2: flag to indicate stage2
         tip_atom_conditioning: true to use reconstruction and replacement guidance for tip atom conditioning
         """
-        cc = apply_dotdict_recursively(conditional_cfg)  # * shorthand
+        cc = apply_dotdict_recursively(conditional_cfg)  # shorthand
         pd = apply_dotdict_recursively(partial_diffusion)
 
         if sse_cond is not None and adj_cond is not None:
@@ -903,12 +903,12 @@ class Protpardelle(nn.Module):
             if motif_all_atom_stage1 is not None:
                 motif_all_atom = motif_all_atom_stage1.clone()
             else:
-                # * center the motif on CA coords
+                # center the motif on CA coords
                 motif_all_atom = motif_all_atom - torch.mean(
                     motif_all_atom[..., 1:2, :], dim=-3, keepdim=True
                 )
 
-                # * randomly rotate the motif
+                # randomly rotate the motif
                 random_rots = torch.stack(
                     [
                         dataset.uniform_rand_rotation(1)[0].to(self.device)
@@ -927,7 +927,7 @@ class Protpardelle(nn.Module):
                 f"Using motif from {motif_file_path} with {motif_size} motif residues."
             )
 
-            # * translate the motif
+            # translate the motif
             if dx is not None and dx != "":
                 motif_all_atom[..., 0] = motif_all_atom[..., 0] + dx
             if dy is not None and dy != "":
@@ -951,7 +951,7 @@ class Protpardelle(nn.Module):
             )
             score = score * protpardelle.utils.unsqueeze_trailing_dims(mask, score)
 
-            # * reconstruction guidance
+            # reconstruction guidance
             recon_on = curr_step >= (
                 cc.reconstruction_guidance.start * n_steps
             ) and curr_step < (cc.reconstruction_guidance.end * n_steps)
@@ -1215,7 +1215,7 @@ class Protpardelle(nn.Module):
             tqdm_pbar = lambda x: x
         torch.set_grad_enabled(False)
 
-        # *t_traj is the denoising trajectory; *0_traj is the evolution of predicted clean data
+        # t_traj is the denoising trajectory; *0_traj is the evolution of predicted clean data
         # s0 are aatype probs of shape (b n t); s_hat are discrete aatype of shape (b n)
         x0 = None
 
@@ -1224,17 +1224,17 @@ class Protpardelle(nn.Module):
                 if len(motif_residx) != batch_size:
                     motif_residx = [
                         motif_residx for _ in range(seq_mask.shape[0])
-                    ]  # * batchify
+                    ]  # batchify
                 motif_idx_contigs = [
                     group_consecutive_idx(mr) for mr in motif_residx
-                ]  # * this only defines the groups, not the actual indices (could be arbitrary from PDB index)
+                ]  # this only defines the groups, not the actual indices (could be arbitrary from PDB index)
                 motif_idx_contigs = [
                     contig_to_idx(mic) for mic in motif_idx_contigs
-                ]  # * convert to grouped indices, 0-indexed
+                ]  # convert to grouped indices, 0-indexed
                 motif_idx = [
                     [mi for sublist in mic for mi in sublist]
                     for mic in motif_idx_contigs
-                ]  # * flattened motif_idx, to use in actual indexing
+                ]  # flattened motif_idx, to use in actual indexing
 
                 if cc.enabled:
                     if (
@@ -1262,7 +1262,7 @@ class Protpardelle(nn.Module):
             and cc.crop_conditional_guidance.start == 0.0
         ):
             crop_cond_coords = torch.zeros_like(xt).to(xt.device)
-            # * fill in with motif coords at the current motif_idx
+            # fill in with motif coords at the current motif_idx
             for bi in range(batch_size):
                 crop_cond_coords[bi, motif_idx[bi]] = motif_all_atom[bi]
 
@@ -1281,7 +1281,7 @@ class Protpardelle(nn.Module):
             crop_cond_seq_oh = torch.zeros(batch_size, seq_length, self.n_tokens).to(
                 xt.device
             )
-            # * fill in with motif aatype at the current motif_idx
+            # fill in with motif aatype at the current motif_idx
             for bi in range(batch_size):
                 crop_cond_seq_oh[bi, motif_idx[bi]] = motif_aatype[bi]
 
@@ -1444,11 +1444,11 @@ class Protpardelle(nn.Module):
                         xt.requires_grad = True
 
                     if gamma > 0:
-                        if k > 0:  # * self-recurrence from Universal Guidance paper
+                        if k > 0:  # self-recurrence from Universal Guidance paper
                             sigma_hat = sigma
                             sigma_delta = torch.sqrt(
                                 sigma**2 - sigma_next**2
-                            )  # * self-recurrence xt has slightly less noise
+                            )  # self-recurrence xt has slightly less noise
                         else:
                             sigma_hat = sigma + gamma * sigma
                             sigma_delta = torch.sqrt(sigma_hat**2 - sigma**2)
@@ -1583,7 +1583,7 @@ class Protpardelle(nn.Module):
 
                         xt_rep = xt_hat.clone()
                         if cc.enabled:
-                            # * Replacement guidance
+                            # Replacement guidance
                             if (
                                 cc.replacement_guidance.enabled
                                 and i >= (cc.replacement_guidance.start * n_steps)
@@ -1642,7 +1642,7 @@ class Protpardelle(nn.Module):
                         else:
                             sigma_delta = torch.sqrt(
                                 sigma_next**2 - sigma_next**2
-                            )  # * don't add additional noise for the first pass
+                            )  # don't add additional noise for the first pass
 
                         noisier_x = xt + protpardelle.utils.unsqueeze_trailing_dims(
                             sigma_delta, xt
@@ -1774,7 +1774,7 @@ class Protpardelle(nn.Module):
 
                         xt_rep = xt_hat.clone()
                         if cc.enabled:
-                            # * Replacement guidance
+                            # Replacement guidance
                             if (
                                 cc.replacement_guidance.enabled
                                 and i >= (cc.replacement_guidance.start * n_steps)
@@ -1914,7 +1914,7 @@ class Protpardelle(nn.Module):
                         # Write x0 into atom73_state_0 for atoms corresponding to old seqhat
                         atom73_state_0[mask73] = x0[
                             mask37
-                        ]  # * mask73 and mask37 have the same number of 1 bits
+                        ]  # mask73 and mask37 have the same number of 1 bits
 
                         mask37 = atom.atom37_mask_from_aatype(s_hat, seq_mask).bool()
                         mask73 = atom.atom73_mask_from_aatype(s_hat, seq_mask).bool()

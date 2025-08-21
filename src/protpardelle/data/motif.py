@@ -23,12 +23,12 @@ def motif_placement_to_motif_idx(
     curr_idx = 0
 
     for s in motif_placement.split("/"):
-        if s.isalpha():  # * motif segment
+        if s.isalpha():  # motif segment
             motif_length = motif_id_to_length[s]
             m_idx = list(range(curr_idx, curr_idx + motif_length))
             motif_idx.extend(m_idx)
             curr_idx += motif_length
-        else:  # * scaffold segment
+        else:  # scaffold segment
             curr_idx += int(s)
 
     return motif_idx

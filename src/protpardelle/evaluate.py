@@ -272,7 +272,7 @@ def compute_self_consistency(
         else:
             plddts, paes = conf_metrics
 
-        # * compute full protein rmsd
+        # compute full protein rmsd
         ca_scaffold_scrmsds = []
         allatom_scaffold_scrmsds = []
         for pred in pred_coords:
@@ -295,7 +295,7 @@ def compute_self_consistency(
                 ca_scaffold_scrmsds.append(ca_rmsd.item())
                 allatom_scaffold_scrmsds.append(allatom_rmsd.item())
 
-        # * compute motif rmsd with sampled structure
+        # compute motif rmsd with sampled structure
         ca_motif_sample_rmsds = []
         allatom_motif_sample_rmsds = []
         if motif_idx is not None and motif_coords is not None:
@@ -322,7 +322,7 @@ def compute_self_consistency(
             ca_motif_sample_rmsds = [999 for _ in range(len(seqs_to_predict))]
             allatom_motif_sample_rmsds = [999 for _ in range(len(seqs_to_predict))]
 
-        # * compute motif rmsd with predicted structure, can do this with both backbone-only and allatom models
+        # compute motif rmsd with predicted structure, can do this with both backbone-only and allatom models
         ca_motif_pred_rmsds = []
         allatom_motif_pred_rmsds = []
         if motif_idx is not None and motif_coords is not None:

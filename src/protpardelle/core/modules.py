@@ -602,7 +602,7 @@ class TimeCondAttention(nn.Module):
             nn.init.zeros_(self.time_cond[-1].weight)
             nn.init.zeros_(self.time_cond[-1].bias)
 
-        # * add motif conditioning track
+        # add motif conditioning track
         if exists(motif_cond_dim):
             self.motif_cond = nn.Sequential(
                 nn.SiLU(), nn.Linear(motif_cond_dim, dim * 2)
@@ -611,7 +611,7 @@ class TimeCondAttention(nn.Module):
             nn.init.zeros_(self.motif_cond[-1].weight)
             nn.init.zeros_(self.motif_cond[-1].bias)
 
-            # * add gating
+            # add gating
             self.motif_gate = nn.Linear(motif_cond_dim, dim * 2)
             self.sigmoid = nn.Sigmoid()
 
@@ -757,7 +757,7 @@ class TimeCondFeedForward(nn.Module):
             nn.init.zeros_(self.time_cond[-1].bias)
 
         if exists(motif_cond_dim):
-            # * add motif conditioning track
+            # add motif conditioning track
             self.motif_cond = nn.Sequential(
                 nn.SiLU(),
                 nn.Linear(motif_cond_dim, inner_dim * 2),
@@ -766,7 +766,7 @@ class TimeCondFeedForward(nn.Module):
             nn.init.zeros_(self.motif_cond[-1].weight)
             nn.init.zeros_(self.motif_cond[-1].bias)
 
-            # * add gating
+            # add gating
             self.motif_gate = nn.Linear(motif_cond_dim, inner_dim * 2)
             self.sigmoid = nn.Sigmoid()
 
@@ -853,7 +853,7 @@ class TimeCondTransformer(nn.Module):
         if "rotary" in position_embedding_type:
             self.rope = RotaryEmbedding(
                 dim=(dim // heads), use_residx=True, cache_if_possible=False
-            )  #! Changed to use residx
+            )  # Changed to use residx
         if "relative" in position_embedding_type:
             self.relpos = nn.Sequential(
                 RelativePositionalEncoding(
@@ -1226,7 +1226,7 @@ class NoiseConditionalProteinMPNN(nn.Module):
             k_neighbors=n_neighbors,
             augment_eps=0.0,
             dropout=0.1,
-            ca_only=True,  #! CHANGED -- better to use CA-only for noisy coords
+            ca_only=True,  # CHANGED -- better to use CA-only for noisy coords
             time_cond_dim=time_cond_dim,
             input_S_is_embeddings=input_S_is_embeddings,
         )
@@ -1235,7 +1235,7 @@ class NoiseConditionalProteinMPNN(nn.Module):
         self, denoised_coords, noisy_aatype, seq_mask, residue_index, time_cond
     ):
         if denoised_coords.shape[-2] == 37:
-            denoised_coords = denoised_coords[:, :, 1]  #! CHANGED to ca-only
+            denoised_coords = denoised_coords[:, :, 1]  # CHANGED to ca-only
 
         node_embs, encoder_embs = self.mpnn(
             X=denoised_coords,

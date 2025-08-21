@@ -1,4 +1,4 @@
-#! For demonstration only, not properly benchmarked
+# For demonstration only, not properly benchmarked
 partial_diffusion:
   enabled: true
   rewind_steps: [500]

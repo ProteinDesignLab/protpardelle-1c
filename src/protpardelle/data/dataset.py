@@ -341,13 +341,13 @@ def make_crop_cond_mask_and_recenter_coords(
 
             if len(idxs) > 0:
                 mask[idxs] = 1
-        # * Keep one chain as the motif, generate the other chain.
+        # Keep one chain as the motif, generate the other chain.
         elif conditioning_type == "multichain":  # check if actually multichain
             chain_as_motif = np.random.choice(torch.unique(chain_index[i]).cpu())
             idx_as_motif = (chain_index[i] == chain_as_motif) & (seq_mask[i] != 0)
             mask[idx_as_motif] = 1
 
-            # * generate hotspot input (which idx_as_motif are closest to the chain to generate)
+            # generate hotspot input (which idx_as_motif are closest to the chain to generate)
             ca_atoms = atom_coords[i, :, 1]
             ca_distances = torch.cdist(ca_atoms, ca_atoms)
             x = chain_index[i]
@@ -361,13 +361,13 @@ def make_crop_cond_mask_and_recenter_coords(
             contact_idx_pairs = list(zip(ii.tolist(), jj.tolist()))
             num_hotspots = np.random.choice(np.arange(hotspot_min * 2, hotspot_max * 2))
 
-            # * randomly drop out hotspot 10% of the time
+            # randomly drop out hotspot 10% of the time
             if np.random.rand() < 1 - hotspot_dropout:
                 for pair in contact_idx_pairs[:num_hotspots]:
                     idx_hotspot = min(pair) if chain_as_motif == 0 else max(pair)
                     all_hotspot_masks[i, idx_hotspot] = 1
 
-            # * include some paratope residues as part of the motif
+            # include some paratope residues as part of the motif
             if np.random.rand() < paratope_prob:
                 for pair in contact_idx_pairs[:num_hotspots]:
                     idx_paratope = max(pair) if chain_as_motif == 0 else min(pair)
@@ -379,17 +379,17 @@ def make_crop_cond_mask_and_recenter_coords(
                         ) : min(idx_paratope + flanking_width, nr)
                     ] = 1
 
-        if np.random.uniform() < sidechain_prob:  # * keep all crop-cond coords unmasked
+        if np.random.uniform() < sidechain_prob:  # keep all crop-cond coords unmasked
             if np.random.uniform() < sidechain_only_prob:
                 mask[:, (0, 1, 2, 4)] = 0
             if np.random.uniform() < sidechain_tip_prob and aatype is not None:
-                # * determine tip atoms by amino acid type
+                # determine tip atoms by amino acid type
                 motif_idx = torch.nonzero(mask.sum(-1)).flatten()
                 for mi in motif_idx:
                     aatype_int = aatype[i][mi]
                     motif_aatype_str = restype_1to3[order_restype[aatype_int.item()]]
 
-                    # * Original Protpardelle tip atom definition, also used in La-Proteina
+                    # Original Protpardelle tip atom definition, also used in La-Proteina
                     tip_atomtypes = RFDIFFUSION_BENCHMARK_TIP_ATOMS[motif_aatype_str]
                     tip_atom_idx_atom37 = [
                         atom_order.get(atype) for atype in tip_atomtypes
@@ -398,7 +398,7 @@ def make_crop_cond_mask_and_recenter_coords(
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)
                     mask[mi, nontip_idx] = 0
 
-        else:  # * discard everything that is not backbone N, CA, C, O
+        else:  # discard everything that is not backbone N, CA, C, O
             mask[:, 3] = 0
             mask[:, 5:] = 0
 
@@ -499,7 +499,7 @@ class PDBDataset(Dataset):
                 )
                 self.cif_df = self.cif_df[
                     ~self.cif_df["homodimer"]
-                ]  # * filter out homodimers
+                ]  # filter out homodimers
                 new_size = len(self.cif_df)
                 print(
                     f"Filtering by resolution better than {subset}A and total length less than {self.fixed_size} residues. Removed {orig_size - new_size} examples, will train on {new_size} examples."

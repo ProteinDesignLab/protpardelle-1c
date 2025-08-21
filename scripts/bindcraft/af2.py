@@ -125,7 +125,7 @@ def run_af2(
                 print(f"Target for {str(pdb_path)} not found!")
                 raise AssertionError
 
-            # * alternative for hard targets:
+            # alternative for hard targets:
             if hard_target:
                 complex_prediction_model = mk_afdesign_model(
                     protocol="binder",

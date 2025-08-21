@@ -76,15 +76,15 @@ class Hetero:
 
     hetero_atom_positions: list[
         list[float]
-    ]  # * list of length len(ncaa) storing variable number of atom coordinates per array
-    hetero_aatype: list[str]  # * list of aatypes (three letter)
-    hetero_atom_types: list[list[str]]  # * list of list of atom types per ncaa
+    ]  # list of length len(ncaa) storing variable number of atom coordinates per array
+    hetero_aatype: list[str]  # list of aatypes (three letter)
+    hetero_atom_types: list[list[str]]  # list of list of atom types per ncaa
     hetero_motif_mask: list[
         int
-    ]  # * indices of hetero_atom_positions that are motif positions
+    ]  # indices of hetero_atom_positions that are motif positions
     hetero_not_motif_mask: list[
         int
-    ]  # * indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
+    ]  # indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
 
 
 def read_pdb(pdb_file: str, chain_id: str | None = None) -> Protein:
@@ -124,15 +124,13 @@ def read_pdb(pdb_file: str, chain_id: str | None = None) -> Protein:
     b_factors = []
     hetero_atom_positions = (
         []
-    )  # * list of length len(ncaa) storing variable number of atom coordinates per array
-    hetero_aatype = []  # * list of aatypes (three letter)
-    hetero_atom_types = []  # * list of list of atom types per ncaa
-    hetero_motif_mask = (
-        []
-    )  # * indices of hetero_atom_positions that are motif positions
+    )  # list of length len(ncaa) storing variable number of atom coordinates per array
+    hetero_aatype = []  # list of aatypes (three letter)
+    hetero_atom_types = []  # list of list of atom types per ncaa
+    hetero_motif_mask = []  # indices of hetero_atom_positions that are motif positions
     hetero_not_motif_mask = (
         []
-    )  # * indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
+    )  # indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
 
     for chain in model:
         if chain_id is not None and chain.id != chain_id:
@@ -145,8 +143,8 @@ def read_pdb(pdb_file: str, chain_id: str | None = None) -> Protein:
                 #     f"index {res.id[1]}. These are not supported."
                 # )
             res_shortname = residue_constants.restype_3to1.get(res.resname, "X")
-            #! or 'UNK' reserved for redesignable motif positions
-            if res_shortname != "X" or res.resname == "UNK":  # * canonical amino acids
+            # or 'UNK' reserved for redesignable motif positions
+            if res_shortname != "X" or res.resname == "UNK":  # canonical amino acids
                 if res.resname == "UNK":
                     res_shortname = "G"
                 restype_idx = residue_constants.restype_order.get(
@@ -173,8 +171,8 @@ def read_pdb(pdb_file: str, chain_id: str | None = None) -> Protein:
                 chain_ids.append(chain.id)
                 b_factors.append(res_b_factors)
             else:
-                # * if residue has amino acid backbone atoms, treat it as a noncanonical motif residue
-                # * otherwise, treat as a ligand/metal for clash loss
+                # if residue has amino acid backbone atoms, treat it as a noncanonical motif residue
+                # otherwise, treat as a ligand/metal for clash loss
                 resemble_atoms = ["N", "CA", "C", "O"]
                 for atom in res:
                     if atom.name in resemble_atoms:

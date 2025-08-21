@@ -39,7 +39,7 @@ def add_chain_gap(
         curr_chain_residue_idx_start = residue_index[curr_chain_pos[0]]
         target_start = prev_chain_residue_idx_end + chain_residx_gap
         residx_delta = target_start - curr_chain_residue_idx_start
-        # * special case when chain_residx_gap is zero: keep original indices for each chain, reset to 1
+        # special case when chain_residx_gap is zero: keep original indices for each chain, reset to 1
         if chain_residx_gap == 0:
             residue_index[curr_chain_pos] = (
                 residue_index[curr_chain_pos] - residue_index[curr_chain_pos[0]] + 1
@@ -127,9 +127,7 @@ def feats_to_pdb_str(
         seq_mask = atom_mask[:, residue_constants.atom_order["CA"]].cpu()
         aatype = seq_mask * residue_constants.restype_order["G"]
     if residue_index is None:
-        residue_index = (
-            torch.arange(aatype.shape[-1]) + 1
-        )  #! start residue index from 1
+        residue_index = torch.arange(aatype.shape[-1]) + 1  # start residue index from 1
     if chain_index is None:
         chain_index = torch.ones_like(aatype)
     if b_factors is None:

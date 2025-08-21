@@ -8,11 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pyrosetta as pr
-from Bio.PDB import (
-    DSSP,
-    PDBParser,
-    Selection,
-)
+from Bio.PDB import DSSP, PDBParser, Selection
 from colabdesign.af.alphafold.common import residue_constants
 from colabdesign.af.loss import _get_con_loss, get_dgram_bins, get_ptm, mask_loss
 from pyrosetta.rosetta.core.kinematics import MoveMap
@@ -296,7 +292,7 @@ def pr_relax(pdb_file, relaxed_pdb_path, new_seq: str = None):
     fastrelax.set_movemap(mmf)  # set MoveMap
     fastrelax.max_iter(200)  # default iterations is 2500
     fastrelax.min_type("lbfgs_armijo_nonmonotone")
-    fastrelax.constrain_relax_to_start_coords(True)  #! try False
+    fastrelax.constrain_relax_to_start_coords(True)  # try False
     fastrelax.apply(pose)
 
     # Align relaxed structure to original trajectory
