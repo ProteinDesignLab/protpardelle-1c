@@ -12,13 +12,13 @@ from einops import rearrange
 from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
-from protpardelle.data import protein
+from protpardelle.common import protein
 from protpardelle.data.atom import (
     atom37_coords_to_atom14,
     atom37_mask_from_aatype,
     atom37_to_atom73,
 )
-from protpardelle.data.protein import Hetero, Protein
+from protpardelle.common.protein import Hetero, Protein
 from protpardelle.utils import StrPath
 
 
