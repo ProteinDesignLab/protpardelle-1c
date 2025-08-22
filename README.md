@@ -31,13 +31,27 @@ bash setup.sh
 
 If working on a cluster with limited home storage, set `CONDA_PKGS_DIRS` and `UV_CACHE_DIR` to a directory with higher storage quotas.
 
-The `uv.lock` file is a example environment with exact versions of all installed packages.
+The `uv.lock` file is a example environment with exact versions of all installed packages. If you prefer to only use `uv`, the dependencies can be installed by running:
+
+```bash
+ENV_DIR=envs  # or any other directory of your choice
+mkdir -p $ENV_DIR
+uv venv $ENV_DIR/protpardelle -p python3.10
+source $ENV_DIR/protpardelle/bin/activate
+
+git clone https://github.com/ProteinDesignLab/protpardelle-1c.git
+cd protpardelle-1c
+
+uv pip sync uv_indexes.txt uv.lock  --index-strategy=unsafe-best-match
+uv pip install git+https://github.com/sokrypton/openfold.git@4fbff9bc73d867be19594fe4d135875566162de3 --no-build-isolation
+uv pip install -e .
+```
 
 ## Download model weights and configs
 
 Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
 
-We use [aria2](https://github.com/aria2/aria2) in our download script. All downloads are automatically handled by running
+We use [aria2](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running
 
 ```bash
 bash download_model_params.sh
@@ -204,11 +218,11 @@ List of list of integers indicating the number of residues per chain, where each
 
 ### `hotspots`
 
-For multichain / binder generation, a comma-delimited string with format `{chain_id}_{residue_index}`.
+For multichain / binder generation, a comma-delimited string with format `{chain_id}{residue_index}`.
 
 ### `ssadj`
 
-For fold-conditioning, the stems of the output files from running `scripts/make_secstruc_adj.py`, adapted from RFdiffusion. Per-residue secondary structure labels and per residue pair block adjacency contact info are encoded as conditioning inputs. Fold-conditional model weights will be released at a later date.
+For fold-conditioning, the stems of the output files from running the `make_secstruc_adj.py`, script from RFdiffusion. Per-residue secondary structure labels and per residue pair block adjacency contact info are encoded as conditioning inputs. Fold-conditional model weights will be released at a later date.
 
 # Training
 
