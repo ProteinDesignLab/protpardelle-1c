@@ -34,83 +34,6 @@ from protpardelle.data import dataset as protpardelle_dataset
 from protpardelle.utils import unsqueeze_trailing_dims
 
 
-@record
-def main():
-    # Parse args
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--project", type=str, default="other", help="wandb project name"
-    )
-    parser.add_argument("--wandb_id", type=str, default="", help="wandb username")
-    parser.add_argument("--exp_name", type=str, default=None, help="wandb exp name")
-    parser.add_argument(
-        "--config", type=str, default="configs/config.yml", help="experiment config"
-    )
-    parser.add_argument(
-        "--train", default=False, action="store_true", help="dont run in debug mode"
-    )
-    parser.add_argument(
-        "--overfit", type=int, default=-1, help="number of examples to overfit to"
-    )
-    parser.add_argument(
-        "--debug",
-        default=False,
-        action="store_true",
-        help="run one batch and eval offline",
-    )
-    parser.add_argument(
-        "--no_cuda",
-        default=False,
-        action="store_true",
-        help="do not prepend debug to output dirs",
-    )
-    parser.add_argument("--gpu_id", type=int, default=0, help="which GPU to use")
-    parser.add_argument(
-        "--n_gpu_per_node", type=int, default=1, help="num gpus per node"
-    )
-    parser.add_argument("--n_nodes", type=int, default=1, help="num nodes")
-    parser.add_argument("--node_rank", type=int, default=0, help="rank amongst nodes")
-    parser.add_argument(
-        "--use_dataparallel",
-        default=False,
-        action="store_true",
-        help="use DataParallel",
-    )
-    parser.add_argument(
-        "--use_ddp",
-        default=False,
-        action="store_true",
-        help="use DistributedDataParallel",
-    )
-    parser.add_argument(
-        "--detect_anomaly", default=False, action="store_true", help="detect nans"
-    )
-    parser.add_argument(
-        "--num_workers", type=int, default=0, help="dataloader num workers"
-    )
-    parser.add_argument(
-        "--use_amp",
-        default=False,
-        action="store_true",
-        help="automatic mixed precision",
-    )
-    parser.add_argument(
-        "--out_dir", type=str, required=True, help="output path for trained models"
-    )
-    opt = parser.parse_args()
-
-    if opt.use_ddp:
-        opt.world_size = opt.n_gpu_per_node * opt.n_nodes
-        dist.init_process_group(
-            backend="nccl", timeout=datetime.timedelta(seconds=5400)
-        )
-        dist.barrier()
-
-    train(opt)
-
-    return
-
-
 def masked_cross_entropy(logprobs, target, loss_mask):
     # target is onehot
     cel = -(target * logprobs)
@@ -658,6 +581,81 @@ def train(opt):
         )
     if opt.use_ddp:
         dist.destroy_process_group()
+
+
+@record
+def main():
+    # Parse args
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--project", type=str, default="other", help="wandb project name"
+    )
+    parser.add_argument("--wandb_id", type=str, default="", help="wandb username")
+    parser.add_argument("--exp_name", type=str, default=None, help="wandb exp name")
+    parser.add_argument(
+        "--config", type=str, default="configs/config.yml", help="experiment config"
+    )
+    parser.add_argument(
+        "--train", default=False, action="store_true", help="dont run in debug mode"
+    )
+    parser.add_argument(
+        "--overfit", type=int, default=-1, help="number of examples to overfit to"
+    )
+    parser.add_argument(
+        "--debug",
+        default=False,
+        action="store_true",
+        help="run one batch and eval offline",
+    )
+    parser.add_argument(
+        "--no_cuda",
+        default=False,
+        action="store_true",
+        help="do not prepend debug to output dirs",
+    )
+    parser.add_argument("--gpu_id", type=int, default=0, help="which GPU to use")
+    parser.add_argument(
+        "--n_gpu_per_node", type=int, default=1, help="num gpus per node"
+    )
+    parser.add_argument("--n_nodes", type=int, default=1, help="num nodes")
+    parser.add_argument("--node_rank", type=int, default=0, help="rank amongst nodes")
+    parser.add_argument(
+        "--use_dataparallel",
+        default=False,
+        action="store_true",
+        help="use DataParallel",
+    )
+    parser.add_argument(
+        "--use_ddp",
+        default=False,
+        action="store_true",
+        help="use DistributedDataParallel",
+    )
+    parser.add_argument(
+        "--detect_anomaly", default=False, action="store_true", help="detect nans"
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=0, help="dataloader num workers"
+    )
+    parser.add_argument(
+        "--use_amp",
+        default=False,
+        action="store_true",
+        help="automatic mixed precision",
+    )
+    parser.add_argument(
+        "--out_dir", type=str, required=True, help="output path for trained models"
+    )
+    opt = parser.parse_args()
+
+    if opt.use_ddp:
+        opt.world_size = opt.n_gpu_per_node * opt.n_nodes
+        dist.init_process_group(
+            backend="nccl", timeout=datetime.timedelta(seconds=5400)
+        )
+        dist.barrier()
+
+    train(opt)
 
 
 if __name__ == "__main__":

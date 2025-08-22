@@ -225,7 +225,7 @@ def runner(model_name: str, epoch: str, pdb_path: Path, batch_size: int = 32):
     batch_size: Size per batch
 
     Example:
-    python3 ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
+    python ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
 
     Outputs are saved under PROTPARDELLE_OUTPUT_DIR
     """

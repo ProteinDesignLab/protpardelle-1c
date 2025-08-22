@@ -150,23 +150,23 @@ This folder organization, in particular `scaffold_info.csv`, follow MotifBench i
 See `examples/sampling` for demos:
 
 ```bash
-python3 scripts/eval_samples.py ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0 --debug
-python3 scripts/eval_samples.py ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
-python3 scripts/eval_samples.py ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
 
 # MotifBench
-python3 scripts/eval_samples.py ./examples/sampling/03_motifbench.yaml --motif-dir ./examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --debug
+python -m protpardelle.sample ./examples/sampling/03_motifbench.yaml --motif-dir ./examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --debug
 
 # BindCraft
-python3 scripts/eval_samples.py ./examples/sampling/04_bindcraft.yaml --motif-dir ./examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2 --debug
+python -m protpardelle.sample ./examples/sampling/04_bindcraft.yaml --motif-dir ./examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2 --debug
 
-python3 scripts/eval_samples.py ./examples/sampling/05_multichain.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
-python3 scripts/eval_samples.py ./examples/sampling/06_fastrelax.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/05_multichain.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/06_fastrelax.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
 
 # La-Proteina / RFdiffusion benchmark
-python3 scripts/eval_samples.py ./examples/sampling/07_rfdiffusion.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
-python3 scripts/eval_samples.py ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
-python3 scripts/eval_samples.py ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
+python -m protpardelle.sample ./examples/sampling/07_rfdiffusion.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
+python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
+python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
 ```
 
 ## Sampling configs

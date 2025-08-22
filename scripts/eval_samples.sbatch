@@ -16,4 +16,4 @@ N_SAMPLES=$3
 N_MPNN_SEQS=$4
 DEBUG=$5
 
-python3 scripts/eval_samples.py ${RUN_NAME} --motif-dir ${MOTIF_DIR} --n-samples ${N_SAMPLES} --num-mpnn-seqs ${N_MPNN_SEQS} ${DEBUG}
+python -m protpardelle.sample ${RUN_NAME} --motif-dir ${MOTIF_DIR} --n-samples ${N_SAMPLES} --num-mpnn-seqs ${N_MPNN_SEQS} ${DEBUG}
