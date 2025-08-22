@@ -6,7 +6,7 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
 
 ## Prerequisites
 
-To run the scripts in this repository, we recommend using `conda` for environment management and `uv` for python dependency management. If you don't have `conda` installed yet, you can follow the instructions [here](https://www.anaconda.com/docs/getting-started/miniconda/install); `uv` installation will be automatically handled within `setup.sh`.
+To run the scripts in this repository, we recommend using `conda` for environment management and `uv` for python dependency management. If you don't have `conda` installed yet, you can follow the instructions [here](https://www.anaconda.com/docs/getting-started/miniconda/install); `uv` installation will be automatically handled within `setup.sh`. If you are working on a cluster with limited home storage, set `CONDA_PKGS_DIRS` and `UV_CACHE_DIR` to a directory with higher storage quotas.
 
 This repository is tested on Linux with `gcc>=12.4` and `cuda>=12.4`.
 
@@ -24,28 +24,21 @@ conda create -n protpardelle python=3.12 --yes
 conda activate protpardelle
 
 # Install dependencies using `setup.sh`
-# Note 1: 
-# Note 2: Use a recent version of gcc. If working on a cluster, this might look like "module load gcc/12.4.0"
 bash setup.sh
 ```
 
-If working on a cluster with limited home storage, set `CONDA_PKGS_DIRS` and `UV_CACHE_DIR` to a directory with higher storage quotas.
-
-## `uv`-only installation
-
-The `uv.lock` file is a example environment with exact versions of all installed packages. If you prefer to only use `uv`, the dependencies can be installed by running:
+The `uv.lock` file is an example with exact versions of all installed packages. If you prefer a fixed environment, the dependencies can be installed by running:
 
 ```bash
+git clone https://github.com/ProteinDesignLab/protpardelle-1c.git
+cd protpardelle-1c
+
 ENV_DIR=envs  # or any other directory of your choice
 mkdir -p $ENV_DIR
 uv venv $ENV_DIR/protpardelle -p python3.10
 source $ENV_DIR/protpardelle/bin/activate
 
-git clone https://github.com/ProteinDesignLab/protpardelle-1c.git
-cd protpardelle-1c
-
 uv pip sync uv_indexes.txt uv.lock  --index-strategy=unsafe-best-match
-uv pip install git+https://github.com/sokrypton/openfold.git@4fbff9bc73d867be19594fe4d135875566162de3 --no-build-isolation
 uv pip install -e .
 ```
 
@@ -53,7 +46,7 @@ uv pip install -e .
 
 Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
 
-We use [aria2](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running
+We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running
 
 ```bash
 bash download_model_params.sh
