@@ -44,8 +44,6 @@ from protpardelle.evaluate import compute_self_consistency
 from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import apply_dotdict_recursively, get_default_device
 
-app = typer.Typer(pretty_exceptions_show_locals=False)
-
 
 def load_model(model_cfg: Path, model_ckpt: Path):
     device = get_default_device()
@@ -334,8 +332,6 @@ def generate(
         )
     else:
         mpnn_model = None
-        struct_pred_model = None
-        tokenizer = None
 
     trimmed_coords = []
     trimmed_chain_index = []
@@ -478,8 +474,7 @@ def generate(
     return (trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
 
 
-@app.command()
-def runner(
+def main(
     sampling_yaml_path: Path,
     project: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
@@ -1006,4 +1001,4 @@ def runner(
 
 
 if __name__ == "__main__":
-    app()
+    typer.run(main)

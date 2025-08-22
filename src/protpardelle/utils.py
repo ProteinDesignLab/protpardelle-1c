@@ -36,11 +36,11 @@ def get_default_device() -> torch.device:
     return torch.device("cpu")
 
 
-def seed_everything(seed: int = 42) -> None:
+def seed_everything(seed: int = 0) -> None:
     """Set the seed for all random number generators.
 
     Args:
-        seed (int, optional): The seed value. Defaults to 42.
+        seed (int, optional): The seed value. Defaults to 0.
     """
 
     random.seed(seed)

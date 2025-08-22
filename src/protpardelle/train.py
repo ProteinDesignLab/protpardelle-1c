@@ -3,13 +3,11 @@
 Authors: Alex Chu, Richard Shuai
 """
 
-import argparse
 import datetime
 import os
 import random
 import shlex
 import subprocess
-import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -18,6 +16,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+import typer
 import wandb
 import yaml
 from torch.amp import autocast
@@ -116,10 +115,10 @@ class ProtpardelleRunner:
     def compute_loss(
         self,
         inputs,
-        time=None,
+        timestep=None,
         is_training=False,
         return_aux=False,
-    ):
+    ) -> tuple[torch.Tensor, dict[str, float]] | torch.Tensor:
         seq_mask = inputs["seq_mask"]
         coords = inputs["coords_in"]
         aatype = inputs["aatype"]
@@ -128,6 +127,7 @@ class ProtpardelleRunner:
         device = coords.device
         bs = coords.shape[0]
 
+        # Initialize variables that may not be set in all branches
         struct_crop_cond = None
         if self.config.train.crop_conditional:
             assert (
@@ -153,9 +153,10 @@ class ProtpardelleRunner:
             adj_cond = inputs["adj"]
 
         # Noise data
-        if time is None:
-            time = torch.rand(bs).clamp(min=1e-9, max=1 - 1e-9).to(device)
-        noise_level = self.model.training_noise_schedule(time)
+        # Sample time
+        if timestep is None:
+            timestep = torch.rand(bs, device=device)
+        noise_level = self.model.training_noise_schedule(timestep)
 
         noised_coords = diffusion.noise_coords(
             coords,
@@ -176,7 +177,7 @@ class ProtpardelleRunner:
             noised_coords *= atom_mask[..., None]
         elif self.config.model.task == "ai-allatom-hybrid":
             hybrid_mask = torch.ones_like(atom_mask)
-            hybrid_mask[time > 0.5] *= bb_atom_mask[time > 0.5]
+            hybrid_mask[timestep > 0.5] *= bb_atom_mask[timestep > 0.5]
             noised_coords *= hybrid_mask[..., None]
 
         # Forward pass
@@ -222,7 +223,7 @@ class ProtpardelleRunner:
                 seq_self_cond=seq_self_cond,
             )
 
-        loss = 0.0
+        loss = torch.tensor(0.0, device=device, dtype=torch.float32)
         aux = {}
 
         # Compute structure loss
@@ -271,7 +272,7 @@ class ProtpardelleRunner:
             return loss.mean(), aux
         return loss.mean()
 
-    def train_step(self, inputs):
+    def train_step(self, inputs) -> dict[str, float]:
         self.model.zero_grad()
 
         if self.scaler is not None:
@@ -285,14 +286,14 @@ class ProtpardelleRunner:
                 grad_norm = nn.utils.clip_grad_norm_(
                     self.model.parameters(), float("inf")
                 )
-                log_dict["grad_norm"] = grad_norm
+                log_dict["grad_norm"] = grad_norm.item()
 
                 try:
                     nn.utils.clip_grad_norm_(
                         self.model.parameters(), self.config.train.grad_clip_val
                     )
-                except Exception:
-                    pass
+                except RuntimeError as e:
+                    print(f"Warning: Failed to clip gradients: {e}")
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
@@ -305,14 +306,14 @@ class ProtpardelleRunner:
 
             # Compute the gradient norm and add it to the log_dict
             grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), float("inf"))
-            log_dict["grad_norm"] = grad_norm
+            log_dict["grad_norm"] = grad_norm.item()
 
             try:
                 nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.train.grad_clip_val
                 )
-            except Exception:
-                pass
+            except RuntimeError as e:
+                print(f"Warning: Failed to clip gradients: {e}")
             self.optimizer.step()
             self.scheduler.step()
 
@@ -324,34 +325,49 @@ class ProtpardelleRunner:
         return log_dict
 
 
-def train(opt):
-    config, config_dict = protpardelle.utils.load_config(opt.config, return_dict=True)
-    wandb_dir = str(Path(opt.out_dir, opt.project))
+def train(
+    config_path: str,
+    out_dir: str,
+    project: str,
+    wandb_id: str = "",
+    exp_name: str | None = None,
+    train_mode: bool = False,
+    overfit: int = -1,
+    debug: bool = False,
+    no_cuda: bool = False,
+    gpu_id: int = 0,
+    use_dataparallel: bool = False,
+    use_ddp: bool = False,
+    detect_anomaly: bool = False,
+    num_workers: int = 0,
+):
+    if use_ddp:
+        dist.init_process_group(
+            backend="nccl", timeout=datetime.timedelta(seconds=5400)
+        )
+        dist.barrier()
+    config, config_dict = protpardelle.utils.load_config(config_path, return_dict=True)
+    wandb_dir = str(Path(out_dir, project))
     Path(wandb_dir, "wandb").mkdir(parents=True, exist_ok=True)  # Create wandb dir
 
     # Set wandb cache directory
-    wandb_cache_dir = str(Path(opt.out_dir, opt.project, "cache", "wandb"))
+    wandb_cache_dir = str(Path(out_dir, project, "cache", "wandb"))
     os.environ["WANDB_CACHE_DIR"] = wandb_cache_dir
 
-    # TODO: Fix DDP
-    if opt.use_ddp:
-        raise NotImplementedError(
-            "DDP not implemented yet (specifically since we're using the StochasticMixedSampler)"
-        )
-
     # Set up devices
-    if opt.use_ddp:
+    rank = 0  # Initialize rank for non-DDP case
+    if use_ddp:
         rank = int(os.environ["LOCAL_RANK"])
         device = f"cuda:{rank}"
         assert dist.is_available() and dist.is_initialized(), (
             dist.is_available(),
             dist.is_initialized(),
         )
-    elif not opt.no_cuda and torch.cuda.is_available():
+    elif not no_cuda and torch.cuda.is_available():
         torch.cuda.init()
         print("Device count:", torch.cuda.device_count())
         print("Current device:", torch.cuda.current_device())
-        device = f"cuda:{opt.gpu_id}"
+        device = f"cuda:{gpu_id}"
     else:
         device = "cpu"
 
@@ -375,8 +391,8 @@ def train(opt):
                     pdb_path=config.data.pdb_paths[di],
                     fixed_size=config.data.fixed_size,
                     mode=mode,
-                    overfit=opt.overfit,
-                    short_epoch=not opt.train,
+                    overfit=overfit,
+                    short_epoch=not train_mode,
                     se3_data_augment=config.data.se3_data_augment,
                     translation_scale=config.data.translation_scale,
                     chain_residx_gap=config.data.chain_residx_gap,
@@ -386,19 +402,29 @@ def train(opt):
                 for di in range(len(config.data.pdb_paths))
             ]
             dataset = torch.utils.data.ConcatDataset(train_datasets)
-            train_sampler = protpardelle_dataset.StochasticMixedSampler(
-                train_datasets, config.data.mixing_ratios, batch_size=bs
-            )
+
+            if use_ddp:
+                # For DDP, use DistributedSampler instead of StochasticMixedSampler
+                from torch.utils.data.distributed import DistributedSampler
+
+                train_sampler = DistributedSampler(dataset, shuffle=True)
+            else:
+                # Use StochasticMixedSampler for non-DDP training
+                train_sampler = protpardelle_dataset.StochasticMixedSampler(
+                    train_datasets, config.data.mixing_ratios, batch_size=bs
+                )
+
             dataloader = torch.utils.data.DataLoader(
                 dataset,
                 batch_size=bs,
-                num_workers=opt.num_workers,
+                num_workers=num_workers,
                 pin_memory="cuda" in device,
                 shuffle=False,  # the sampler takes care of shuffling
                 sampler=train_sampler,
                 drop_last=True,
-                persistent_workers=False if opt.debug else True,
+                persistent_workers=not debug,
             )
+            return dataset, dataloader
         elif mode == "eval":
             # for evaluation, we use the primary dataset (the first one)
             bs = 1
@@ -406,35 +432,47 @@ def train(opt):
                 pdb_path=config.data.pdb_paths[0],
                 fixed_size=config.data.fixed_size,
                 mode=mode,
-                overfit=opt.overfit,
-                short_epoch=not opt.train,
+                overfit=overfit,
+                short_epoch=not train_mode,
                 se3_data_augment=config.data.se3_data_augment,
                 translation_scale=config.data.translation_scale,
                 chain_residx_gap=config.data.chain_residx_gap,
                 dummy_fill_mode=config.data.dummy_fill_mode,
                 subset=config.data.subset[0],
             )
+
+            if use_ddp:
+                # For DDP, use DistributedSampler for eval as well
+                from torch.utils.data.distributed import DistributedSampler
+
+                eval_sampler = DistributedSampler(dataset, shuffle=False)
+            else:
+                eval_sampler = None
+
             dataloader = torch.utils.data.DataLoader(
                 dataset,
                 batch_size=bs,
-                num_workers=opt.num_workers,
+                num_workers=num_workers,
                 pin_memory="cuda" in device,
-                shuffle=False,
-                persistent_workers=False if opt.debug else True,
+                shuffle=(
+                    False if use_ddp else True
+                ),  # Don't shuffle if using DistributedSampler
+                sampler=eval_sampler,
+                persistent_workers=not debug,
             )
-        return dataset, dataloader
+            return dataset, dataloader
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
 
     dataset, dataloader = get_dataloader("train")
-    eval_dataset, eval_dataloader = get_dataloader("eval")
+    _, eval_dataloader = get_dataloader("eval")
 
     # Calculate sigma_data
     if config.data.auto_calc_sigma_data:
         print(
             f"===== Automatically computing sigma_data for {config.data.n_examples_for_sigma_data} examples ====="
         )
-        sigma_data = protpardelle_dataset.calc_sigma_data(
-            dataset, config, opt.num_workers
-        )
+        sigma_data = protpardelle_dataset.calc_sigma_data(dataset, config, num_workers)
 
         # Update config and config_dict with estimated sigma_data
         config.data.sigma_data = sigma_data
@@ -442,44 +480,49 @@ def train(opt):
 
     # Init wandb and logging for process 0
     log_dir = ""
-    if not opt.use_ddp or rank == 0:
-        if opt.train:
+    if not use_ddp or rank == 0:
+        if train_mode:
             wandb.init(
-                mode="disabled" if opt.debug else "online",
-                project=opt.project,
-                entity=opt.wandb_id,
-                name=opt.exp_name,
+                mode="disabled" if debug else "online",
+                project=project,
+                entity=wandb_id,
+                name=exp_name,
                 job_type="train",
                 config=config_dict,
                 dir=wandb_dir,
             )
         else:
             wandb.init(
-                mode="disabled" if opt.debug else "online",
-                project=opt.project,
-                entity=opt.wandb_id,
-                name=opt.exp_name,
+                mode="disabled" if debug else "online",
+                project=project,
+                entity=wandb_id,
+                name=exp_name,
                 job_type="debug",
                 config=config_dict,
                 dir=wandb_dir,
             )
-        print(
-            f'Beginning; run name "{wandb.run.name}", run id "{wandb.run.id}", device {device}'
-        )
-        print(opt)
+        if wandb.run:
+            print(f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}")
+        else:
+            print(f"Beginning: device={device}")
+        print(f"Training configuration: {config_path=}, {out_dir=}, {project=}")
 
     # Set up logging
-    if opt.train:
-        log_dir = Path(opt.out_dir, opt.project, wandb.run.name)
+    run_name = "default_run"
+    if wandb.run and wandb.run.name:
+        run_name = wandb.run.name
+    
+    if train_mode:
+        log_dir = Path(out_dir, project, run_name)
     else:
-        log_dir = Path(opt.out_dir, opt.project, f"debug_{wandb.run.name}")
+        log_dir = Path(out_dir, project, f"debug_{run_name}")
 
     Path(log_dir, "results").mkdir(parents=True, exist_ok=True)
     # Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=config.train.ckpt_path != "") # CHANGED
     Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=True)
 
     # Preserve config
-    with open(Path(log_dir, "config.yml"), "w") as f:
+    with open(Path(log_dir, "config.yml"), "w", encoding="utf-8") as f:
         yaml.safe_dump(config_dict, f)
 
     # Set up model and optimizers
@@ -493,9 +536,9 @@ def train(opt):
         start_epoch = training_state["epoch"]
         total_steps = training_state["total_steps"]
 
-    if opt.use_dataparallel:
+    if use_dataparallel:
         model = nn.DataParallel(model)
-    if opt.use_ddp:
+    if use_ddp:
         model.to(device)
         model = nn.parallel.DistributedDataParallel(
             model, device_ids=[device], find_unused_parameters=True
@@ -522,16 +565,15 @@ def train(opt):
         runner.optimizer.load_state_dict(training_state["optim_state_dict"])
     runner.train_init()
 
-    if not opt.use_ddp or rank == 0:
-        start_time = time.time()
-    with (
-        torch.autograd.set_detect_anomaly(True) if opt.detect_anomaly else nullcontext()
-    ):
+    with torch.autograd.set_detect_anomaly(True) if detect_anomaly else nullcontext():
         for epoch in range(start_epoch + 1, config.train.max_epochs + 1):
-            if opt.use_ddp:
+            if use_ddp:
                 dist.barrier()
-                dataloader.sampler.set_epoch(epoch)
-                eval_dataloader.sampler.set_epoch(epoch)
+                # Set epoch for DistributedSamplers to ensure proper shuffling
+                if hasattr(dataloader.sampler, "set_epoch"):
+                    dataloader.sampler.set_epoch(epoch)
+                if hasattr(eval_dataloader.sampler, "set_epoch"):
+                    eval_dataloader.sampler.set_epoch(epoch)
 
             for inputs in tqdm(
                 dataloader, desc=f"epoch {epoch}/{config.train.max_epochs}"
@@ -540,22 +582,22 @@ def train(opt):
                 inputs["step"] = total_steps
                 log_dict = runner.train_step(inputs)
                 log_dict["learning_rate"] = runner.scheduler.get_last_lr()[0]
-                if not opt.use_ddp or rank == 0:
+                if not use_ddp or rank == 0:
                     wandb.log(log_dict, step=total_steps)
                     wandb.log({"epoch": epoch}, step=total_steps)
                 total_steps += 1
-                if opt.debug:
+                if debug:
                     break
 
             with torch.no_grad():  # per epoch
                 # Run eval and save checkpoint
-                if opt.use_ddp:
+                if use_ddp:
                     dist.barrier()
                 if (
                     epoch % config.train.checkpoint_freq == 0
                     or epoch in config.train.checkpoints
                 ):
-                    if not opt.use_ddp or rank == 0:
+                    if not use_ddp or rank == 0:
                         runner.model.eval()
                         torch.save(
                             runner.model,
@@ -573,90 +615,55 @@ def train(opt):
 
                         runner.model.train()
 
-    if not opt.use_ddp or rank == 0:
+    if not use_ddp or rank == 0:
         wandb.finish()
-        subprocess.run(shlex.split(f"cp -r {wandb.run.dir} {log_dir}"))
-        print(
-            f'Training finished. (run name "{wandb.run.name}", run id "{wandb.run.id}")'
-        )
-    if opt.use_ddp:
+        if wandb.run and wandb.run.dir:
+            subprocess.run(shlex.split(f"cp -r {wandb.run.dir} {log_dir}"), check=False)
+        if wandb.run:
+            print(
+                f'Training finished. (run name "{wandb.run.name}", run id "{wandb.run.id}")'
+            )
+        else:
+            print("Training finished.")
+    if use_ddp:
         dist.destroy_process_group()
 
 
 @record
-def main():
-    # Parse args
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--project", type=str, default="other", help="wandb project name"
-    )
-    parser.add_argument("--wandb_id", type=str, default="", help="wandb username")
-    parser.add_argument("--exp_name", type=str, default=None, help="wandb exp name")
-    parser.add_argument(
-        "--config", type=str, default="configs/config.yml", help="experiment config"
-    )
-    parser.add_argument(
-        "--train", default=False, action="store_true", help="dont run in debug mode"
-    )
-    parser.add_argument(
-        "--overfit", type=int, default=-1, help="number of examples to overfit to"
-    )
-    parser.add_argument(
-        "--debug",
-        default=False,
-        action="store_true",
-        help="run one batch and eval offline",
-    )
-    parser.add_argument(
-        "--no_cuda",
-        default=False,
-        action="store_true",
-        help="do not prepend debug to output dirs",
-    )
-    parser.add_argument("--gpu_id", type=int, default=0, help="which GPU to use")
-    parser.add_argument(
-        "--n_gpu_per_node", type=int, default=1, help="num gpus per node"
-    )
-    parser.add_argument("--n_nodes", type=int, default=1, help="num nodes")
-    parser.add_argument("--node_rank", type=int, default=0, help="rank amongst nodes")
-    parser.add_argument(
-        "--use_dataparallel",
-        default=False,
-        action="store_true",
-        help="use DataParallel",
-    )
-    parser.add_argument(
-        "--use_ddp",
-        default=False,
-        action="store_true",
-        help="use DistributedDataParallel",
-    )
-    parser.add_argument(
-        "--detect_anomaly", default=False, action="store_true", help="detect nans"
-    )
-    parser.add_argument(
-        "--num_workers", type=int, default=0, help="dataloader num workers"
-    )
-    parser.add_argument(
-        "--use_amp",
-        default=False,
-        action="store_true",
-        help="automatic mixed precision",
-    )
-    parser.add_argument(
-        "--out_dir", type=str, required=True, help="output path for trained models"
-    )
-    opt = parser.parse_args()
+def main(
+    project: str = typer.Option("other", help="wandb project name"),
+    wandb_id: str = typer.Option("", help="wandb username"),
+    exp_name: str = typer.Option(None, help="wandb exp name"),
+    config: str = typer.Option("configs/config.yml", help="experiment config"),
+    train_mode: bool = typer.Option(False, "--train", help="don't run in debug mode"),
+    overfit: int = typer.Option(-1, help="number of examples to overfit to"),
+    debug: bool = typer.Option(False, help="run one batch and eval offline"),
+    no_cuda: bool = typer.Option(False, help="do not prepend debug to output dirs"),
+    gpu_id: int = typer.Option(0, help="which GPU to use"),
+    use_dataparallel: bool = typer.Option(False, help="use DataParallel"),
+    use_ddp: bool = typer.Option(False, help="use DistributedDataParallel"),
+    detect_anomaly: bool = typer.Option(False, help="detect nans"),
+    num_workers: int = typer.Option(0, help="dataloader num workers"),
+    out_dir: str = typer.Option(..., help="output path for trained models"),
+):
 
-    if opt.use_ddp:
-        opt.world_size = opt.n_gpu_per_node * opt.n_nodes
-        dist.init_process_group(
-            backend="nccl", timeout=datetime.timedelta(seconds=5400)
-        )
-        dist.barrier()
-
-    train(opt)
+    train(
+        config_path=config,
+        out_dir=out_dir,
+        project=project,
+        wandb_id=wandb_id,
+        exp_name=exp_name,
+        train_mode=train_mode,
+        overfit=overfit,
+        debug=debug,
+        no_cuda=no_cuda,
+        gpu_id=gpu_id,
+        use_dataparallel=use_dataparallel,
+        use_ddp=use_ddp,
+        detect_anomaly=detect_anomaly,
+        num_workers=num_workers,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)

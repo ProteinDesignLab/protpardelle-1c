@@ -42,7 +42,7 @@ from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import apply_dotdict_recursively, parse_fixed_pos_str
 
-parser = PDBParser()
+parser = PDBParser(QUIET=True)
 
 
 def fill_motif_seq(
