@@ -7,7 +7,6 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
 </p>
 
 # Table of Contents
-- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Install dependencies](#install-dependencies)
@@ -282,7 +281,7 @@ This folder organization, in particular `scaffold_info.csv`, follows MotifBench 
 
 # Training
 
-First change these lines in `scripts/train.sh`:
+First change these lines in `scripts/train.sbatch`:
 
 ```bash
 #SBATCH -p your-partition-name
@@ -293,21 +292,19 @@ PROTPARDELLE_EXPERIMENT_DIR=/your/path/to/output/dir
 See `examples/training` for the exact model architecture and training hyperparameters used in Protpardelle-1c models. Look for `/your/path/to` which need to be changed to paths on your current system. The training script can be called with
 
 ```bash
-source scripts/train.sbatch {EXPERIMENT_NAME}
-
 # Check if everything works
-source scripts/train.sh cc58
+source scripts/train.sbatch cc58 --debug
 
 # Then submit job
-sbatch -J cc58 scripts/train.sh cc58
+sbatch -J cc58 scripts/train.sbatch cc58
 ```
 
-A copy of the training config and model checkpoints will be saved under `{PROTPARDELLE_EXPERIMENT_DIR}`
+A copy of the training config and model checkpoints will be saved under `PROTPARDELLE_EXPERIMENT_DIR`.
 
 ## Datasets
 
 - [AI-CATH](https://zenodo.org/records/15881564): The CATH dataset described in the original Protpardelle paper but augmented with 32 ProteinMPNN sequences per structure. Structures are predicted by ESMFold. Models are trained on only the designable subset (337,936 / 704,448).
-- Boltz Interfaces: PDB chain pairs curated following Boltz, total 1,593,738 chain pairs.
+- Boltz Interfaces: PDB chain pairs curated following [Boltz-1](https://www.biorxiv.org/content/10.1101/2024.11.19.624167v4), total 1,593,738 chain pairs used for training.
 
 # Likelihood
 

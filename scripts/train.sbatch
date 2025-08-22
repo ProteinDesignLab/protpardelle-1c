@@ -10,10 +10,10 @@
 
 source $ENV_DIR/protpardelle/bin/activate
 
-BASE_DIR=/your/path/to/protpardelle-1c
+BASE_DIR=/home/users/tianyulu/code/protpardelle-1c
 MODEL_NAME=$1
 DEBUG=$2
-PROTPARDELLE_EXPERIMENT_DIR=/your/path/to/protpardelle-1c-experiments
+PROTPARDELLE_EXPERIMENT_DIR=/scratch/users/tianyulu/protpardelle-1c-experiments
 
 # Set num_workers depending on DEBUG
 if [[ "$DEBUG" == *"--debug"* ]]; then
@@ -28,10 +28,10 @@ cd ${BASE_DIR}
 WANDB__SERVICE_WAIT=300 CUDA_VISIBLE_DEVICES="0" python3 src/protpardelle/train.py \
     --config examples/training/${MODEL_NAME}.yaml \
     --project protpardelle-1c \
-    --wandb_id tyl \
-    --exp_name ${MODEL_NAME} \
+    --wandb-id your-wandb-id \
+    --exp-name ${MODEL_NAME} \
     --train \
-    --use_dataparallel \
-    --num_workers ${NUM_WORKERS} \
-    --out_dir ${PROTPARDELLE_EXPERIMENT_DIR} \
+    --use-dataparallel \
+    --num-workers ${NUM_WORKERS} \
+    --out-dir ${PROTPARDELLE_EXPERIMENT_DIR} \
     ${DEBUG}
