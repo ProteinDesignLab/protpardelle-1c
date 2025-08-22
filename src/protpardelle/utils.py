@@ -3,12 +3,12 @@
 Authors: Alex Chu, Zhaoyang Li, Tianyu Lu
 """
 
+import argparse
 import os
 import random
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import numpy as np
@@ -96,10 +96,10 @@ def clean_gpu_cache(func: Callable) -> Callable:
     return wrapper
 
 
-def dict_to_namespace(config: dict) -> SimpleNamespace:
-    """Convert a dictionary to a SimpleNamespace recursively."""
+def dict_to_namespace(config: dict) -> argparse.Namespace:
+    """Convert a dictionary to a namespace recursively."""
 
-    namespace = SimpleNamespace()
+    namespace = argparse.Namespace()
     for key, value in config.items():
         if isinstance(value, dict):
             new_value = dict_to_namespace(value)
@@ -125,8 +125,8 @@ def get_default_device() -> torch.device:
     return torch.device("cpu")
 
 
-def load_config(path: StrPath) -> SimpleNamespace:
-    """Load a YAML configuration file and convert it to a SimpleNamespace."""
+def load_config(path: StrPath) -> argparse.Namespace:
+    """Load a YAML configuration file and convert it to a namespace."""
 
     with open(path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
