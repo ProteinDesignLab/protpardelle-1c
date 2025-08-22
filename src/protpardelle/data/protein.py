@@ -20,11 +20,9 @@ Authors: Alex Chu, Zhaoyang Li
 """
 import dataclasses
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 import numpy as np
-from Bio.PDB import MMCIFParser, PDBParser
 
 from protpardelle.common import residue_constants
 
@@ -87,135 +85,6 @@ class Hetero:
     hetero_not_motif_mask: list[
         int
     ]  # indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
-
-
-def read_pdb(pdb_file: str, chain_id: str | None = None) -> Protein:
-    """Takes a PDB string and constructs a Protein object.
-
-    WARNING: All non-standard residue types will be converted into UNK. All
-      non-standard atoms will be ignored.
-
-    Args:
-      pdb_file: The path to the PDB file.
-      chain_id: If chain_id is specified (e.g. A), then only that chain
-        is parsed. Otherwise all chains are parsed.
-
-    Returns:
-      A new `Protein` parsed from the pdb contents.
-    """
-    if Path(pdb_file).suffix == ".cif":
-        parser = MMCIFParser(QUIET=True, auth_chains=True, auth_residues=False)
-    else:
-        parser = PDBParser(QUIET=True)
-    # try:
-    structure = parser.get_structure("none", pdb_file)
-    # except:
-    # import ipdb; ipdb.set_trace()
-    models = list(structure.get_models())
-    # if len(models) != 1:
-    #     raise ValueError(
-    #         f"Only single model PDBs are supported. Found {len(models)} models."
-    #     )
-    model = models[0]
-
-    atom_positions = []
-    aatype = []
-    atom_mask = []
-    residue_index = []
-    chain_ids = []
-    b_factors = []
-    hetero_atom_positions = (
-        []
-    )  # list of length len(ncaa) storing variable number of atom coordinates per array
-    hetero_aatype = []  # list of aatypes (three letter)
-    hetero_atom_types = []  # list of list of atom types per ncaa
-    hetero_motif_mask = []  # indices of hetero_atom_positions that are motif positions
-    hetero_not_motif_mask = (
-        []
-    )  # indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
-
-    for chain in model:
-        if chain_id is not None and chain.id != chain_id:
-            continue
-        for ri, res in enumerate(chain):
-            if res.id[2] != " ":
-                pass
-                # raise ValueError(
-                #     f"PDB contains an insertion code at chain {chain.id} and residue "
-                #     f"index {res.id[1]}. These are not supported."
-                # )
-            res_shortname = residue_constants.restype_3to1.get(res.resname, "X")
-            # or 'UNK' reserved for redesignable motif positions
-            if res_shortname != "X" or res.resname == "UNK":  # canonical amino acids
-                if res.resname == "UNK":
-                    res_shortname = "G"
-                restype_idx = residue_constants.restype_order.get(
-                    res_shortname, residue_constants.restype_num
-                )
-                pos = np.zeros((residue_constants.atom_type_num, 3))
-                mask = np.zeros((residue_constants.atom_type_num,))
-                res_b_factors = np.zeros((residue_constants.atom_type_num,))
-                for atom in res:
-                    if atom.name not in residue_constants.atom_types:
-                        continue
-                    pos[residue_constants.atom_order[atom.name]] = atom.coord
-                    mask[residue_constants.atom_order[atom.name]] = 1.0
-                    res_b_factors[residue_constants.atom_order[atom.name]] = (
-                        atom.bfactor
-                    )
-                if np.sum(mask) < 0.5:
-                    # If no known atom positions are reported for the residue then skip it.
-                    continue
-                aatype.append(restype_idx)
-                atom_positions.append(pos)
-                atom_mask.append(mask)
-                residue_index.append(res.id[1])
-                chain_ids.append(chain.id)
-                b_factors.append(res_b_factors)
-            else:
-                # if residue has amino acid backbone atoms, treat it as a noncanonical motif residue
-                # otherwise, treat as a ligand/metal for clash loss
-                resemble_atoms = ["N", "CA", "C", "O"]
-                for atom in res:
-                    if atom.name in resemble_atoms:
-                        resemble_atoms.remove(atom.name)
-                if len(resemble_atoms) == 0:
-                    hetero_motif_mask.append(ri)
-                else:
-                    hetero_not_motif_mask.append(ri)
-                hetero_aatype.append(res.get_resname())
-
-                pos = []
-                h_atom_types = []
-                for atom in res:
-                    pos.append(atom.coord)
-                    h_atom_types.append(atom.name)
-                hetero_atom_positions.append(pos)
-                hetero_atom_types.append(h_atom_types)
-
-    # Chain IDs are usually characters so map these to ints.
-    unique_chain_ids = np.unique(chain_ids)
-    chain_id_mapping = {cid: n for n, cid in enumerate(unique_chain_ids)}
-    chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])
-
-    return (
-        Protein(
-            atom_positions=np.array(atom_positions),
-            atom_mask=np.array(atom_mask),
-            aatype=np.array(aatype),
-            residue_index=np.array(residue_index),
-            chain_index=chain_index,
-            b_factors=np.array(b_factors),
-        ),
-        Hetero(
-            hetero_atom_positions=hetero_atom_positions,
-            hetero_aatype=hetero_aatype,
-            hetero_atom_types=hetero_atom_types,
-            hetero_motif_mask=hetero_motif_mask,
-            hetero_not_motif_mask=hetero_not_motif_mask,
-        ),
-        chain_id_mapping,
-    )
 
 
 def _chain_end(atom_index, end_resname, chain_name, residue_index) -> str:

@@ -1,6 +1,6 @@
 """General training script.
 
-Authors: Alex Chu, Richard Shuai
+Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 """
 
 import datetime

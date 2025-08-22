@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from Bio.PDB import MMCIFParser
 from einops import rearrange, repeat
 from torch.utils.data import Dataset, RandomSampler, Sampler
 from torchtyping import TensorType
@@ -28,8 +27,6 @@ from protpardelle.common.residue_constants import (
 )
 from protpardelle.data import atom
 from protpardelle.data import dataset as protpardelle_dataset
-
-parser = MMCIFParser(QUIET=True)
 
 FEATURES_1D = (
     "coords_in",

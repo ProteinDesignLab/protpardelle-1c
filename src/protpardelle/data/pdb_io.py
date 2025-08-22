@@ -3,9 +3,11 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
+from pathlib import Path
+
 import numpy as np
 import torch
-from Bio.PDB import PDBParser
+from Bio.PDB import MMCIFParser, PDBParser
 from einops import rearrange
 from torchtyping import TensorType
 
@@ -16,6 +18,8 @@ from protpardelle.data.atom import (
     atom37_mask_from_aatype,
     atom37_to_atom73,
 )
+from protpardelle.data.protein import Hetero, Protein
+from protpardelle.utils import StrPath
 
 
 def add_chain_gap(
@@ -50,10 +54,126 @@ def add_chain_gap(
     return residue_index
 
 
+def read_pdb(
+    pdb_file: str, chain_id: str | None = None
+) -> tuple[Protein, Hetero, dict[str, int]]:
+    """Takes a PDB string and constructs a Protein object.
+
+    Args:
+        pdb_file (str): The path to the PDB file.
+        chain_id (str | None, optional): If chain_id is specified (e.g. A), then only
+        that chain is parsed. Otherwise all chains are parsed. Defaults to None.
+
+    Returns:
+        tuple[Protein, Hetero, dict[str, int]]: A tuple containing the parsed Protein,
+        Hetero, and a mapping of chain IDs to their indices.
+    """
+
+    if Path(pdb_file).suffix == ".cif":
+        parser = MMCIFParser(QUIET=True, auth_chains=True, auth_residues=False)
+    else:
+        parser = PDBParser(QUIET=True)
+
+    structure = parser.get_structure("protein", pdb_file)
+    model = next(structure.get_models())
+
+    atom_positions = []
+    aatype = []
+    atom_mask = []
+    residue_index = []
+    chain_ids = []
+    b_factors = []
+    hetero_atom_positions = (
+        []
+    )  # list of length len(ncaa) storing variable number of atom coordinates per array
+    hetero_aatype = []  # list of aatypes (three letter)
+    hetero_atom_types = []  # list of list of atom types per ncaa
+    hetero_motif_mask = []  # indices of hetero_atom_positions that are motif positions
+    hetero_not_motif_mask = (
+        []
+    )  # indices of hetero_atom_positions that are non-motif but ligand/metal positions (for clash loss)
+
+    for chain in model:
+        if chain_id is not None and chain.id != chain_id:
+            continue
+        for ri, res in enumerate(chain):
+            res_shortname = residue_constants.restype_3to1.get(res.resname, "X")
+            # Or 'UNK' reserved for redesignable motif positions
+            if res_shortname != "X" or res.resname == "UNK":  # canonical amino acids
+                if res.resname == "UNK":
+                    res_shortname = "G"
+                restype_idx = residue_constants.restype_order.get(
+                    res_shortname, residue_constants.restype_num
+                )
+                pos = np.zeros((residue_constants.atom_type_num, 3))
+                mask = np.zeros((residue_constants.atom_type_num,))
+                res_b_factors = np.zeros((residue_constants.atom_type_num,))
+                for atom in res:
+                    if atom.name not in residue_constants.atom_types:
+                        continue
+                    pos[residue_constants.atom_order[atom.name]] = atom.coord
+                    mask[residue_constants.atom_order[atom.name]] = 1.0
+                    res_b_factors[residue_constants.atom_order[atom.name]] = (
+                        atom.bfactor
+                    )
+                if np.sum(mask) < 0.5:
+                    # If no known atom positions are reported for the residue then skip it.
+                    continue
+                aatype.append(restype_idx)
+                atom_positions.append(pos)
+                atom_mask.append(mask)
+                residue_index.append(res.id[1])
+                chain_ids.append(chain.id)
+                b_factors.append(res_b_factors)
+            else:
+                # If residue has amino acid backbone atoms, treat it as a noncanonical motif residue
+                # Otherwise, treat as a ligand/metal for clash loss
+                resemble_atoms = ["N", "CA", "C", "O"]
+                for atom in res:
+                    if atom.name in resemble_atoms:
+                        resemble_atoms.remove(atom.name)
+                if len(resemble_atoms) == 0:
+                    hetero_motif_mask.append(ri)
+                else:
+                    hetero_not_motif_mask.append(ri)
+                hetero_aatype.append(res.get_resname())
+
+                pos = []
+                h_atom_types = []
+                for atom in res:
+                    pos.append(atom.coord)
+                    h_atom_types.append(atom.name)
+                hetero_atom_positions.append(pos)
+                hetero_atom_types.append(h_atom_types)
+
+    # Chain IDs are usually characters so map these to ints.
+    unique_chain_ids = np.unique(chain_ids)
+    chain_id_mapping = {cid: n for n, cid in enumerate(unique_chain_ids)}
+    chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])
+
+    protein = Protein(
+        atom_positions=np.array(atom_positions),
+        atom_mask=np.array(atom_mask),
+        aatype=np.array(aatype),
+        residue_index=np.array(residue_index),
+        chain_index=chain_index,
+        b_factors=np.array(b_factors),
+    )
+    hetero = Hetero(
+        hetero_atom_positions=hetero_atom_positions,
+        hetero_aatype=hetero_aatype,
+        hetero_atom_types=hetero_atom_types,
+        hetero_motif_mask=hetero_motif_mask,
+        hetero_not_motif_mask=hetero_not_motif_mask,
+    )
+
+    return protein, hetero, chain_id_mapping
+
+
 def load_feats_from_pdb(
     pdb,
-    bb_atoms=["N", "CA", "C", "O"],
-    load_atom73=False,
+    bb_atoms=("N", "CA", "C", "O"),
+    load_atom73: bool = False,
     chain_residx_gap: int = 200,
     chain_id: str | None = None,
     atom14: bool = False,
@@ -67,7 +187,7 @@ def load_feats_from_pdb(
     - include_pos_feats: if True, include chain_id_mapping and residue_index_orig in feats for specifying specific positions
     """
     feats = {}
-    protein_obj, hetero_obj, chain_id_mapping = protein.read_pdb(pdb, chain_id=chain_id)
+    protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb, chain_id=chain_id)
     bb_idxs = [residue_constants.atom_order[a] for a in bb_atoms]
     bb_coords = torch.from_numpy(protein_obj.atom_positions[:, bb_idxs])
     feats["bb_coords"] = bb_coords.float()
@@ -155,10 +275,10 @@ def feats_to_pdb_str(
 
 def bb_coords_to_pdb_str(
     coords,
-    atoms=["N", "CA", "C", "O"],
+    atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
     chain_index: TensorType["n"] | None = None,
     aatype: TensorType["n"] | None = None,
-):
+) -> str:
     """
     Save backbone coords to pdb string.
     - chain_index: 0-indexed chain index for each residue, starting from A
@@ -243,75 +363,13 @@ def write_pdb_str(pdb_str, filename, append=False, write_to_frames=False):
             f.write("ENDMDL\n")
 
 
-def load_coords_from_pdb(
-    pdb,
-    atoms=["N", "CA", "C", "O"],
-    method="raw",
-    also_bfactors=False,
-    normalize_bfactors=True,
-):
-    """Returns array of shape (1, n_res, len(atoms), 3)"""
-    coords = []
-    bfactors = []
-    if method == "raw":  # Raw numpy implementation, faster than biopdb
-        # Indexing into PDB format, allowing XXXX.XXX
-        coords_in_pdb = [slice(30, 38), slice(38, 46), slice(46, 54)]
-        # Indexing into PDB format, allowing XXX.XX
-        bfactor_in_pdb = slice(60, 66)
-
-        with open(pdb, "r") as f:
-            resi_prev = 1
-            counter = 0
-            for l in f:
-                l_split = l.rstrip("\n").split()
-                if len(l_split) > 0 and l_split[0] == "ATOM" and l_split[2] in atoms:
-                    resi = l_split[5]
-                    if resi == resi_prev:
-                        counter += 1
-                    else:
-                        counter = 0
-                    if counter < len(atoms):
-                        xyz = [
-                            np.array(l[s].strip()).astype(float) for s in coords_in_pdb
-                        ]
-                        coords.append(xyz)
-                        if also_bfactors:
-                            bfactor = np.array(l[bfactor_in_pdb].strip()).astype(float)
-                            bfactors.append(bfactor)
-                    resi_prev = resi
-            coords = torch.Tensor(np.array(coords)).view(1, -1, len(atoms), 3)
-            if also_bfactors:
-                bfactors = torch.Tensor(np.array(bfactors)).view(1, -1, len(atoms))
-    elif method == "biopdb":
-        structure = PDBParser(QUIET=True).get_structure(pdb[:-3], pdb)
-        for model in structure:
-            for chain in model:
-                for res in chain:
-                    for atom in atoms:
-                        try:
-                            coords.append(np.asarray(res[atom].get_coord()))
-                            if also_bfactors:
-                                bfactors.append(np.asarray(res[atom].get_bfactor()))
-                        except:
-                            continue
-    else:
-        raise NotImplementedError(f"Invalid method for reading coords: {method}")
-    if also_bfactors:
-        if normalize_bfactors:  # Normalize over Calphas
-            mean_b = bfactors[..., 1].mean()
-            std_b = bfactors[..., 1].var().sqrt()
-            bfactors = (bfactors - mean_b) / (std_b + 1e-6)
-        return coords, bfactors
-    return coords
-
-
 def write_coords_to_pdb(
     coords_in,
     filename,
     batched=True,
     write_to_frames=False,
     **all_atom_feats,
-):
+) -> None:
     if not (batched or write_to_frames):
         coords_in = [coords_in]
         filename = [filename]
@@ -331,11 +389,13 @@ def write_coords_to_pdb(
         if is_bb_or_ca_pdb:
             c_flat = rearrange(c, "n a c -> (n a) c")
             if n_atoms_in == 1:
-                atoms = ["CA"]
-            if n_atoms_in == 3:
-                atoms = ["N", "CA", "C"]
-            if n_atoms_in == 4:
-                atoms = ["N", "CA", "C", "O"]
+                atoms = ("CA",)
+            elif n_atoms_in == 3:
+                atoms = ("N", "CA", "C")
+            elif n_atoms_in == 4:
+                atoms = ("N", "CA", "C", "O")
+            else:
+                raise ValueError("Invalid number of atoms for backbone/CA PDB.")
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
             pdb_str = bb_coords_to_pdb_str(
                 c_flat,
@@ -346,4 +406,5 @@ def write_coords_to_pdb(
         else:
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
             pdb_str = feats_to_pdb_str(c, **feats_i)
+
         write_pdb_str(pdb_str, fname, append=write_to_frames and i > 0)

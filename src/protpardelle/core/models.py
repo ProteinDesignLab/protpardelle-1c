@@ -17,7 +17,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from Bio.PDB import PDBParser
 from einops import rearrange, repeat
 from omegaconf import DictConfig
 from torchtyping import TensorType
@@ -42,8 +41,6 @@ from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import apply_dotdict_recursively
-
-parser = PDBParser(QUIET=True)
 
 
 def fill_motif_seq(
