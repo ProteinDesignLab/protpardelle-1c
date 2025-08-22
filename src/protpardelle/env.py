@@ -6,15 +6,10 @@ Author: Zhaoyang Li
 import os
 import shutil
 import subprocess
+from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
 
 from protpardelle.utils import norm_path
-
-if TYPE_CHECKING:
-    from _typeshed import StrPath
-else:
-    StrPath: TypeAlias = str | os.PathLike[str]
 
 
 def _detect_project_root_dir() -> Path:
@@ -51,6 +46,7 @@ def _detect_project_root_dir() -> Path:
 
 
 PROJECT_ROOT_DIR = _detect_project_root_dir()
+PACKAGE_ROOT_DIR = resources.files(__package__)
 
 _default_protpardelle_model_params = PROJECT_ROOT_DIR / "model_params"
 _default_esmfold_path = _default_protpardelle_model_params / "ESMFold"
@@ -78,6 +74,7 @@ FOLDSEEK_BIN = norm_path(_default_foldseek_bin_env)
 
 __all__ = [
     "PROJECT_ROOT_DIR",
+    "PACKAGE_ROOT_DIR",
     "PROTPARDELLE_MODEL_PARAMS",
     "ESMFOLD_PATH",
     "PROTEINMPNN_WEIGHTS",
