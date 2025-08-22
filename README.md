@@ -7,6 +7,7 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
 </p>
 
 # Table of Contents
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Install dependencies](#install-dependencies)
@@ -14,8 +15,9 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
   - [Set environment variables](#set-environment-variables)
   - [Available Models](#available-models)
 - [Output](#output)
-- [Sampling Examples](#sampling-examples)
-  - [Sampling configs](#sampling-configs)
+- [Sampling](#sampling)
+  - [Sampling Examples](#sampling-examples)
+  - [Sampling Configs](#sampling-configs)
     - [`search_space.models`](#search_spacemodels)
     - [`search_space.step_scales`](#search_spacestep_scales)
     - [`search_space.schurns`](#search_spaceschurns)
@@ -29,8 +31,8 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
     - [`ssadj`](#ssadj)
 - [Training](#training)
   - [Datasets](#datasets)
-  - [Samples](#samples)
 - [Citation](#citation)
+
 
 
 # Installation
@@ -183,7 +185,7 @@ For example, the demo `02_motif_scaffolding` with default sampling settings will
 
 This folder organization, in particular `scaffold_info.csv`, follow MotifBench input specifications.
 
-# Sampling Examples
+# Sampling
 
 We recommend reading and running the example sampling configs under `examples/sampling` that cover the intended use cases of Protpardelle-1c models. The commands to run each demo are provided below:
 
@@ -207,7 +209,12 @@ python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --
 python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
 ```
 
-## Sampling configs
+## Sampling Examples
+
+- MotifBench samples and results are at [Zenodo](https://zenodo.org/records/16651614). These were produced with the `03_motifbench` config.
+- RFdiffusion/La-Proteina motif scaffolding samples and results are at [Zenodo](https://zenodo.org/records/16887802). These were produced with the `07_rfdiffusion` and `08_rfdiffusion_allatom` configs.
+
+## Sampling Configs
 
 Multiple entries can be specified per setting in `search_space` and are combined with `itertools.product()`. The entries `motifs`, `motif_contigs`, `total_lengths`, `hotspots`, and `ssadj`, must be equal in number, i.e. two entries under `motifs` must be matched with two `motif_contigs`, etc.
 
@@ -286,11 +293,6 @@ A copy of the training config and model checkpoints will be saved under `{PROTPA
 
 - [AI-CATH](https://zenodo.org/records/15881564): The CATH dataset described in the original Protpardelle paper but augmented with 32 ProteinMPNN sequences per structure. Structures are predicted by ESMFold. Models are trained on only the designable subset (337,936 / 704,448).
 - Boltz Interfaces: PDB chain pairs curated following Boltz, total 1,593,738 chain pairs.
-
-## Samples
-
-- MotifBench samples and results are at [Zenodo](https://zenodo.org/records/16651614). These were produced with the `03_motifbench` config.
-- RFdiffusion/La-Proteina motif scaffolding samples and results are at [Zenodo](https://zenodo.org/records/16887802). These were produced with the `07_rfdiffusion` and `08_rfdiffusion_allatom` configs.
 
 # Citation
 
