@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --output=R-%x.%j.out
 #SBATCH --error=R-%x.%j.err
-#SBATCH -p your-partition-name
+#SBATCH -p bioe,possu
 #SBATCH --gpu_cmode=shared
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
