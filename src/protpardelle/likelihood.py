@@ -18,7 +18,7 @@ from protpardelle.core import diffusion
 from protpardelle.core.models import Protpardelle
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
-from protpardelle.env import PROTPARDELLE_MODEL_PARAMS, PROTPARDELLE_OUTPUT_DIR
+from protpardelle.env import PROJECT_ROOT_DIR, PROTPARDELLE_MODEL_PARAMS, PROTPARDELLE_OUTPUT_DIR
 from protpardelle.utils import (
     get_default_device,
     load_config,
@@ -224,9 +224,9 @@ def forward_ode(
 
 
 def runner(
-    model_name: str,
-    epoch: str,
-    pdb_path: Path,
+    model_name: str = "cc58",
+    epoch: str = "416",
+    pdb_path: Path = PROJECT_ROOT_DIR / "examples/motifs/nanobody",
     batch_size: int = 32,
     seed: int | None = None,
 ):
@@ -244,7 +244,7 @@ def runner(
             Defaults to None.
 
     Examples:
-        python ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
+        python -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path ./examples/motifs/nanobody
     """
 
     if seed is not None:
@@ -294,8 +294,6 @@ def runner(
     latent_save_dir.mkdir(exist_ok=True, parents=True)
     for i, latent in enumerate(latents):
         curr_seq_mask = torch.nonzero(seq_masks[i]).flatten()
-        print(pdb_stems[i])
-        print(latent[curr_seq_mask].shape)
         torch.save(
             latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_encoded_latent.pt"
         )
@@ -309,6 +307,7 @@ def runner(
     df.to_csv(save_dir / "likelihood_result.csv", float_format="%.4f", index=False)
 
     print(f"Likelihood results saved to {save_dir / 'likelihood_result.csv'}")
+    print(f"Latents saved to {latent_save_dir}")
 
 
 if __name__ == "__main__":

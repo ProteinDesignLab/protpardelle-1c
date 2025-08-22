@@ -147,49 +147,14 @@ export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
 | **cc94_epoch3100** | 0.5 | 0.5 | Allatom No Mask | Relative | cc91 finetuned on multichain data but no hotspot |
 | **cc95_epoch3490** | 0.5 | 0.5 | Backbone | Relative + Relchain | cc83 finetuned with heavier hotspot dropout |
 
-# Output
-
-The outputs are saved in a nested folder structure where the levels are organized as such:
-
-```
-
-PROTPARDELLE_OUTPUT_DIR
-└── sampling-experiment-name
-    └── model-epoch-sampling_config-stepscale-schurn-ccstart-dx-dy-dz-rewind
-        └── 7eow_CDR3_atom_rot_128
-
-```
-
-For example, the demo `02_motif_scaffolding` with default sampling settings will generate the following folder structure under `PROTPARDELLE_OUTPUT_DIR`:
-
-```
-
-02_motif_scaffolding
-└── cc58-epoch416-sampling_sidechain_conditional-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
-    └── 7eow_CDR3_atom_rot_128
-        └── scaffold_info.csv
-            7eow_CDR3_atom_rot_128_0.pdb
-            ...
-└── cc95-epoch3490-sampling_sidechain_conditional-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
-    └── 7eow_CDR3_atom_rot_128
-        └── scaffold_info.csv
-            7eow_CDR3_atom_rot_128_0.pdb
-            ...
-└── cc94-epoch3100-sampling_sidechain_conditional_allatom-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
-    └── 7eow_CDR3_atom_rot_128
-        └── scaffold_info.csv
-            7eow_CDR3_atom_rot_128_0.pdb
-            ...
-
-```
-
-This folder organization, in particular `scaffold_info.csv`, follow MotifBench input specifications.
-
 # Sampling
 
 We recommend reading and running the example sampling configs under `examples/sampling` that cover the intended use cases of Protpardelle-1c models. The commands to run each demo are provided below:
 
 ```bash
+# Activate installed environment
+source $ENV_DIR/protpardelle/bin/activate
+
 python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0 --debug
 python -m protpardelle.sample ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
 python -m protpardelle.sample ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
@@ -265,6 +230,44 @@ For binder generation. A comma-delimited string with format `{chain_id}{residue_
 
 For fold-conditioning, the stems of the output files from running the `make_secstruc_adj.py`, script from RFdiffusion, e.g. `["1pdb_ss", "1pdb_adj"]`. Per-residue secondary structure labels and per residue-pair block adjacency contact info are encoded as conditioning inputs. Fold-conditional model weights will be released at a later date.
 
+## Output
+
+The sampling outputs are saved in a nested folder structure where the levels are organized as such:
+
+```
+
+PROTPARDELLE_OUTPUT_DIR
+└── sampling-experiment-name
+    └── model-epoch-sampling_config-stepscale-schurn-ccstart-dx-dy-dz-rewind
+        └── motif-pdb-stem
+
+```
+
+For example, the demo `02_motif_scaffolding` with default sampling settings will generate the following folder structure under `PROTPARDELLE_OUTPUT_DIR`:
+
+```
+
+02_motif_scaffolding
+└── cc58-epoch416-sampling_sidechain_conditional-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
+    └── 7eow_CDR3_atom_rot_128
+        └── scaffold_info.csv
+            7eow_CDR3_atom_rot_128_0.pdb
+            ...
+└── cc95-epoch3490-sampling_sidechain_conditional-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
+    └── 7eow_CDR3_atom_rot_128
+        └── scaffold_info.csv
+            7eow_CDR3_atom_rot_128_0.pdb
+            ...
+└── cc94-epoch3100-sampling_sidechain_conditional_allatom-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
+    └── 7eow_CDR3_atom_rot_128
+        └── scaffold_info.csv
+            7eow_CDR3_atom_rot_128_0.pdb
+            ...
+
+```
+
+This folder organization, in particular `scaffold_info.csv`, follows MotifBench input specifications.
+
 # Training
 
 First change these lines in `scripts/train.sh`:
@@ -293,6 +296,21 @@ A copy of the training config and model checkpoints will be saved under `{PROTPA
 
 - [AI-CATH](https://zenodo.org/records/15881564): The CATH dataset described in the original Protpardelle paper but augmented with 32 ProteinMPNN sequences per structure. Structures are predicted by ESMFold. Models are trained on only the designable subset (337,936 / 704,448).
 - Boltz Interfaces: PDB chain pairs curated following Boltz, total 1,593,738 chain pairs.
+
+# Likelihood
+
+We provide a script for computing likelihoods and latents as described in [Song _et al._, ICLR 2021](https://arxiv.org/abs/2011.13456)
+
+```bash
+# Activate installed environment
+source $ENV_DIR/protpardelle/bin/activate
+
+python -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path ./examples/motifs/nanobody
+python -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path ./examples/motifs/nanobody
+python -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path ./examples/motifs/nanobody
+```
+
+Previously, all-atom model likelihoods were computed on backbone atoms only. Here we compute all-atom model likelihoods for the all-atom models and backbone-only model likelihoods for the backbone-only models.
 
 # Citation
 
