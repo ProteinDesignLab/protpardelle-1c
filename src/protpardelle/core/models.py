@@ -22,25 +22,16 @@ from omegaconf import DictConfig
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
-import protpardelle.core.diffusion as diffusion
-import protpardelle.core.modules as modules
-import protpardelle.data.sequence
-import protpardelle.evaluate as evaluate
-import protpardelle.utils
 from protpardelle.common import residue_constants
-from protpardelle.common.residue_constants import (
-    RFDIFFUSION_BENCHMARK_TIP_ATOMS,
-    atom_order,
-    order_restype,
-    restype_1to3,
-    restype_3to1,
-    restypes,
-)
-from protpardelle.data import atom, dataset
+from protpardelle.core import diffusion, modules
+from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
+from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
+from protpardelle.data.sequence import batched_seq_to_aatype_and_mask
 from protpardelle.env import PROTEINMPNN_WEIGHTS
+from protpardelle.evaluate import design_sequence
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import apply_dotdict_recursively
+from protpardelle.utils import apply_dotdict_recursively, unsqueeze_trailing_dims
 
 
 def fill_motif_seq(
@@ -60,7 +51,10 @@ def fill_motif_seq(
 
 def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
     # remove heteroatoms from motif_aatype
-    motif_aatype = [[ma for ma in mab if ma in restype_3to1] for mab in motif_aatype]
+    motif_aatype = [
+        [ma for ma in mab if ma in residue_constants.restype_3to1]
+        for mab in motif_aatype
+    ]
     crop_cond_coords = coords.clone()
     if strategy is None:
         strategy = "backbone"
@@ -71,10 +65,12 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
         if "sidechain-tip" in strategy:
             for bi in range(len(motif_idx)):
                 for mi, aa3 in enumerate(motif_aatype[bi]):
-                    if aa3 in RFDIFFUSION_BENCHMARK_TIP_ATOMS:
+                    if aa3 in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS:
                         atom_idx = [
-                            atom_order.get(at)
-                            for at in RFDIFFUSION_BENCHMARK_TIP_ATOMS[aa3]
+                            residue_constants.atom_order.get(at)
+                            for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                aa3
+                            ]
                         ]
                         inv_atom_idx = np.delete(np.arange(37), atom_idx)
                         crop_cond_coords[bi, motif_idx[bi][mi], inv_atom_idx, :] = 0
@@ -233,7 +229,7 @@ class CoordinateDenoiser(nn.Module):
         if self.use_conv and n_atoms == 37:
             n_atoms += 1  # make it an even number
         self.n_atoms = n_atoms
-        self.bb_idxs = [atom_order.get(a) for a in bb_atoms]
+        self.bb_idxs = [residue_constants.atom_order.get(a) for a in bb_atoms]
         n_xyz = (
             9
             if config.model.crop_conditional
@@ -311,7 +307,7 @@ class CoordinateDenoiser(nn.Module):
         batch_lengths = seq_mask.sum(-1)
         actual_var_data = self.sigma_data**2
         var_noisy_coords = noise_level**2 + actual_var_data
-        emb = noisy_coords / protpardelle.utils.unsqueeze_trailing_dims(
+        emb = noisy_coords / unsqueeze_trailing_dims(
             var_noisy_coords.clamp(min=1e-6).sqrt(), noisy_coords
         )
 
@@ -400,16 +396,12 @@ class CoordinateDenoiser(nn.Module):
             / torch.sqrt(var_noisy_coords.clamp(min=1e-6))
         )
         skip_scale = actual_var_data / var_noisy_coords.clamp(min=1e-6)
-        emb = emb * protpardelle.utils.unsqueeze_trailing_dims(out_scale, emb)
-        skip_info = noisy_coords * protpardelle.utils.unsqueeze_trailing_dims(
-            skip_scale, noisy_coords
-        )
+        emb = emb * unsqueeze_trailing_dims(out_scale, emb)
+        skip_info = noisy_coords * unsqueeze_trailing_dims(skip_scale, noisy_coords)
         denoised_coords_x0 = emb + skip_info
 
         # Don't use atom mask; denoise all atoms
-        denoised_coords_x0 *= protpardelle.utils.unsqueeze_trailing_dims(
-            seq_mask, denoised_coords_x0
-        )
+        denoised_coords_x0 *= unsqueeze_trailing_dims(seq_mask, denoised_coords_x0)
 
         return denoised_coords_x0, hidden
 
@@ -762,9 +754,6 @@ class Protpardelle(nn.Module):
         hotspot: list[str] | str | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
-        gt_coords: TensorType["b n a x", float] | None = None,
-        gt_coords_traj: list[TensorType["b n a x", float]] | None = None,
-        gt_cond_atom_mask: TensorType["b n a", float] | None = None,
         gt_aatype: TensorType["b n", int] | None = None,
         n_steps: int = 200,
         step_scale: float = 1.2,
@@ -908,7 +897,10 @@ class Protpardelle(nn.Module):
             # record the contiguous stretches of a motif and only perform a single assignment for a contiguous stretch
             motif_residx = motif_feats["residue_index"].numpy().astype(int)
             motif_aatype = motif_feats["aatype"]
-            motif_aa3 = [restype_1to3[restypes[aa_idx]] for aa_idx in motif_aatype]
+            motif_aa3 = [
+                residue_constants.restype_1to3[residue_constants.restypes[aa_idx]]
+                for aa_idx in motif_aatype
+            ]
 
             motif_all_atom = motif_feats["atom_positions"].to(
                 self.device
@@ -948,7 +940,14 @@ class Protpardelle(nn.Module):
                 motif_aatype = [mf["aatype"] for mf in all_motif_feats]
                 motif_aa3 = []
                 for ma in motif_aatype:
-                    motif_aa3.append([restype_1to3[restypes[aa_idx]] for aa_idx in ma])
+                    motif_aa3.append(
+                        [
+                            residue_constants.restype_1to3[
+                                residue_constants.restypes[aa_idx]
+                            ]
+                            for aa_idx in ma
+                        ]
+                    )
                 motif_all_atom = torch.stack(
                     [mf["atom_positions"].to(self.device) for mf in all_motif_feats]
                 )
@@ -974,12 +973,15 @@ class Protpardelle(nn.Module):
                 # randomly rotate the motif
                 random_rots = torch.stack(
                     [
-                        dataset.uniform_rand_rotation(1)[0].to(self.device)
+                        uniform_rand_rotation(1)[0].to(self.device)
                         for _ in range(batch_size)
                     ]
                 )
                 motif_all_atom = torch.einsum(
                     "bij,blnj->blni", random_rots, motif_all_atom
+                )
+                motif_all_atom = motif_all_atom * motif_atom_mask[..., None].to(
+                    motif_all_atom
                 )
 
             motif_size = motif_all_atom.shape[-3]
@@ -995,11 +997,6 @@ class Protpardelle(nn.Module):
             if dz is not None and dz != "":
                 motif_all_atom[..., 2] = motif_all_atom[..., 2] + dz
 
-            # apply motif atom mask to set dummy atom coordinates to zero
-            motif_all_atom = motif_all_atom * motif_atom_mask[..., None].to(
-                motif_all_atom
-            )
-
         def ode_step(
             sigma_in,
             sigma_next,
@@ -1011,10 +1008,10 @@ class Protpardelle(nn.Module):
         ):
 
             mask = (sigma_in > 0).float()
-            score = (xt_in - x0_pred) / protpardelle.utils.unsqueeze_trailing_dims(
+            score = (xt_in - x0_pred) / unsqueeze_trailing_dims(
                 sigma_in.clamp(min=1e-6), xt_in
             )
-            score = score * protpardelle.utils.unsqueeze_trailing_dims(mask, score)
+            score = score * unsqueeze_trailing_dims(mask, score)
 
             # reconstruction guidance
             recon_on = curr_step >= (
@@ -1040,9 +1037,7 @@ class Protpardelle(nn.Module):
             step = (
                 score
                 * step_scale
-                * protpardelle.utils.unsqueeze_trailing_dims(
-                    sigma_next - sigma_in, score
-                )
+                * unsqueeze_trailing_dims(sigma_next - sigma_in, score)
             )
             new_xt = xt_in + step
             return new_xt
@@ -1092,7 +1087,7 @@ class Protpardelle(nn.Module):
                     _fixed_pos_mask[motif_idx[i]] = 1
 
                     designed_seqs.append(
-                        evaluate.design_sequence(
+                        design_sequence(
                             c[: seq_lens[i]],
                             model=fullmpnn_model,
                             chain_index=chain_index[i, : seq_lens[i]].cpu(),
@@ -1102,17 +1097,15 @@ class Protpardelle(nn.Module):
                     )
             else:
                 designed_seqs = [
-                    evaluate.design_sequence(
+                    design_sequence(
                         c[: seq_lens[i]],
                         model=fullmpnn_model,
                         chain_index=chain_index[i, : seq_lens[i]].cpu(),
                     )[0]
                     for i, c in enumerate(batched_coords)
                 ]
-            designed_aatypes, _ = (
-                protpardelle.data.sequence.batched_seq_to_aatype_and_mask(
-                    designed_seqs, max_len=seq_mask.shape[-1]
-                )
+            designed_aatypes, _ = batched_seq_to_aatype_and_mask(
+                designed_seqs, max_len=seq_mask.shape[-1]
             )
             return designed_aatypes
 
@@ -1136,103 +1129,84 @@ class Protpardelle(nn.Module):
         timesteps = torch.linspace(1, 0, n_steps + 1)
 
         crop_cond_coords = None
-        if gt_coords is None:
-            coords_shape = seq_mask.shape + (self.n_atoms, 3)
-            if xt_start is not None:
-                print(f"Using supplied xt to start diffusion")
-                xt = xt_start
-            elif partial_diffusion is not None and pd.enabled:
-                pd_step = n_steps - pd.n_steps
-                pd_timestep = timesteps[pd_step]
-                if isinstance(pd.pdb_file_path, list):
-                    pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
-                    for pd_fp in pd.pdb_file_path:
-                        pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp)
-                        pd_motif_aatype.append(
-                            dataset.make_fixed_size_1d(
-                                pd_feats["aatype"].flatten().clone().detach(),
-                                fixed_size=seq_mask.shape[-1],
-                            )[0]
-                        )
-                        pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
-                        pd_feats["atom_positions"] = pd_feats[
-                            "atom_positions"
-                        ] - torch.mean(
-                            pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
-                        )
-                        pd_coords.append(
-                            dataset.make_fixed_size_1d(
-                                pd_feats["atom_positions"],
-                                fixed_size=seq_mask.shape[-1],
-                            )[0]
-                        )
-                    pd_motif_aatype = (
-                        torch.stack(pd_motif_aatype).long().to(seq_mask.device)
+
+        coords_shape = seq_mask.shape + (self.n_atoms, 3)
+        if xt_start is not None:
+            print(f"Using supplied xt to start diffusion")
+            xt = xt_start
+        elif partial_diffusion is not None and pd.enabled:
+            pd_step = n_steps - pd.n_steps
+            pd_timestep = timesteps[pd_step]
+            if isinstance(pd.pdb_file_path, list):
+                pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
+                for pd_fp in pd.pdb_file_path:
+                    pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp)
+                    pd_motif_aatype.append(
+                        make_fixed_size_1d(
+                            pd_feats["aatype"].flatten().clone().detach(),
+                            fixed_size=seq_mask.shape[-1],
+                        )[0]
                     )
-                    pd_coords = torch.stack(pd_coords).to(self.device)
-                else:
-                    pd_feats, pd_hetero_obj = load_feats_from_pdb(pd.pdb_file_path)
-                    pd_motif_aatype = pd_feats["aatype"].clone().detach()
-                    pd_motif_idx = torch.arange(pd_motif_aatype.shape[0])
-                    pd_motif_aatype = (
-                        torch.stack([pd_motif_aatype for _ in range(batch_size)])
-                        .long()
-                        .to(seq_mask.device)
-                    )
-                    pd_motif_idx = [pd_motif_idx for _ in range(batch_size)]
+                    pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
                     pd_feats["atom_positions"] = pd_feats[
                         "atom_positions"
                     ] - torch.mean(
                         pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
                     )
-                    pd_coords = torch.tile(
-                        pd_feats["atom_positions"], (batch_size, 1, 1, 1)
-                    ).to(self.device)
+                    pd_coords.append(
+                        make_fixed_size_1d(
+                            pd_feats["atom_positions"],
+                            fixed_size=seq_mask.shape[-1],
+                        )[0]
+                    )
+                pd_motif_aatype = (
+                    torch.stack(pd_motif_aatype).long().to(seq_mask.device)
+                )
+                pd_coords = torch.stack(pd_coords).to(self.device)
+            else:
+                pd_feats, pd_hetero_obj = load_feats_from_pdb(pd.pdb_file_path)
+                pd_motif_aatype = pd_feats["aatype"].clone().detach()
+                pd_motif_idx = torch.arange(pd_motif_aatype.shape[0])
+                pd_motif_aatype = (
+                    torch.stack([pd_motif_aatype for _ in range(batch_size)])
+                    .long()
+                    .to(seq_mask.device)
+                )
+                pd_motif_idx = [pd_motif_idx for _ in range(batch_size)]
+                pd_feats["atom_positions"] = pd_feats["atom_positions"] - torch.mean(
+                    pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
+                )
+                pd_coords = torch.tile(
+                    pd_feats["atom_positions"], (batch_size, 1, 1, 1)
+                ).to(self.device)
 
-                # pd_coords = pd_coords - torch.mean(pd_coords[:, :, 1:2, :], dim=-3, keepdim=True)
-                # random_rots = torch.stack([data.uniform_rand_rotation(1)[0].to(self.device) for _ in range(batch_size)])
-                # pd_coords = torch.einsum('bij,blnj->blni', random_rots, pd_coords)
-                pd_noise_level = to_batch_size(noise_schedule(pd_timestep))
-                if "repack" in pd and pd.repack:
-                    for pi, pd_aa in enumerate(pd.seq):
-                        pd_motif_aatype[:, pi] = residue_constants.restype_order[pd_aa]
-                    bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
-                    bb_atom_mask = atom.atom37_mask_from_aatype(bb_seq, seq_mask)
-                    xt = diffusion.noise_coords(
-                        pd_coords,
-                        pd_noise_level,
-                        atom_mask=bb_atom_mask,
-                        dummy_fill_mode=dummy_fill_mode,
-                    )
-                else:
-                    pd_atom_mask = atom.atom37_mask_from_aatype(
-                        pd_motif_aatype, seq_mask
-                    )
-                    xt = diffusion.noise_coords(
-                        pd_coords,
-                        pd_noise_level,
-                        atom_mask=pd_atom_mask,
-                        dummy_fill_mode=dummy_fill_mode,
-                    )
-                print(
-                    f"Using {pd.pdb_file_path} for partial diffusion, going back to step {pd_step}"
+            pd_noise_level = to_batch_size(noise_schedule(pd_timestep))
+            if "repack" in pd and pd.repack:
+                for pi, pd_aa in enumerate(pd.seq):
+                    pd_motif_aatype[:, pi] = residue_constants.restype_order[pd_aa]
+                bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
+                bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
+                xt = diffusion.noise_coords(
+                    pd_coords,
+                    pd_noise_level,
+                    atom_mask=bb_atom_mask,
+                    dummy_fill_mode=dummy_fill_mode,
                 )
             else:
-                xt = torch.randn(*coords_shape).to(self.device)
-
-            xt *= protpardelle.utils.unsqueeze_trailing_dims(seq_mask, xt)
+                pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
+                xt = diffusion.noise_coords(
+                    pd_coords,
+                    pd_noise_level,
+                    atom_mask=pd_atom_mask,
+                    dummy_fill_mode=dummy_fill_mode,
+                )
+            print(
+                f"Using {pd.pdb_file_path} for partial diffusion, going back to step {pd_step}"
+            )
         else:
-            assert gt_coords_traj is None
-            noise_levels = [to_batch_size(noise_schedule(t)) for t in timesteps]
-            gt_coords_traj = [
-                diffusion.noise_coords(gt_coords, nl) for nl in noise_levels
-            ]
-            xt = gt_coords_traj[0]
+            xt = torch.randn(*coords_shape).to(self.device)
 
-            crop_cond_coords = gt_coords
-
-            if gt_cond_atom_mask is not None:
-                crop_cond_coords *= gt_cond_atom_mask[..., None]
+        xt *= unsqueeze_trailing_dims(seq_mask, xt)
 
         # Seqhat and mask used to choose sidechains for euler step (b, n)
         if not pd.enabled:
@@ -1265,8 +1239,8 @@ class Protpardelle(nn.Module):
             # Noise level of xt
             sigma73_last = torch.ones(b, n, 73).to(xt) * sigma
 
-            mask37 = atom.atom37_mask_from_aatype(s_hat, seq_mask).bool()
-            mask73 = atom.atom73_mask_from_aatype(s_hat, seq_mask).bool()
+            mask37 = atom37_mask_from_aatype(s_hat, seq_mask).bool()
+            mask73 = atom73_mask_from_aatype(s_hat, seq_mask).bool()
 
         begin_mpnn_step = int(n_steps * skip_mpnn_proportion)
 
@@ -1385,30 +1359,28 @@ class Protpardelle(nn.Module):
             sigma_next = to_batch_size(sigma_next)
 
             bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
-            bb_atom_mask = atom.atom37_mask_from_aatype(bb_seq, seq_mask)
+            bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
             if sidechain_mode and jump_steps:
                 # Fill in noise for masked positions since xt is initialized to zeros at each step
-                zero_atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+                zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 dummy_fill_mask = 1 - zero_atom_mask[..., None]
 
                 if dummy_fill_mode == "CA":
                     if x0 is not None:
                         dummy_fill_noise = (
-                            torch.randn_like(xt)
-                            * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                             + x0[:, :, 1:2, :]
                         )
                     else:
                         dummy_fill_noise = (
-                            torch.randn_like(xt)
-                            * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                             + xt[:, :, 1:2, :]
                         )
                 else:
-                    dummy_fill_noise = torch.randn_like(
-                        xt
-                    ) * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                    dummy_fill_noise = torch.randn_like(xt) * unsqueeze_trailing_dims(
+                        sigma, xt
+                    )
 
                 xt *= zero_atom_mask[..., None]
                 xt += dummy_fill_noise * dummy_fill_mask
@@ -1421,42 +1393,41 @@ class Protpardelle(nn.Module):
             if self.config.model.task == "ai-allatom" and uniform_steps:
                 if pd.enabled:
                     s_hat = pd_motif_aatype.long()
-                    ai_atom_mask = atom.atom37_mask_from_aatype(
+                    ai_atom_mask = atom37_mask_from_aatype(
                         pd_motif_aatype.long(), seq_mask
                     )
                 elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                     s_hat = sample_aatype(s_logprobs)
                     s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                    ai_atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+                    ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
-                    ai_atom_mask = atom.atom37_mask_from_aatype(gt_aatype, seq_mask)
+                    ai_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
                 xt *= ai_atom_mask[..., None]
                 atom_mask = ai_atom_mask
             elif self.config.model.task == "ai-allatom-nomask" and uniform_steps:
                 if pd.enabled:
                     s_hat = pd_motif_aatype.long()
-                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                    zero_atom_mask = atom37_mask_from_aatype(
                         pd_motif_aatype.long(), seq_mask
                     )
                 elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                     s_hat = sample_aatype(s_logprobs)
                     s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                    zero_atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+                    zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
-                    zero_atom_mask = atom.atom37_mask_from_aatype(gt_aatype, seq_mask)
+                    zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
                 else:
-                    zero_atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+                    zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
 
                 if x0 is not None:
                     dummy_fill_mask = 1 - zero_atom_mask[..., None]
                     if dummy_fill_mode == "zero":
                         dummy_fill_noise = torch.randn_like(
                             xt
-                        ) * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                        ) * unsqueeze_trailing_dims(sigma, xt)
                     else:
                         dummy_fill_noise = (
-                            torch.randn_like(xt)
-                            * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                             + x0[:, :, 1:2, :]
                         )
                     xt *= zero_atom_mask[..., None]
@@ -1469,28 +1440,26 @@ class Protpardelle(nn.Module):
                 else:
                     if pd.enabled:
                         s_hat = pd_motif_aatype.long()
-                        zero_atom_mask = atom.atom37_mask_from_aatype(
+                        zero_atom_mask = atom37_mask_from_aatype(
                             pd_motif_aatype.long(), seq_mask
                         )
                     elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                         s_hat = sample_aatype(s_logprobs)
                         s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                        zero_atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+                        zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                     elif gt_aatype is not None:
-                        zero_atom_mask = atom.atom37_mask_from_aatype(
-                            gt_aatype, seq_mask
-                        )
+                        zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
 
                     if x0 is not None:
                         dummy_fill_mask = 1 - zero_atom_mask[..., None]
                         if dummy_fill_mode == "zero":
                             dummy_fill_noise = torch.randn_like(
                                 xt
-                            ) * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                            ) * unsqueeze_trailing_dims(sigma, xt)
                         else:
                             dummy_fill_noise = (
                                 torch.randn_like(xt)
-                                * protpardelle.utils.unsqueeze_trailing_dims(sigma, xt)
+                                * unsqueeze_trailing_dims(sigma, xt)
                                 + x0[:, :, 1:2, :]
                             )
                         xt *= zero_atom_mask[..., None]
@@ -1518,18 +1487,18 @@ class Protpardelle(nn.Module):
                             sigma_hat = sigma + gamma * sigma
                             sigma_delta = torch.sqrt(sigma_hat**2 - sigma**2)
 
-                        noisier_x = xt + protpardelle.utils.unsqueeze_trailing_dims(
+                        noisier_x = xt + unsqueeze_trailing_dims(
                             sigma_delta, xt
                         ) * noise_scale * torch.randn_like(xt).to(xt)
 
-                        xt_hat = noisier_x * protpardelle.utils.unsqueeze_trailing_dims(
+                        xt_hat = noisier_x * unsqueeze_trailing_dims(
                             seq_mask, noisier_x
                         )
 
                         if self.config.model.task == "ai-allatom" and uniform_steps:
                             if pd.enabled:
                                 s_hat = pd_motif_aatype.long()
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
+                                ai_atom_mask = atom37_mask_from_aatype(
                                     pd_motif_aatype.long(), seq_mask
                                 )
                             elif (
@@ -1539,11 +1508,9 @@ class Protpardelle(nn.Module):
                             ):
                                 s_hat = sample_aatype(s_logprobs)
                                 s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
-                                    s_hat, seq_mask
-                                )
+                                ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                             elif gt_aatype is not None:
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
+                                ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
                             xt_hat *= ai_atom_mask[..., None]
@@ -1554,7 +1521,7 @@ class Protpardelle(nn.Module):
                         ):
                             if pd.enabled:
                                 s_hat = pd_motif_aatype.long()
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     pd_motif_aatype.long(), seq_mask
                                 )
                             elif (
@@ -1565,11 +1532,11 @@ class Protpardelle(nn.Module):
                                 s_hat = sample_aatype(s_logprobs)
                                 s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
 
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     s_hat, seq_mask
                                 )
                             elif gt_aatype is not None:
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
 
@@ -1578,15 +1545,11 @@ class Protpardelle(nn.Module):
                                 if dummy_fill_mode == "zero":
                                     dummy_fill_noise = torch.randn_like(
                                         xt_hat
-                                    ) * protpardelle.utils.unsqueeze_trailing_dims(
-                                        sigma_hat, xt_hat
-                                    )
+                                    ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                 else:
                                     dummy_fill_noise = (
                                         torch.randn_like(xt_hat)
-                                        * protpardelle.utils.unsqueeze_trailing_dims(
-                                            sigma_hat, xt_hat
-                                        )
+                                        * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                         + x0[:, :, 1:2, :]
                                     )
                                 xt_hat *= zero_atom_mask[..., None]
@@ -1602,7 +1565,7 @@ class Protpardelle(nn.Module):
                             else:
                                 if pd.enabled:
                                     s_hat = pd_motif_aatype.long()
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         pd_motif_aatype.long(), seq_mask
                                     )
                                 elif (
@@ -1615,11 +1578,11 @@ class Protpardelle(nn.Module):
                                         s_hat, motif_idx, motif_aatype
                                     )
 
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         s_hat, seq_mask
                                     )
                                 elif gt_aatype is not None:
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         gt_aatype, seq_mask
                                     )
 
@@ -1628,15 +1591,11 @@ class Protpardelle(nn.Module):
                                     if dummy_fill_mode == "zero":
                                         dummy_fill_noise = torch.randn_like(
                                             xt_hat
-                                        ) * protpardelle.utils.unsqueeze_trailing_dims(
-                                            sigma_hat, xt_hat
-                                        )
+                                        ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                     else:
                                         dummy_fill_noise = (
                                             torch.randn_like(xt_hat)
-                                            * protpardelle.utils.unsqueeze_trailing_dims(
-                                                sigma_hat, xt_hat
-                                            )
+                                            * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                             + x0[:, :, 1:2, :]
                                         )
                                     xt_hat *= zero_atom_mask[..., None]
@@ -1661,16 +1620,18 @@ class Protpardelle(nn.Module):
                                         ).flatten()
                                         if tip_atom_conditioning:
                                             aatype_int = motif_aatype[bi][raw_mi]
-                                            motif_aatype_str = restype_1to3[
-                                                order_restype[aatype_int.item()]
-                                            ]
-                                            tip_atomtypes = (
-                                                RFDIFFUSION_BENCHMARK_TIP_ATOMS[
-                                                    motif_aatype_str
+                                            motif_aatype_str = (
+                                                residue_constants.restype_1to3[
+                                                    residue_constants.order_restype[
+                                                        aatype_int.item()
+                                                    ]
                                                 ]
                                             )
+                                            tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                                motif_aatype_str
+                                            ]
                                             replacement_idx = [
-                                                atom_order.get(atype)
+                                                residue_constants.atom_order.get(atype)
                                                 for atype in tip_atomtypes
                                             ]
                                         xt_rep[bi, mi, replacement_idx] = (
@@ -1709,18 +1670,18 @@ class Protpardelle(nn.Module):
                                 sigma_next**2 - sigma_next**2
                             )  # don't add additional noise for the first pass
 
-                        noisier_x = xt + protpardelle.utils.unsqueeze_trailing_dims(
+                        noisier_x = xt + unsqueeze_trailing_dims(
                             sigma_delta, xt
                         ) * noise_scale * torch.randn_like(xt).to(xt)
 
-                        xt_hat = noisier_x * protpardelle.utils.unsqueeze_trailing_dims(
+                        xt_hat = noisier_x * unsqueeze_trailing_dims(
                             seq_mask, noisier_x
                         )
 
                         if self.config.model.task == "ai-allatom" and uniform_steps:
                             if pd.enabled:
                                 s_hat = pd_motif_aatype.long()
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
+                                ai_atom_mask = atom37_mask_from_aatype(
                                     pd_motif_aatype.long(), seq_mask
                                 )
                             elif (
@@ -1730,11 +1691,9 @@ class Protpardelle(nn.Module):
                             ):
                                 s_hat = sample_aatype(s_logprobs)
                                 s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
-                                    s_hat, seq_mask
-                                )
+                                ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                             elif gt_aatype is not None:
-                                ai_atom_mask = atom.atom37_mask_from_aatype(
+                                ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
                             xt_hat *= ai_atom_mask[..., None]
@@ -1745,7 +1704,7 @@ class Protpardelle(nn.Module):
                         ):
                             if pd.enabled:
                                 s_hat = pd_motif_aatype.long()
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     pd_motif_aatype.long(), seq_mask
                                 )
                             elif (
@@ -1755,11 +1714,11 @@ class Protpardelle(nn.Module):
                             ):
                                 s_hat = sample_aatype(s_logprobs)
                                 s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     s_hat, seq_mask
                                 )
                             elif gt_aatype is not None:
-                                zero_atom_mask = atom.atom37_mask_from_aatype(
+                                zero_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
 
@@ -1769,15 +1728,11 @@ class Protpardelle(nn.Module):
                                 if dummy_fill_mode == "zero":
                                     dummy_fill_noise = torch.randn_like(
                                         xt
-                                    ) * protpardelle.utils.unsqueeze_trailing_dims(
-                                        sigma, xt
-                                    )
+                                    ) * unsqueeze_trailing_dims(sigma, xt)
                                 else:
                                     dummy_fill_noise = (
                                         torch.randn_like(xt)
-                                        * protpardelle.utils.unsqueeze_trailing_dims(
-                                            sigma, xt
-                                        )
+                                        * unsqueeze_trailing_dims(sigma, xt)
                                         + x0[:, :, 1:2, :]
                                     )
                                 xt_hat *= zero_atom_mask[..., None]
@@ -1793,7 +1748,7 @@ class Protpardelle(nn.Module):
                             else:
                                 if pd.enabled:
                                     s_hat = pd_motif_aatype.long()
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         pd_motif_aatype.long(), seq_mask
                                     )
                                 elif (
@@ -1805,11 +1760,11 @@ class Protpardelle(nn.Module):
                                     s_hat = fill_motif_seq(
                                         s_hat, motif_idx, motif_aatype
                                     )
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         s_hat, seq_mask
                                     )
                                 elif gt_aatype is not None:
-                                    zero_atom_mask = atom.atom37_mask_from_aatype(
+                                    zero_atom_mask = atom37_mask_from_aatype(
                                         gt_aatype, seq_mask
                                     )
 
@@ -1819,15 +1774,11 @@ class Protpardelle(nn.Module):
                                     if dummy_fill_mode == "zero":
                                         dummy_fill_noise = torch.randn_like(
                                             xt
-                                        ) * protpardelle.utils.unsqueeze_trailing_dims(
-                                            sigma, xt
-                                        )
+                                        ) * unsqueeze_trailing_dims(sigma, xt)
                                     else:
                                         dummy_fill_noise = (
                                             torch.randn_like(xt)
-                                            * protpardelle.utils.unsqueeze_trailing_dims(
-                                                sigma, xt
-                                            )
+                                            * unsqueeze_trailing_dims(sigma, xt)
                                             + x0[:, :, 1:2, :]
                                         )
                                     xt_hat *= zero_atom_mask[..., None]
@@ -1852,16 +1803,18 @@ class Protpardelle(nn.Module):
                                         ).flatten()
                                         if tip_atom_conditioning:
                                             aatype_int = motif_aatype[bi][raw_mi]
-                                            motif_aatype_str = restype_1to3[
-                                                order_restype[aatype_int.item()]
-                                            ]
-                                            tip_atomtypes = (
-                                                RFDIFFUSION_BENCHMARK_TIP_ATOMS[
-                                                    motif_aatype_str
+                                            motif_aatype_str = (
+                                                residue_constants.restype_1to3[
+                                                    residue_constants.order_restype[
+                                                        aatype_int.item()
+                                                    ]
                                                 ]
                                             )
+                                            tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                                motif_aatype_str
+                                            ]
                                             replacement_idx = [
-                                                atom_order.get(atype)
+                                                residue_constants.atom_order.get(atype)
                                                 for atype in tip_atomtypes
                                             ]
                                         xt_rep[bi, mi, replacement_idx] = (
@@ -1893,14 +1846,12 @@ class Protpardelle(nn.Module):
                         )
 
                     if jump_steps or uniform_steps:
-                        guidance_mask37 = atom.atom37_mask_from_aatype(
+                        guidance_mask37 = atom37_mask_from_aatype(
                             s_hat, seq_mask
                         ).bool()
                     else:
                         bb_s = (seq_mask * 7).long()
-                        guidance_mask37 = atom.atom37_mask_from_aatype(
-                            bb_s, seq_mask
-                        ).bool()
+                        guidance_mask37 = atom37_mask_from_aatype(bb_s, seq_mask).bool()
 
                     guidance_in = None
                     if cc.reconstruction_guidance.enabled:
@@ -1909,14 +1860,17 @@ class Protpardelle(nn.Module):
                             for bi in range(len(motif_idx)):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
                                     aatype_int = motif_aatype[bi][raw_mi]
-                                    motif_aatype_str = restype_1to3[
-                                        order_restype[aatype_int.item()]
+                                    motif_aatype_str = residue_constants.restype_1to3[
+                                        residue_constants.order_restype[
+                                            aatype_int.item()
+                                        ]
                                     ]
-                                    tip_atomtypes = RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                    tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
                                         motif_aatype_str
                                     ]
                                     tip_idx = [
-                                        atom_order.get(atype) for atype in tip_atomtypes
+                                        residue_constants.atom_order.get(atype)
+                                        for atype in tip_atomtypes
                                     ]
                                     nontip_idx = tuple(
                                         [
@@ -1981,8 +1935,8 @@ class Protpardelle(nn.Module):
                             mask37
                         ]  # mask73 and mask37 have the same number of 1 bits
 
-                        mask37 = atom.atom37_mask_from_aatype(s_hat, seq_mask).bool()
-                        mask73 = atom.atom73_mask_from_aatype(s_hat, seq_mask).bool()
+                        mask37 = atom37_mask_from_aatype(s_hat, seq_mask).bool()
+                        mask73 = atom73_mask_from_aatype(s_hat, seq_mask).bool()
 
                         # Determine prev noise levels for atoms corresponding to new sequence
                         if gamma > 0:
@@ -2064,7 +2018,7 @@ class Protpardelle(nn.Module):
             sigma_float = sigma_next_float
 
             # Logging
-            xt_scale = self.sigma_data / protpardelle.utils.unsqueeze_trailing_dims(
+            xt_scale = self.sigma_data / unsqueeze_trailing_dims(
                 torch.sqrt(sigma_next**2 + self.sigma_data**2), xt
             )
             scaled_xt = xt * xt_scale
@@ -2079,7 +2033,7 @@ class Protpardelle(nn.Module):
         if return_last:
             return xt, s_hat, seq_mask
         elif return_aux:
-            atom_mask = atom.atom37_mask_from_aatype(s_hat, seq_mask)
+            atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
             return {
                 "x": xt,
                 "s": s_hat,

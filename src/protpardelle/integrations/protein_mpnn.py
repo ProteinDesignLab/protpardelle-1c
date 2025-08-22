@@ -98,7 +98,7 @@ def run_proteinmpnn(
     pdb_path_chains="",
     path_to_model_weights="",
     model_name="v_48_020",
-    seed: int | None=None,
+    seed: int | None = None,
     ca_only=False,
     out_folder="",
     num_seq_per_target=1,
