@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from tqdm.auto import tqdm
 import typer
+from tqdm.auto import tqdm
 
 from protpardelle import utils
 from protpardelle.common import residue_constants
@@ -19,7 +19,12 @@ from protpardelle.core.models import Protpardelle
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import PROTPARDELLE_MODEL_PARAMS, PROTPARDELLE_OUTPUT_DIR
-from protpardelle.utils import get_default_device, load_config, unsqueeze_trailing_dims
+from protpardelle.utils import (
+    get_default_device,
+    load_config,
+    seed_everything,
+    unsqueeze_trailing_dims,
+)
 
 
 def load_model(model_cfg: Path, model_ckpt: Path):
@@ -70,7 +75,6 @@ def forward_ode(
     n_steps=100,
     sigma_min=0.01,
     sigma_max=800,
-    seed=0,
     verbose=False,
     eps=None,
 ):
@@ -87,7 +91,6 @@ def forward_ode(
     """
     device = model.device
     sigma_data = model.sigma_data
-    torch.manual_seed(seed)
 
     seq_mask = batch["seq_mask"].to(device)
     batch_size = seq_mask.shape[0]
@@ -99,21 +102,20 @@ def forward_ode(
         atom_mask = get_backbone_mask(batch["atom_mask"]) * batch["atom_mask"]
     else:
         atom_mask = batch["atom_mask"]
-    atom_mask = (torch.ones_like(batch["atom_positions"]) * atom_mask[..., None]).to(device)
+    atom_mask = (torch.ones_like(batch["atom_positions"]) * atom_mask[..., None]).to(
+        device
+    )
 
     init_coords = batch["atom_positions"].to(device)
     init_coords = init_coords - torch.mean(
         init_coords[..., 1:2, :], dim=-3, keepdim=True
     )
     random_rots = torch.stack(
-        [
-            dataset.uniform_rand_rotation(1)[0].to(device)
-            for _ in range(batch_size)
-        ]
+        [dataset.uniform_rand_rotation(1)[0].to(device) for _ in range(batch_size)]
     )
     init_coords = torch.einsum("bij,blnj->blni", random_rots, init_coords)
 
-    init_coords = (init_coords * atom_mask)
+    init_coords = init_coords * atom_mask
     batch_data_sizes = atom_mask.sum((1, 2, 3))
 
     # Noise for skilling-hutchinson
@@ -142,9 +144,13 @@ def forward_ode(
         if model.task == "ai-allatom-nomask":
             dummy_fill_mask = 1 - atom_mask
             if x0 is not None:
-                dummy_fill_noise = (torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)) + x0[:, :, 1:2, :]
+                dummy_fill_noise = (
+                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
+                ) + x0[:, :, 1:2, :]
             else:
-                dummy_fill_noise = (torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)) + xt[:, :, 1:2, :]
+                dummy_fill_noise = (
+                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
+                ) + xt[:, :, 1:2, :]
             xt *= atom_mask
             xt += dummy_fill_noise * dummy_fill_mask
 
@@ -217,20 +223,37 @@ def forward_ode(
     return results
 
 
-def runner(model_name: str, epoch: str, pdb_path: Path, batch_size: int = 32):
-    """
-    model_name: name of model, e.g. cc58, cc89
-    epoch: epoch number that matches the available model checkpoint in PROTPARDELLE_MODEL_PARAMS
-    pdb_path: either the path to a single .pdb or a folder containing .pdb files on which to compute likelihoods
-    batch_size: Size per batch
+def runner(
+    model_name: str,
+    epoch: str,
+    pdb_path: Path,
+    batch_size: int = 32,
+    seed: int | None = None,
+):
+    """Run the likelihood computation for given PDB files using a specified model.
 
-    Example:
-    python ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
+    Args:
+        model_name (str): The name of the model to use (e.g., 'cc58', 'cc89').
+            This corresponds to a model configuration file.
+        epoch (str): The epoch number of the model checkpoint to load.
+        pdb_path (Path): The path to a single .pdb file or a directory
+            containing multiple .pdb files.
+        batch_size (int, optional): The number of samples to process in each batch.
+            Defaults to 32.
+        seed (int | None, optional): A random seed for reproducibility.
+            Defaults to None.
 
-    Outputs are saved under PROTPARDELLE_OUTPUT_DIR
+    Examples:
+        python ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
     """
+
+    if seed is not None:
+        seed_everything(seed)
+
     model_cfg = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
-    model_ckpt = PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+    model_ckpt = (
+        PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+    )
 
     model = load_model(model_cfg, model_ckpt)
 
@@ -260,7 +283,9 @@ def runner(model_name: str, epoch: str, pdb_path: Path, batch_size: int = 32):
         for k, v in results.items():
             all_results[k].extend(v)
 
-    save_dir = PROTPARDELLE_OUTPUT_DIR / f"likelihood_{model_name}_{epoch}" / pdb_path.stem
+    save_dir = (
+        PROTPARDELLE_OUTPUT_DIR / f"likelihood_{model_name}_{epoch}" / pdb_path.stem
+    )
     save_dir.mkdir(exist_ok=True, parents=True)
 
     latents = all_results.pop("encoded_latent")
@@ -271,14 +296,16 @@ def runner(model_name: str, epoch: str, pdb_path: Path, batch_size: int = 32):
         curr_seq_mask = torch.nonzero(seq_masks[i]).flatten()
         print(pdb_stems[i])
         print(latent[curr_seq_mask].shape)
-        torch.save(latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_encoded_latent.pt")
+        torch.save(
+            latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_encoded_latent.pt"
+        )
 
     for k, v in all_results.items():
         all_results[k] = [value.item() for value in v]
 
     df = pd.DataFrame(all_results)
-    df['pdb_path'] = pdb_paths
-    df['pdb_stem'] = pdb_stems
+    df["pdb_path"] = pdb_paths
+    df["pdb_stem"] = pdb_stems
     df.to_csv(save_dir / "likelihood_result.csv", float_format="%.4f", index=False)
 
     print(f"Likelihood results saved to {save_dir / 'likelihood_result.csv'}")

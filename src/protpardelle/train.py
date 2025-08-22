@@ -5,7 +5,6 @@ Authors: Alex Chu, Richard Shuai
 
 import datetime
 import os
-import random
 import shlex
 import subprocess
 from contextlib import nullcontext
@@ -30,7 +29,11 @@ import protpardelle.utils
 from protpardelle.common import residue_constants
 from protpardelle.data import atom
 from protpardelle.data import dataset as protpardelle_dataset
-from protpardelle.utils import dict_to_namespace, unsqueeze_trailing_dims
+from protpardelle.utils import (
+    dict_to_namespace,
+    seed_everything,
+    unsqueeze_trailing_dims,
+)
 
 
 def masked_cross_entropy(
@@ -375,6 +378,7 @@ def train(
     detect_anomaly: bool = False,
     num_workers: int = 0,
 ):
+
     if use_ddp:
         dist.init_process_group(
             backend="nccl", timeout=datetime.timedelta(seconds=5400)
@@ -384,6 +388,15 @@ def train(
     with open(config_path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
     config = dict_to_namespace(config_dict)
+
+    # Set seeds
+    seed = config.train.seed
+    if seed is not None:
+        seed_everything(seed)
+    # nonrandom CUDNN convolution algo, maybe slower
+    torch.backends.cudnn.deterministic = True
+    # nonrandom selection of CUDNN convolution, maybe slower
+    torch.backends.cudnn.benchmark = False
 
     wandb_dir = str(Path(out_dir, project))
     Path(wandb_dir, "wandb").mkdir(parents=True, exist_ok=True)  # Create wandb dir
@@ -408,15 +421,6 @@ def train(
         device = f"cuda:{gpu_id}"
     else:
         device = "cpu"
-
-    # Set seeds
-    random.seed(config.train.seed)
-    np.random.seed(config.train.seed)
-    torch.manual_seed(config.train.seed)
-    # nonrandom CUDNN convolution algo, maybe slower
-    torch.backends.cudnn.deterministic = True
-    # nonrandom selection of CUDNN convolution, maybe slower
-    torch.backends.cudnn.benchmark = False
 
     # Set up datasets
     def get_dataloader(mode):

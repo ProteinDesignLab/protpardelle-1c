@@ -42,7 +42,11 @@ from protpardelle.env import (
 )
 from protpardelle.evaluate import compute_self_consistency
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import apply_dotdict_recursively, get_default_device
+from protpardelle.utils import (
+    apply_dotdict_recursively,
+    get_default_device,
+    seed_everything,
+)
 
 
 def load_model(model_cfg: Path, model_ckpt: Path):
@@ -482,9 +486,8 @@ def main(
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
     save_shortname: bool = True,
-    seed: int = 1824,
+    seed: int | None = None,
     debug: bool = False,
-    # slurm array parameters for parallelization
     array_id: int | None = None,
     num_arrays: int | None = None,
 ):
@@ -497,12 +500,14 @@ def main(
         n_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
-        seed (int, optional): Random seed. Defaults to 1824.
+        seed (int | None, optional): Random seed. Defaults to None.
         debug (bool, optional): If True, does not use wandb to log results. Defaults to False.
-        array_id (int | None, optional): Array id for parallelization. Defaults to None.
+        array_id (int | None, optional): Slurm array id for parallelization. Defaults to None.
         num_arrays (int | None, optional): Number of arrays for parallelization. Defaults to None.
     """
-    torch.manual_seed(seed)
+
+    if seed is not None:
+        seed_everything(seed)
 
     run_name = sampling_yaml_path.stem
 

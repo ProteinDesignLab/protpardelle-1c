@@ -98,7 +98,7 @@ def run_proteinmpnn(
     pdb_path_chains="",
     path_to_model_weights="",
     model_name="v_48_020",
-    seed=0,
+    seed: int | None=None,
     ca_only=False,
     out_folder="",
     num_seq_per_target=1,
@@ -132,14 +132,8 @@ def run_proteinmpnn(
             verbose=print_all,
         )
 
-    if seed:
-        seed = seed
-    else:
-        seed = int(np.random.randint(0, high=999, size=1, dtype=int)[0])
-
-    torch.manual_seed(seed)
-    random.seed(seed)
-    np.random.seed(seed)
+    if seed is not None:
+        seed_everything(seed)
 
     NUM_BATCHES = num_seq_per_target // batch_size
     BATCH_COPIES = batch_size
