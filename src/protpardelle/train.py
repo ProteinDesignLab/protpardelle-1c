@@ -33,20 +33,53 @@ from protpardelle.data import dataset as protpardelle_dataset
 from protpardelle.utils import unsqueeze_trailing_dims
 
 
-def masked_cross_entropy(logprobs, target, loss_mask):
-    # target is onehot
-    cel = -(target * logprobs)
+def masked_cross_entropy(
+    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor
+) -> torch.Tensor:
+    """Compute the masked cross-entropy loss.
+
+    Args:
+        logprobs (torch.Tensor): Log probabilities of the predicted tokens.
+        target (torch.Tensor): One-hot encoded target tokens.
+        loss_mask (torch.Tensor): Mask to apply to the loss.
+
+    Returns:
+        torch.Tensor: The computed masked cross-entropy loss.
+    """
+
+    cel = -target * logprobs
     cel = cel * loss_mask[..., None]
     cel = cel.sum((-1, -2)) / loss_mask.sum(-1).clamp(min=1e-6)
+
     return cel
 
 
-def masked_mse(x, y, mask, weight=None):
+def masked_mse(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    mask: torch.Tensor,
+    weights: torch.Tensor | None = None,
+    tol: float = 1e-7,
+) -> torch.Tensor:
+    """Compute the masked mean squared error loss.
+
+    Args:
+        x (torch.Tensor): Predicted values.
+        y (torch.Tensor): Target values.
+        mask (torch.Tensor): Mask to apply to the loss.
+        weights (torch.Tensor | None, optional): Weights to apply to the loss. Defaults to None.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-7.
+
+    Returns:
+        torch.Tensor: The computed masked mean squared error loss.
+    """
+
     data_dims = tuple(range(1, len(x.shape)))
     mse = (x - y).pow(2) * mask
-    if weight is not None:
-        mse = mse * unsqueeze_trailing_dims(weight, mse)
-    mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=1e-6)
+    if weights is not None:
+        mse = mse * unsqueeze_trailing_dims(weights, mse)
+    mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=tol)
+
     return mse
 
 
@@ -325,6 +358,7 @@ class ProtpardelleRunner:
         return log_dict
 
 
+@record
 def train(
     config_path: str,
     out_dir: str,
@@ -502,7 +536,9 @@ def train(
                 dir=wandb_dir,
             )
         if wandb.run:
-            print(f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}")
+            print(
+                f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}"
+            )
         else:
             print(f"Beginning: device={device}")
         print(f"Training configuration: {config_path=}, {out_dir=}, {project=}")
@@ -511,7 +547,7 @@ def train(
     run_name = "default_run"
     if wandb.run and wandb.run.name:
         run_name = wandb.run.name
-    
+
     if train_mode:
         log_dir = Path(out_dir, project, run_name)
     else:
@@ -629,7 +665,6 @@ def train(
         dist.destroy_process_group()
 
 
-@record
 def main(
     project: str = typer.Option("other", help="wandb project name"),
     wandb_id: str = typer.Option("", help="wandb username"),
