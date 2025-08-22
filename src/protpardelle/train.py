@@ -208,13 +208,9 @@ class ProtpardelleRunner:
         bb_atom_mask = torch.logical_and(bb_atom_mask, atom_mask)
 
         if self.config.model.task == "backbone":
-            noised_coords *= bb_atom_mask[..., None]
+            noised_coords = noised_coords * bb_atom_mask[..., None]
         elif self.config.model.task == "ai-allatom":
-            noised_coords *= atom_mask[..., None]
-        elif self.config.model.task == "ai-allatom-hybrid":
-            hybrid_mask = torch.ones_like(atom_mask)
-            hybrid_mask[timestep > 0.5] *= bb_atom_mask[timestep > 0.5]
-            noised_coords *= hybrid_mask[..., None]
+            noised_coords = noised_coords * atom_mask[..., None]
 
         # Forward pass
         model_inputs = {
@@ -268,7 +264,6 @@ class ProtpardelleRunner:
             "allatom",
             "ai-allatom",
             "ai-allatom-nomask",
-            "ai-allatom-hybrid",
             "codesign",
         ]:
             if self.config.model.task == "backbone":
@@ -279,8 +274,6 @@ class ProtpardelleRunner:
                     struct_loss_mask = torch.ones_like(
                         coords
                     ) * unsqueeze_trailing_dims(seq_mask, coords)
-                elif self.config.model.task == "ai-allatom-hybrid":
-                    struct_loss_mask = torch.ones_like(coords) * hybrid_mask[..., None]
                 else:
                     struct_loss_mask = torch.ones_like(coords) * atom_mask[..., None]
             loss_weight = (noise_level**2 + self.sigma_data**2) / (
@@ -289,7 +282,7 @@ class ProtpardelleRunner:
             struct_loss = masked_mse(
                 coords, denoised_coords, struct_loss_mask, loss_weight
             )
-            loss += struct_loss
+            loss = loss + struct_loss
             aux["struct_loss"] = struct_loss.mean().detach().cpu().item()
 
         # Compute mpnn loss
@@ -300,7 +293,7 @@ class ProtpardelleRunner:
             mpnn_loss = masked_cross_entropy(
                 pred_seq_logprobs, target_oh, seq_loss_mask
             )
-            loss += mpnn_loss
+            loss = loss + mpnn_loss
             aux["mpnn_loss"] = mpnn_loss.mean().detach().cpu().item()
 
         aux["train_loss"] = loss.mean().detach().cpu().item()
