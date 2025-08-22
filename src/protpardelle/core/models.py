@@ -981,9 +981,6 @@ class Protpardelle(nn.Module):
                 motif_all_atom = torch.einsum(
                     "bij,blnj->blni", random_rots, motif_all_atom
                 )
-                motif_all_atom = motif_all_atom * motif_atom_mask[..., None].to(
-                    motif_all_atom
-                )
 
             motif_size = motif_all_atom.shape[-3]
             print(
@@ -997,6 +994,11 @@ class Protpardelle(nn.Module):
                 motif_all_atom[..., 1] = motif_all_atom[..., 1] + dy
             if dz is not None and dz != "":
                 motif_all_atom[..., 2] = motif_all_atom[..., 2] + dz
+
+            # apply motif atom mask to set dummy atom coordinates to zero
+            motif_all_atom = motif_all_atom * motif_atom_mask[..., None].to(
+                motif_all_atom
+            )
 
         def ode_step(
             sigma_in,
