@@ -27,7 +27,7 @@ conda activate protpardelle
 bash setup.sh
 ```
 
-The `uv.lock` file is an example with exact versions of all installed packages. If you prefer a fixed environment, the dependencies can be installed by running:
+The `uv.lock` and `uv_indexes.txt` files are examples with exact versions of all installed packages. If you prefer a fixed environment, the dependencies can be installed by running:
 
 ```bash
 git clone https://github.com/ProteinDesignLab/protpardelle-1c.git
