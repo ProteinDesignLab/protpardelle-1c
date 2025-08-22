@@ -150,7 +150,7 @@ def read_pdb(
     chain_id_mapping = {cid: n for n, cid in enumerate(unique_chain_ids)}
     chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])
 
-    protein = Protein(
+    prot = Protein(
         atom_positions=np.array(atom_positions),
         atom_mask=np.array(atom_mask),
         aatype=np.array(aatype),
@@ -158,7 +158,7 @@ def read_pdb(
         chain_index=chain_index,
         b_factors=np.array(b_factors),
     )
-    hetero = Hetero(
+    het = Hetero(
         hetero_atom_positions=hetero_atom_positions,
         hetero_aatype=hetero_aatype,
         hetero_atom_types=hetero_atom_types,
@@ -166,7 +166,7 @@ def read_pdb(
         hetero_not_motif_mask=hetero_not_motif_mask,
     )
 
-    return protein, hetero, chain_id_mapping
+    return prot, het, chain_id_mapping
 
 
 def load_feats_from_pdb(
@@ -191,7 +191,7 @@ def load_feats_from_pdb(
     bb_coords = torch.from_numpy(protein_obj.atom_positions[:, bb_idxs])
     feats["bb_coords"] = bb_coords.float()
     for k, v in vars(protein_obj).items():
-        feats[k] = torch.tensor(v)
+        feats[k] = torch.from_numpy(v).float()
     feats["aatype"] = feats["aatype"].long()
     if load_atom73:
         feats["atom73_coords"], feats["atom73_mask"] = atom37_to_atom73(

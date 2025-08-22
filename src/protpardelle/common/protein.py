@@ -99,11 +99,12 @@ def to_pdb(prot: Protein) -> str:
     """Converts a `Protein` instance to a PDB string.
 
     Args:
-      prot: The protein to convert to PDB.
+        prot: The protein to convert to PDB.
 
     Returns:
-      PDB string.
+        PDB string.
     """
+
     restypes = residue_constants.restypes + ["X"]
     res_1to3 = lambda r: residue_constants.restype_1to3.get(restypes[r], "UNK")
     atom_types = residue_constants.atom_types
