@@ -74,7 +74,7 @@ def noise_schedule(
     """
 
     if function == "lognormal":
-        normal_sample = torch.Tensor(norm.ppf(timestep.cpu())).to(timestep)
+        normal_sample = torch.tensor(norm.ppf(timestep.cpu())).to(timestep)
         noise_level = sigma_data * torch.exp(psigma_mean + psigma_std * normal_sample)
     elif function == "uniform":
         noise_level = compute_sampling_noise(

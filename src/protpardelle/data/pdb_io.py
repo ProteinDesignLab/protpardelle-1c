@@ -12,13 +12,12 @@ from einops import rearrange
 from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
-from protpardelle.common import protein
+from protpardelle.common.protein import Hetero, Protein, to_pdb
 from protpardelle.data.atom import (
     atom37_coords_to_atom14,
     atom37_mask_from_aatype,
     atom37_to_atom73,
 )
-from protpardelle.common.protein import Hetero, Protein
 from protpardelle.utils import StrPath
 
 
@@ -192,7 +191,7 @@ def load_feats_from_pdb(
     bb_coords = torch.from_numpy(protein_obj.atom_positions[:, bb_idxs])
     feats["bb_coords"] = bb_coords.float()
     for k, v in vars(protein_obj).items():
-        feats[k] = torch.Tensor(v)
+        feats[k] = torch.tensor(v)
     feats["aatype"] = feats["aatype"].long()
     if load_atom73:
         feats["atom73_coords"], feats["atom73_mask"] = atom37_to_atom73(
@@ -251,7 +250,7 @@ def feats_to_pdb_str(
         b_factors = torch.ones_like(atom_mask)
 
     cast = lambda x: np.array(x.detach().cpu()) if isinstance(x, torch.Tensor) else x
-    prot = protein.Protein(
+    prot = Protein(
         atom_positions=cast(atom_positions),
         atom_mask=cast(atom_mask),
         aatype=cast(aatype),
@@ -259,7 +258,7 @@ def feats_to_pdb_str(
         chain_index=cast(chain_index),
         b_factors=cast(b_factors),
     )
-    pdb_str = protein.to_pdb(prot)
+    pdb_str = to_pdb(prot)
 
     if atom_lines_only:
         pdb_lines = pdb_str.split("\n")

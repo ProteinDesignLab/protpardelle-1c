@@ -407,8 +407,8 @@ def make_crop_cond_mask_and_recenter_coords(
     if recenter_coords:
         motif_masked_array = get_masked_coords_array(atom_coords, crop_cond_mask)
         cond_coords_center = motif_masked_array.mean((1, 2))
-        motif_mask = torch.Tensor(1 - cond_coords_center.mask).to(crop_cond_mask)
-        means = torch.Tensor(cond_coords_center.data).to(atom_coords) * motif_mask
+        motif_mask = torch.tensor(1 - cond_coords_center.mask).to(crop_cond_mask)
+        means = torch.tensor(cond_coords_center.data).to(atom_coords) * motif_mask
         coords_out = atom_coords - rearrange(means, "b c -> b 1 1 c")
     else:
         coords_out = atom_coords

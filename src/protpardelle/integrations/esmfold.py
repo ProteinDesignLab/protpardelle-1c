@@ -22,8 +22,8 @@ def collate_dense_tensors(
     samples: list[torch.Tensor], pad_v: float = 0.0
 ) -> torch.Tensor:
     """Adapted from https://github.com/facebookresearch/esm/blob/main/esm/esmfold/v1/misc.py"""
-    if len(samples) == 0:
-        return torch.Tensor()
+    if not samples:
+        return torch.tensor([])
     if len(set(x.dim() for x in samples)) != 1:
         raise RuntimeError(
             f"Samples has varying dimensions: {[x.dim() for x in samples]}"
@@ -38,6 +38,7 @@ def collate_dense_tensors(
         result_i = result[i]
         t = samples[i]
         result_i[tuple(slice(0, k) for k in t.shape)] = t
+
     return result
 
 
