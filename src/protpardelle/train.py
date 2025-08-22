@@ -370,6 +370,10 @@ def train(
         config_dict = yaml.safe_load(f)
     config = dict_to_namespace(config_dict)
 
+    if debug:
+        print("Debug mode is enabled")
+        num_workers = 0  # Override num_workers to 0 in debug mode
+
     # Set seeds
     seed = config.train.seed
     if seed is not None:
