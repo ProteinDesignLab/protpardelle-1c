@@ -155,23 +155,35 @@ We recommend reading and running the example sampling configs under `examples/sa
 # Activate installed environment
 source $ENV_DIR/protpardelle/bin/activate
 
-python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0 --debug
-python -m protpardelle.sample ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
-python -m protpardelle.sample ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0 --debug
+# Unconditional sampling
+python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
 
-# MotifBench
-python -m protpardelle.sample ./examples/sampling/03_motifbench.yaml --motif-dir ./examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --debug
+# Partial diffusion
+python -m protpardelle.sample ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
 
-# BindCraft
-python -m protpardelle.sample ./examples/sampling/04_bindcraft.yaml --motif-dir ./examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2 --debug
+# Motif scaffolding
+python -m protpardelle.sample ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
 
-python -m protpardelle.sample ./examples/sampling/05_multichain.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
-python -m protpardelle.sample ./examples/sampling/06_fastrelax.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
+# MotifBench benchmark
+python -m protpardelle.sample ./examples/sampling/03_motifbench.yaml --motif-dir ./examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --use-wandb
 
-# La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample ./examples/sampling/07_rfdiffusion.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
-python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --debug
-python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0 --debug
+# BindCraft benchmark
+python -m protpardelle.sample ./examples/sampling/04_bindcraft.yaml --motif-dir ./examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2
+
+# Multichain
+python -m protpardelle.sample ./examples/sampling/05_multichain.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+
+# Thread in a new sequence given a backbone: experimental feature
+python -m protpardelle.sample ./examples/sampling/06_fastrelax.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+
+# Backbone-only La-Proteina / RFdiffusion benchmark
+python -m protpardelle.sample ./examples/sampling/07_rfdiffusion.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+
+# All-atom La-Proteina / RFdiffusion benchmark
+python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+
+# Generate structure conditioned on sequence: experimental feature
+python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
 ```
 
 ## Sampling Examples
@@ -284,7 +296,7 @@ See `examples/training` for the exact model architecture and training hyperparam
 source scripts/train.sbatch {EXPERIMENT_NAME}
 
 # Check if everything works
-source scripts/train.sh cc58 --debug
+source scripts/train.sh cc58
 
 # Then submit job
 sbatch -J cc58 scripts/train.sh cc58
