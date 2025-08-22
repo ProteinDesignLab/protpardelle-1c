@@ -14,7 +14,9 @@
 
 """Protein data type.
 
-Author: Alex Chu
+Adapted from https://github.com/google-deepmind/alphafold/blob/main/alphafold/common/protein.py
+
+Authors: Alex Chu, Zhaoyang Li
 """
 import dataclasses
 from collections.abc import Mapping
@@ -224,17 +226,7 @@ def _chain_end(atom_index, end_resname, chain_name, residue_index) -> str:
     )
 
 
-def are_atoms_bonded(res3name, atom1_name, atom2_name):
-    lookup_table = residue_constants.standard_residue_bonds
-    for bond in lookup_table[res3name]:
-        if bond.atom1_name == atom1_name and bond.atom2_name == atom2_name:
-            return True
-        elif bond.atom1_name == atom2_name and bond.atom2_name == atom1_name:
-            return True
-    return False
-
-
-def to_pdb(prot: Protein, conect=False) -> str:
+def to_pdb(prot: Protein) -> str:
     """Converts a `Protein` instance to a PDB string.
 
     Args:
@@ -271,7 +263,6 @@ def to_pdb(prot: Protein, conect=False) -> str:
     pdb_lines.append("MODEL     1")
     atom_index = 1
     last_chain_index = chain_index[0]
-    conect_lines = []
     # Add all atom sites.
     for i in range(aatype.shape[0]):
         # Close the previous chain if in a multichain PDB.
@@ -288,7 +279,6 @@ def to_pdb(prot: Protein, conect=False) -> str:
             atom_index += 1  # Atom index increases at the TER symbol.
 
         res_name_3 = res_1to3(aatype[i])
-        atoms_appended_for_res = []
         for atom_name, pos, mask, b_factor in zip(
             atom_types, atom_positions[i], atom_mask[i], b_factors[i]
         ):
@@ -312,23 +302,7 @@ def to_pdb(prot: Protein, conect=False) -> str:
                 f"{element:>2}{charge:>2}"
             )
             pdb_lines.append(atom_line)
-
-            for prev_atom_idx, prev_atom in atoms_appended_for_res:
-                if are_atoms_bonded(res_name_3, atom_name, prev_atom):
-                    conect_line = f"CONECT{prev_atom_idx:5d}{atom_index:5d}\n"
-                    conect_lines.append(conect_line)
-            atoms_appended_for_res.append((atom_index, atom_name))
-            if atom_name == "N":
-                n_atom_idx = atom_index
-            if atom_name == "C":
-                c_atom_idx = atom_index
-
             atom_index += 1
-
-        if i > 0:
-            conect_line = f"CONECT{prev_c_atom_idx:5d}{n_atom_idx:5d}\n"
-            conect_lines.append(conect_line)
-        prev_c_atom_idx = c_atom_idx
 
     # Close the final chain.
     pdb_lines.append(
@@ -344,11 +318,7 @@ def to_pdb(prot: Protein, conect=False) -> str:
 
     # Pad all lines to 80 characters.
     pdb_lines = [line.ljust(80) for line in pdb_lines]
-    pdb_str = "\n".join(pdb_lines) + "\n"  # Add terminating newline.
-    if conect:
-        conect_str = "".join(conect_lines) + "\n"
-        return pdb_str, conect_str
-    return pdb_str
+    return "\n".join(pdb_lines) + "\n"  # Add terminating newline.
 
 
 def ideal_atom_mask(prot: Protein) -> np.ndarray:

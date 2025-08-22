@@ -113,8 +113,6 @@ def feats_to_pdb_str(
     chain_index=None,
     b_factors=None,
     atom_lines_only=True,
-    conect=False,
-    **kwargs,
 ):
     # Expects unbatched, cropped inputs. needs at least one of atom_mask, aatype
     # Uses all-GLY aatype if aatype not given: does not infer from atom_mask
@@ -141,9 +139,8 @@ def feats_to_pdb_str(
         chain_index=cast(chain_index),
         b_factors=cast(b_factors),
     )
-    pdb_str = protein.to_pdb(prot, conect=conect)
-    if conect:
-        pdb_str, conect_str = pdb_str
+    pdb_str = protein.to_pdb(prot)
+
     if atom_lines_only:
         pdb_lines = pdb_str.split("\n")
         atom_lines = [
@@ -152,8 +149,7 @@ def feats_to_pdb_str(
             if len(line.split()) > 1 and line.split()[0] == "ATOM"
         ]
         pdb_str = "\n".join(atom_lines) + "\n"
-    if conect:
-        pdb_str = pdb_str + conect_str
+
     return pdb_str
 
 
@@ -314,7 +310,6 @@ def write_coords_to_pdb(
     filename,
     batched=True,
     write_to_frames=False,
-    conect=False,
     **all_atom_feats,
 ):
     if not (batched or write_to_frames):
@@ -350,5 +345,5 @@ def write_coords_to_pdb(
             )
         else:
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
-            pdb_str = feats_to_pdb_str(c, conect=conect, **feats_i)
+            pdb_str = feats_to_pdb_str(c, **feats_i)
         write_pdb_str(pdb_str, fname, append=write_to_frames and i > 0)

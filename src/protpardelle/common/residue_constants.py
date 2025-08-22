@@ -14,14 +14,13 @@
 
 """Constants used in AlphaFold.
 
+Adapted from https://github.com/google-deepmind/alphafold/blob/main/alphafold/common/residue_constants.py
+
 Authors: Alex Chu, Zhaoyang Li
 """
-# TODO: Compare AF2 original repo
 
 import collections
-import functools
 from collections.abc import Mapping
-from importlib.resources import files
 
 import numpy as np
 import torch
@@ -422,105 +421,6 @@ BondAngle = collections.namedtuple(
 )
 
 
-@functools.lru_cache(maxsize=None)
-def load_stereo_chemical_props() -> tuple[
-    Mapping[str, list[Bond]],
-    Mapping[str, list[Bond]],
-    Mapping[str, list[BondAngle]],
-]:
-    """Load stereo_chemical_props.txt into a nice structure.
-
-    Load literature values for bond lengths and bond angles and translate
-    bond angles into the length of the opposite edge of the triangle
-    ("residue_virtual_bonds").
-
-    Returns:
-      residue_bonds: Dict that maps resname -> list of Bond tuples.
-      residue_virtual_bonds: Dict that maps resname -> list of Bond tuples.
-      residue_bond_angles: Dict that maps resname -> list of BondAngle tuples.
-    """
-
-    stereo_chemical_props = (
-        files(__package__) / "stereo_chemical_props.txt"
-    ).read_text(encoding="utf-8")
-    lines_iter = iter(stereo_chemical_props.splitlines())
-    # Load bond lengths.
-    residue_bonds = {}
-    next(lines_iter)  # Skip header line.
-    for line in lines_iter:
-        if line.strip() == "-":
-            break
-        bond, resname, length, stddev = line.split()
-        atom1, atom2 = bond.split("-")
-        if resname not in residue_bonds:
-            residue_bonds[resname] = []
-        residue_bonds[resname].append(Bond(atom1, atom2, float(length), float(stddev)))
-    residue_bonds["UNK"] = []
-
-    # Load bond angles.
-    residue_bond_angles = {}
-    next(lines_iter)  # Skip empty line.
-    next(lines_iter)  # Skip header line.
-    for line in lines_iter:
-        if line.strip() == "-":
-            break
-        bond, resname, angle_degree, stddev_degree = line.split()
-        atom1, atom2, atom3 = bond.split("-")
-        if resname not in residue_bond_angles:
-            residue_bond_angles[resname] = []
-        residue_bond_angles[resname].append(
-            BondAngle(
-                atom1,
-                atom2,
-                atom3,
-                float(angle_degree) / 180.0 * np.pi,
-                float(stddev_degree) / 180.0 * np.pi,
-            )
-        )
-    residue_bond_angles["UNK"] = []
-
-    def make_bond_key(atom1_name, atom2_name):
-        """Unique key to lookup bonds."""
-        return "-".join(sorted([atom1_name, atom2_name]))
-
-    # Translate bond angles into distances ("virtual bonds").
-    residue_virtual_bonds = {}
-    for resname, bond_angles in residue_bond_angles.items():
-        # Create a fast lookup dict for bond lengths.
-        bond_cache = {}
-        for b in residue_bonds[resname]:
-            bond_cache[make_bond_key(b.atom1_name, b.atom2_name)] = b
-        residue_virtual_bonds[resname] = []
-        for ba in bond_angles:
-            bond1 = bond_cache[make_bond_key(ba.atom1_name, ba.atom2_name)]
-            bond2 = bond_cache[make_bond_key(ba.atom2_name, ba.atom3name)]
-
-            # Compute distance between atom1 and atom3 using the law of cosines
-            # c^2 = a^2 + b^2 - 2ab*cos(gamma).
-            gamma = ba.angle_rad
-            length = np.sqrt(
-                bond1.length**2
-                + bond2.length**2
-                - 2 * bond1.length * bond2.length * np.cos(gamma)
-            )
-
-            # Propagation of uncertainty assuming uncorrelated errors.
-            dl_outer = 0.5 / length
-            dl_dgamma = (2 * bond1.length * bond2.length * np.sin(gamma)) * dl_outer
-            dl_db1 = (2 * bond1.length - 2 * bond2.length * np.cos(gamma)) * dl_outer
-            dl_db2 = (2 * bond2.length - 2 * bond1.length * np.cos(gamma)) * dl_outer
-            stddev = np.sqrt(
-                (dl_dgamma * ba.stddev) ** 2
-                + (dl_db1 * bond1.stddev) ** 2
-                + (dl_db2 * bond2.stddev) ** 2
-            )
-            residue_virtual_bonds[resname].append(
-                Bond(ba.atom1_name, ba.atom3name, length, stddev)
-            )
-
-    return (residue_bonds, residue_virtual_bonds, residue_bond_angles)
-
-
 # Between-residue bond lengths for general bonds (first element) and for Proline
 # (second element).
 between_res_bond_length_c_n = [1.329, 1.341]
@@ -573,6 +473,7 @@ atom_types = [
 ]
 atom_order = {atom_type: i for i, atom_type in enumerate(atom_types)}
 atom_type_num = len(atom_types)  # := 37.
+
 
 # A compact atom encoding with 14 columns
 # pylint: disable=line-too-long
@@ -791,44 +692,6 @@ unk_restype = "UNK"
 
 resnames = [restype_1to3[r] for r in restypes] + [unk_restype]
 resname_to_idx = {resname: i for i, resname in enumerate(resnames)}
-
-
-# Define exploded all-atom representation (atom73)
-atom73_names = ["N", "CA", "C", "CB", "O"]
-for aa1 in restypes:
-    aa3 = restype_1to3[aa1]
-    atom_list = residue_atoms[aa3]
-    for atom in atom_types:
-        if atom in atom_list and atom not in atom73_names:
-            atom73_names.append(f"{aa1}{atom}")
-
-atom73_names_to_idx = {a: i for i, a in enumerate(atom73_names)}
-
-
-# Create index mapping from atom37 to atom73 (one to many)
-idx_37_to_73 = []
-for i_37, atom in enumerate(atom_types):
-    i_73 = [atom73_names_to_idx.get(atom, -1)]  # for backbone atoms and CB
-    if i_73[0] == -1:
-        i_73 = [i for i, a73 in enumerate(atom73_names) if a73[1:] == atom]
-    i_73_onehot = [1 if i in i_73 else 0 for i in range(73)]
-    idx_37_to_73.append(i_73_onehot)
-idx_73_to_37 = np.array(idx_37_to_73, dtype=bool).T
-idx_73_to_37_int = torch.nonzero(torch.from_numpy(idx_73_to_37), as_tuple=True)
-
-restype_atom73_mask = np.zeros((22, 73))
-for i, restype in enumerate(restypes):
-    for atom_name in atom_types:
-        atom73_name = atom_name
-        if atom_name not in ["N", "CA", "C", "CB", "O"]:
-            atom73_name = restype + atom_name
-        if atom73_name in atom73_names_to_idx:
-            atom73_idx = atom73_names_to_idx[atom73_name]
-            restype_atom73_mask[i, atom73_idx] = 1
-# Remove CB for glycine
-restype_atom73_mask[restype_order["G"], 3] = 0
-# Backbone atoms for unk and mask
-restype_atom73_mask[-2:, [0, 1, 2, 4]] = 1
 
 
 # The mapping here uses hhblits convention, so that B is mapped to D, J and O
@@ -1069,53 +932,47 @@ def _make_rigid_group_constants():
 _make_rigid_group_constants()
 
 
-def make_atom14_dists_bounds(overlap_tolerance=1.5, bond_length_tolerance_factor=15):
-    """compute upper and lower bounds for bonds to assess violations."""
-    restype_atom14_bond_lower_bound = np.zeros([21, 14, 14], np.float32)
-    restype_atom14_bond_upper_bound = np.zeros([21, 14, 14], np.float32)
-    restype_atom14_bond_stddev = np.zeros([21, 14, 14], np.float32)
-    residue_bonds, residue_virtual_bonds, _ = load_stereo_chemical_props()
-    for restype, restype_letter in enumerate(restypes):
-        resname = restype_1to3[restype_letter]
-        atom_list = restype_name_to_atom14_names[resname]
+# ========== Extra All-Atom Representation for Protpardelle ==========
 
-        # create lower and upper bounds for clashes
-        for atom1_idx, atom1_name in enumerate(atom_list):
-            if not atom1_name:
-                continue
-            atom1_radius = van_der_waals_radius[atom1_name[0]]
-            for atom2_idx, atom2_name in enumerate(atom_list):
-                if (not atom2_name) or atom1_idx == atom2_idx:
-                    continue
-                atom2_radius = van_der_waals_radius[atom2_name[0]]
-                lower = atom1_radius + atom2_radius - overlap_tolerance
-                upper = 1e10
-                restype_atom14_bond_lower_bound[restype, atom1_idx, atom2_idx] = lower
-                restype_atom14_bond_lower_bound[restype, atom2_idx, atom1_idx] = lower
-                restype_atom14_bond_upper_bound[restype, atom1_idx, atom2_idx] = upper
-                restype_atom14_bond_upper_bound[restype, atom2_idx, atom1_idx] = upper
+# Define exploded all-atom representation (atom73)
+atom73_names = ["N", "CA", "C", "CB", "O"]
+for aa1 in restypes:
+    aa3 = restype_1to3[aa1]
+    atom_list = residue_atoms[aa3]
+    for atom in atom_types:
+        if atom in atom_list and atom not in atom73_names:
+            atom73_names.append(f"{aa1}{atom}")
 
-        # overwrite lower and upper bounds for bonds and angles
-        for b in residue_bonds[resname] + residue_virtual_bonds[resname]:
-            atom1_idx = atom_list.index(b.atom1_name)
-            atom2_idx = atom_list.index(b.atom2_name)
-            lower = b.length - bond_length_tolerance_factor * b.stddev
-            upper = b.length + bond_length_tolerance_factor * b.stddev
-            restype_atom14_bond_lower_bound[restype, atom1_idx, atom2_idx] = lower
-            restype_atom14_bond_lower_bound[restype, atom2_idx, atom1_idx] = lower
-            restype_atom14_bond_upper_bound[restype, atom1_idx, atom2_idx] = upper
-            restype_atom14_bond_upper_bound[restype, atom2_idx, atom1_idx] = upper
-            restype_atom14_bond_stddev[restype, atom1_idx, atom2_idx] = b.stddev
-            restype_atom14_bond_stddev[restype, atom2_idx, atom1_idx] = b.stddev
-    return {
-        "lower_bound": restype_atom14_bond_lower_bound,  # shape (21,14,14)
-        "upper_bound": restype_atom14_bond_upper_bound,  # shape (21,14,14)
-        "stddev": restype_atom14_bond_stddev,  # shape (21,14,14)
-    }
+atom73_names_to_idx = {a: i for i, a in enumerate(atom73_names)}
 
 
-standard_residue_bonds, _, standard_residue_bond_angles = load_stereo_chemical_props()
+# Create index mapping from atom37 to atom73 (one to many)
+idx_37_to_73 = []
+for i_37, atom in enumerate(atom_types):
+    i_73 = [atom73_names_to_idx.get(atom, -1)]  # for backbone atoms and CB
+    if i_73[0] == -1:
+        i_73 = [i for i, a73 in enumerate(atom73_names) if a73[1:] == atom]
+    i_73_onehot = [1 if i in i_73 else 0 for i in range(73)]
+    idx_37_to_73.append(i_73_onehot)
+idx_73_to_37 = np.array(idx_37_to_73, dtype=bool).T
+idx_73_to_37_int = torch.nonzero(torch.from_numpy(idx_73_to_37), as_tuple=True)
 
+restype_atom73_mask = np.zeros((22, 73))
+for i, restype in enumerate(restypes):
+    for atom_name in atom_types:
+        atom73_name = atom_name
+        if atom_name not in ["N", "CA", "C", "CB", "O"]:
+            atom73_name = restype + atom_name
+        if atom73_name in atom73_names_to_idx:
+            atom73_idx = atom73_names_to_idx[atom73_name]
+            restype_atom73_mask[i, atom73_idx] = 1
+# Remove CB for glycine
+restype_atom73_mask[restype_order["G"], 3] = 0
+# Backbone atoms for unk and mask
+restype_atom73_mask[-2:, [0, 1, 2, 4]] = 1
+
+
+# RFdiffusion benchmark
 RFDIFFUSION_BENCHMARK_TIP_ATOMS = {
     "ALA": ["CA", "CB"],
     "ARG": ["CD", "CZ", "NE", "NH1", "NH2"],
