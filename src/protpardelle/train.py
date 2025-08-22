@@ -3,8 +3,6 @@
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 """
 
-import datetime
-import os
 import shlex
 import subprocess
 from contextlib import nullcontext
@@ -12,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
@@ -20,15 +17,20 @@ import wandb
 import yaml
 from torch.amp import autocast
 from torch.distributed.elastic.multiprocessing.errors import record
+from torch.utils.data import ConcatDataset, DataLoader
 from tqdm.auto import tqdm
 
 import protpardelle.core.diffusion as diffusion
 import protpardelle.core.models as models
 import protpardelle.core.modules as modules
-import protpardelle.utils
 from protpardelle.common import residue_constants
-from protpardelle.data import atom
-from protpardelle.data import dataset as protpardelle_dataset
+from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.data.dataset import (
+    PDBDataset,
+    StochasticMixedSampler,
+    calc_sigma_data,
+    make_crop_cond_mask_and_recenter_coords,
+)
 from protpardelle.utils import (
     dict_to_namespace,
     seed_everything,
@@ -92,16 +94,13 @@ class ProtpardelleRunner:
         config,
         model,
         train_dataset,
-        eval_dataloader,
         save_dir,
         device,
         scaler=None,
     ):
         self.config = config
 
-        if isinstance(model, nn.DataParallel) or isinstance(
-            model, nn.parallel.DistributedDataParallel
-        ):
+        if isinstance(model, nn.DataParallel):
             self.model = model.module
         else:
             self.model = model
@@ -109,7 +108,6 @@ class ProtpardelleRunner:
 
         self.optimizer, self.scheduler = self.get_optimizer_and_scheduler()
         self.dataset = train_dataset
-        self.eval_dataloader = eval_dataloader
         self.save_dir = save_dir
         self.device = device
         self.scaler = scaler
@@ -170,7 +168,7 @@ class ProtpardelleRunner:
                 not self.config.model.compute_loss_on_all_atoms
             ), "Crop conditioning with compute_loss_on_all_atoms not implemented"
             coords, crop_cond_mask, hotspot_mask = (
-                protpardelle_dataset.make_crop_cond_mask_and_recenter_coords(
+                make_crop_cond_mask_and_recenter_coords(
                     atom_mask,
                     coords,
                     aatype=aatype,
@@ -202,7 +200,7 @@ class ProtpardelleRunner:
         )
 
         bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
-        bb_atom_mask = atom.atom37_mask_from_aatype(bb_seq, seq_mask)
+        bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
         # some backbone atoms may be missing -- mask them to zeros!
         bb_atom_mask = torch.logical_and(bb_atom_mask, atom_mask)
@@ -361,22 +359,12 @@ def train(
     project: str,
     wandb_id: str = "",
     exp_name: str | None = None,
-    train_mode: bool = False,
     overfit: int = -1,
     debug: bool = False,
-    no_cuda: bool = False,
     gpu_id: int = 0,
     use_dataparallel: bool = False,
-    use_ddp: bool = False,
-    detect_anomaly: bool = False,
     num_workers: int = 0,
 ):
-
-    if use_ddp:
-        dist.init_process_group(
-            backend="nccl", timeout=datetime.timedelta(seconds=5400)
-        )
-        dist.barrier()
 
     with open(config_path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
@@ -394,20 +382,8 @@ def train(
     wandb_dir = str(Path(out_dir, project))
     Path(wandb_dir, "wandb").mkdir(parents=True, exist_ok=True)  # Create wandb dir
 
-    # Set wandb cache directory
-    wandb_cache_dir = str(Path(out_dir, project, "cache", "wandb"))
-    os.environ["WANDB_CACHE_DIR"] = wandb_cache_dir
-
     # Set up devices
-    rank = 0  # Initialize rank for non-DDP case
-    if use_ddp:
-        rank = int(os.environ["LOCAL_RANK"])
-        device = f"cuda:{rank}"
-        assert dist.is_available() and dist.is_initialized(), (
-            dist.is_available(),
-            dist.is_initialized(),
-        )
-    elif not no_cuda and torch.cuda.is_available():
+    if torch.cuda.is_available():
         torch.cuda.init()
         print("Device count:", torch.cuda.device_count())
         print("Current device:", torch.cuda.current_device())
@@ -415,99 +391,46 @@ def train(
     else:
         device = "cpu"
 
-    # Set up datasets
-    def get_dataloader(mode):
-        # Load in datasets, using torch concatenation to combine datasets if there are multiple specified
-        # assumes the first dataset is the main dataset for computing epochs, sample from the other datasets with replacement
-        if mode == "train":
-            bs = config.train.batch_size
-            train_datasets = [
-                protpardelle_dataset.PDBDataset(
-                    pdb_path=config.data.pdb_paths[di],
-                    fixed_size=config.data.fixed_size,
-                    mode=mode,
-                    overfit=overfit,
-                    short_epoch=not train_mode,
-                    se3_data_augment=config.data.se3_data_augment,
-                    translation_scale=config.data.translation_scale,
-                    chain_residx_gap=config.data.chain_residx_gap,
-                    dummy_fill_mode=config.data.dummy_fill_mode,
-                    subset=config.data.subset[di],
-                )
-                for di in range(len(config.data.pdb_paths))
-            ]
-            dataset = torch.utils.data.ConcatDataset(train_datasets)
+    # Load in datasets, using torch concatenation to combine datasets if there are multiple specified
+    # assumes the first dataset is the main dataset for computing epochs, sample from the other datasets with replacement
+    train_datasets = [
+        PDBDataset(
+            pdb_path=config.data.pdb_paths[di],
+            fixed_size=config.data.fixed_size,
+            mode="train",
+            overfit=overfit,
+            short_epoch=debug,
+            se3_data_augment=config.data.se3_data_augment,
+            translation_scale=config.data.translation_scale,
+            chain_residx_gap=config.data.chain_residx_gap,
+            dummy_fill_mode=config.data.dummy_fill_mode,
+            subset=config.data.subset[di],
+        )
+        for di in range(len(config.data.pdb_paths))
+    ]
+    dataset = ConcatDataset(train_datasets)
 
-            if use_ddp:
-                # For DDP, use DistributedSampler instead of StochasticMixedSampler
-                from torch.utils.data.distributed import DistributedSampler
+    train_sampler = StochasticMixedSampler(
+        train_datasets, config.data.mixing_ratios, batch_size=config.train.batch_size
+    )
 
-                train_sampler = DistributedSampler(dataset, shuffle=True)
-            else:
-                # Use StochasticMixedSampler for non-DDP training
-                train_sampler = protpardelle_dataset.StochasticMixedSampler(
-                    train_datasets, config.data.mixing_ratios, batch_size=bs
-                )
-
-            dataloader = torch.utils.data.DataLoader(
-                dataset,
-                batch_size=bs,
-                num_workers=num_workers,
-                pin_memory="cuda" in device,
-                shuffle=False,  # the sampler takes care of shuffling
-                sampler=train_sampler,
-                drop_last=True,
-                persistent_workers=not debug,
-            )
-            return dataset, dataloader
-        elif mode == "eval":
-            # for evaluation, we use the primary dataset (the first one)
-            bs = 1
-            dataset = protpardelle_dataset.PDBDataset(
-                pdb_path=config.data.pdb_paths[0],
-                fixed_size=config.data.fixed_size,
-                mode=mode,
-                overfit=overfit,
-                short_epoch=not train_mode,
-                se3_data_augment=config.data.se3_data_augment,
-                translation_scale=config.data.translation_scale,
-                chain_residx_gap=config.data.chain_residx_gap,
-                dummy_fill_mode=config.data.dummy_fill_mode,
-                subset=config.data.subset[0],
-            )
-
-            if use_ddp:
-                # For DDP, use DistributedSampler for eval as well
-                from torch.utils.data.distributed import DistributedSampler
-
-                eval_sampler = DistributedSampler(dataset, shuffle=False)
-            else:
-                eval_sampler = None
-
-            dataloader = torch.utils.data.DataLoader(
-                dataset,
-                batch_size=bs,
-                num_workers=num_workers,
-                pin_memory="cuda" in device,
-                shuffle=(
-                    False if use_ddp else True
-                ),  # Don't shuffle if using DistributedSampler
-                sampler=eval_sampler,
-                persistent_workers=not debug,
-            )
-            return dataset, dataloader
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-    dataset, dataloader = get_dataloader("train")
-    _, eval_dataloader = get_dataloader("eval")
+    dataloader = DataLoader(
+        dataset,
+        batch_size=config.train.batch_size,
+        num_workers=num_workers,
+        pin_memory="cuda" in device,
+        shuffle=False,  # the sampler takes care of shuffling
+        sampler=train_sampler,
+        drop_last=True,
+        persistent_workers=not debug,
+    )
 
     # Calculate sigma_data
     if config.data.auto_calc_sigma_data:
         print(
             f"===== Automatically computing sigma_data for {config.data.n_examples_for_sigma_data} examples ====="
         )
-        sigma_data = protpardelle_dataset.calc_sigma_data(dataset, config, num_workers)
+        sigma_data = calc_sigma_data(dataset, config, num_workers)
 
         # Update config and config_dict with estimated sigma_data
         config.data.sigma_data = sigma_data
@@ -515,47 +438,31 @@ def train(
 
     # Init wandb and logging for process 0
     log_dir = ""
-    if not use_ddp or rank == 0:
-        if train_mode:
-            wandb.init(
-                mode="disabled" if debug else "online",
-                project=project,
-                entity=wandb_id,
-                name=exp_name,
-                job_type="train",
-                config=config_dict,
-                dir=wandb_dir,
-            )
-        else:
-            wandb.init(
-                mode="disabled" if debug else "online",
-                project=project,
-                entity=wandb_id,
-                name=exp_name,
-                job_type="debug",
-                config=config_dict,
-                dir=wandb_dir,
-            )
-        if wandb.run:
-            print(
-                f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}"
-            )
-        else:
-            print(f"Beginning: device={device}")
-        print(f"Training configuration: {config_path=}, {out_dir=}, {project=}")
+    wandb.init(
+        mode="disabled" if debug else "online",
+        project=project,
+        entity=wandb_id,
+        name=exp_name,
+        job_type="debug" if debug else "train",
+        config=config_dict,
+        dir=wandb_dir,
+    )
+    if wandb.run:
+        print(
+            f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}"
+        )
+    else:
+        print(f"Beginning: device={device}")
+    print(f"Training configuration: {config_path=}, {out_dir=}, {project=}")
 
     # Set up logging
     run_name = "default_run"
     if wandb.run and wandb.run.name:
         run_name = wandb.run.name
 
-    if train_mode:
-        log_dir = Path(out_dir, project, run_name)
-    else:
-        log_dir = Path(out_dir, project, f"debug_{run_name}")
+    log_dir = Path(out_dir, project, f"{run_name}_debug" if debug else run_name)
 
     Path(log_dir, "results").mkdir(parents=True, exist_ok=True)
-    # Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=config.train.ckpt_path != "") # CHANGED
     Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=True)
 
     # Preserve config
@@ -575,11 +482,6 @@ def train(
 
     if use_dataparallel:
         model = nn.DataParallel(model)
-    if use_ddp:
-        model.to(device)
-        model = nn.parallel.DistributedDataParallel(
-            model, device_ids=[device], find_unused_parameters=True
-        )
 
     model.train()
     model.to(device)
@@ -588,7 +490,6 @@ def train(
         config,
         model,
         dataset,
-        eval_dataloader,
         log_dir,
         device,
     )
@@ -602,16 +503,8 @@ def train(
         runner.optimizer.load_state_dict(training_state["optim_state_dict"])
     runner.train_init()
 
-    with torch.autograd.set_detect_anomaly(True) if detect_anomaly else nullcontext():
+    with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
         for epoch in range(start_epoch + 1, config.train.max_epochs + 1):
-            if use_ddp:
-                dist.barrier()
-                # Set epoch for DistributedSamplers to ensure proper shuffling
-                if hasattr(dataloader.sampler, "set_epoch"):
-                    dataloader.sampler.set_epoch(epoch)
-                if hasattr(eval_dataloader.sampler, "set_epoch"):
-                    eval_dataloader.sampler.set_epoch(epoch)
-
             for inputs in tqdm(
                 dataloader, desc=f"epoch {epoch}/{config.train.max_epochs}"
             ):
@@ -619,51 +512,43 @@ def train(
                 inputs["step"] = total_steps
                 log_dict = runner.train_step(inputs)
                 log_dict["learning_rate"] = runner.scheduler.get_last_lr()[0]
-                if not use_ddp or rank == 0:
-                    wandb.log(log_dict, step=total_steps)
-                    wandb.log({"epoch": epoch}, step=total_steps)
+
+                wandb.log(log_dict, step=total_steps)
+                wandb.log({"epoch": epoch}, step=total_steps)
                 total_steps += 1
-                if debug:
-                    break
 
             with torch.no_grad():  # per epoch
-                # Run eval and save checkpoint
-                if use_ddp:
-                    dist.barrier()
+                # Save checkpoint
                 if (
                     epoch % config.train.checkpoint_freq == 0
                     or epoch in config.train.checkpoints
                 ):
-                    if not use_ddp or rank == 0:
-                        runner.model.eval()
-                        torch.save(
-                            runner.model,
-                            f"{log_dir}/checkpoints/epoch{epoch}_model.pth",
-                        )
-                        torch.save(
-                            {
-                                "model_state_dict": runner.model.state_dict(),
-                                "optim_state_dict": runner.optimizer.state_dict(),
-                                "epoch": epoch,
-                                "total_steps": total_steps,
-                            },
-                            f"{log_dir}/checkpoints/epoch{epoch}_training_state.pth",
-                        )
+                    runner.model.eval()
+                    torch.save(
+                        runner.model,
+                        f"{log_dir}/checkpoints/epoch{epoch}_model.pth",
+                    )
+                    torch.save(
+                        {
+                            "model_state_dict": runner.model.state_dict(),
+                            "optim_state_dict": runner.optimizer.state_dict(),
+                            "epoch": epoch,
+                            "total_steps": total_steps,
+                        },
+                        f"{log_dir}/checkpoints/epoch{epoch}_training_state.pth",
+                    )
 
-                        runner.model.train()
+                    runner.model.train()
 
-    if not use_ddp or rank == 0:
-        wandb.finish()
-        if wandb.run and wandb.run.dir:
-            subprocess.run(shlex.split(f"cp -r {wandb.run.dir} {log_dir}"), check=False)
-        if wandb.run:
-            print(
-                f'Training finished. (run name "{wandb.run.name}", run id "{wandb.run.id}")'
-            )
-        else:
-            print("Training finished.")
-    if use_ddp:
-        dist.destroy_process_group()
+    wandb.finish()
+    if wandb.run and wandb.run.dir:
+        subprocess.run(shlex.split(f"cp -r {wandb.run.dir} {log_dir}"), check=False)
+    if wandb.run:
+        print(
+            f'Training finished. (run name "{wandb.run.name}", run id "{wandb.run.id}")'
+        )
+    else:
+        print("Training finished.")
 
 
 def main(
@@ -671,14 +556,10 @@ def main(
     wandb_id: str = typer.Option("", help="wandb username"),
     exp_name: str = typer.Option(None, help="wandb exp name"),
     config: str = typer.Option("configs/config.yml", help="experiment config"),
-    train_mode: bool = typer.Option(False, "--train", help="don't run in debug mode"),
     overfit: int = typer.Option(-1, help="number of examples to overfit to"),
     debug: bool = typer.Option(False, help="run one batch and eval offline"),
-    no_cuda: bool = typer.Option(False, help="do not prepend debug to output dirs"),
     gpu_id: int = typer.Option(0, help="which GPU to use"),
     use_dataparallel: bool = typer.Option(False, help="use DataParallel"),
-    use_ddp: bool = typer.Option(False, help="use DistributedDataParallel"),
-    detect_anomaly: bool = typer.Option(False, help="detect nans"),
     num_workers: int = typer.Option(0, help="dataloader num workers"),
     out_dir: str = typer.Option(..., help="output path for trained models"),
 ):
@@ -689,14 +570,10 @@ def main(
         project=project,
         wandb_id=wandb_id,
         exp_name=exp_name,
-        train_mode=train_mode,
         overfit=overfit,
         debug=debug,
-        no_cuda=no_cuda,
         gpu_id=gpu_id,
         use_dataparallel=use_dataparallel,
-        use_ddp=use_ddp,
-        detect_anomaly=detect_anomaly,
         num_workers=num_workers,
     )
 

@@ -7,13 +7,14 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
 </p>
 
 # Table of Contents
+- [Protpardelle-1c](#protpardelle-1c)
+- [Table of Contents](#table-of-contents)
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Install dependencies](#install-dependencies)
   - [Download model weights and configs](#download-model-weights-and-configs)
   - [Set environment variables](#set-environment-variables)
   - [Available Models](#available-models)
-- [Output](#output)
 - [Sampling](#sampling)
   - [Sampling Examples](#sampling-examples)
   - [Sampling Configs](#sampling-configs)
@@ -28,8 +29,10 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
     - [`total_lengths`](#total_lengths)
     - [`hotspots`](#hotspots)
     - [`ssadj`](#ssadj)
+  - [Output](#output)
 - [Training](#training)
   - [Datasets](#datasets)
+- [Likelihood](#likelihood)
 - [Citation](#citation)
 
 
@@ -300,6 +303,8 @@ sbatch -J cc58 scripts/train.sbatch cc58
 ```
 
 A copy of the training config and model checkpoints will be saved under `PROTPARDELLE_EXPERIMENT_DIR`.
+
+You may change your `WANDB_CACHE_DIR` environment variable to control where wandb stores its cache.
 
 ## Datasets
 
