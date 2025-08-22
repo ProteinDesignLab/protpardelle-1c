@@ -487,7 +487,7 @@ def main(
     batch_size: int = 32,
     save_shortname: bool = True,
     seed: int | None = None,
-    debug: bool = False,
+    use_wandb: bool = False,
     array_id: int | None = None,
     num_arrays: int | None = None,
 ):
@@ -501,7 +501,7 @@ def main(
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
         seed (int | None, optional): Random seed. Defaults to None.
-        debug (bool, optional): If True, does not use wandb to log results. Defaults to False.
+        use_wandb (bool, optional): If True, use wandb to log results. Defaults to False.
         array_id (int | None, optional): Slurm array id for parallelization. Defaults to None.
         num_arrays (int | None, optional): Number of arrays for parallelization. Defaults to None.
     """
@@ -601,7 +601,7 @@ def main(
         sampling_config = hydra.utils.call(sampling_config)
         sampling_config = OmegaConf.to_container(sampling_config, resolve=True)
 
-        if not debug and num_mpnn_seqs > 0:
+        if use_wandb and num_mpnn_seqs > 0:
             wandb.init(
                 project=project,
                 name=save_suffix,
@@ -990,7 +990,7 @@ def main(
                         "ca_scaffold_scrmsd"
                     ].mean()
 
-                if not debug and num_mpnn_seqs > 0:
+                if use_wandb and num_mpnn_seqs > 0:
                     wandb.log(log_dict)
 
         time_elapsed = time.time() - start_time

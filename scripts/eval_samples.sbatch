@@ -14,6 +14,6 @@ RUN_NAME=$1
 MOTIF_DIR=$2
 N_SAMPLES=$3
 N_MPNN_SEQS=$4
-DEBUG=$5
+USE_WANDB=$5
 
-python -m protpardelle.sample ${RUN_NAME} --motif-dir ${MOTIF_DIR} --n-samples ${N_SAMPLES} --num-mpnn-seqs ${N_MPNN_SEQS} ${DEBUG}
+python -m protpardelle.sample ${RUN_NAME} --motif-dir ${MOTIF_DIR} --n-samples ${N_SAMPLES} --num-mpnn-seqs ${N_MPNN_SEQS} ${USE_WANDB}
