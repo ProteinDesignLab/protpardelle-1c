@@ -2,6 +2,8 @@
 
 The original Protpardelle is detailed in our paper [An all-atom protein generative model](https://www.pnas.org/doi/10.1073/pnas.2311500121). Protpardelle-1c provides new models which achieve more robust motif scaffolding results benchmarked with [MotifBench](https://github.com/blt2114/MotifBench) and [La-Proteina](https://research.nvidia.com/labs/genair/la-proteina/). The code includes examples of unconditional sampling, partial diffusion, motif scaffolding, binder generation, and model training. For more details on the benchmarking results, new multichain support, architectural and dataset changes, please see our [preprint](https://www.biorxiv.org/content/10.1101/2025.08.18.670959v2).
 
+If you use Propardelle-1c, please cite [Chu _et al._, PNAS](https://www.pnas.org/doi/10.1073/pnas.2311500121) and [Lu & Shuai _et al._, BioRxiv](https://www.biorxiv.org/content/10.1101/2025.08.18.670959v2).
+
 # Installation
 
 ## Prerequisites
@@ -30,6 +32,8 @@ bash setup.sh
 ```
 
 If working on a cluster with limited home storage, set `CONDA_PKGS_DIRS` and `UV_CACHE_DIR` to a directory with higher storage quotas.
+
+## `uv`-only installation
 
 The `uv.lock` file is a example environment with exact versions of all installed packages. If you prefer to only use `uv`, the dependencies can be installed by running:
 
