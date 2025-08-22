@@ -47,9 +47,9 @@ from torch.types import Device
 
 from protpardelle.common import residue_constants
 from protpardelle.data.atom import fill_in_cbeta_for_atom37
-from protpardelle.env import PROJECT_ROOT_DIR, StrPath
+from protpardelle.env import PROJECT_ROOT_DIR
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import get_default_device
+from protpardelle.utils import StrPath, get_default_device
 
 
 def get_mpnn_model(

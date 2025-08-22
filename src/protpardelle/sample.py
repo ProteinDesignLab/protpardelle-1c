@@ -35,7 +35,7 @@ from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
 from protpardelle.env import (
     FOLDSEEK_BIN,
-    PROJECT_ROOT_DIR,
+    PACKAGE_ROOT_DIR,
     PROTEINMPNN_WEIGHTS,
     PROTPARDELLE_MODEL_PARAMS,
     PROTPARDELLE_OUTPUT_DIR,
@@ -588,7 +588,7 @@ def main(
         per_config_save_dir.mkdir(exist_ok=True)
 
         with initialize_config_dir(
-            config_dir=str(PROJECT_ROOT_DIR / "src/protpardelle/configs/sampling"),
+            config_dir=str(PACKAGE_ROOT_DIR / "configs/sampling"),
             version_base="1.3.2",
         ):
             sampling_config = compose(config_name=sampling_config_name)

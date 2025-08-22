@@ -30,7 +30,7 @@ import protpardelle.utils
 from protpardelle.common import residue_constants
 from protpardelle.data import atom
 from protpardelle.data import dataset as protpardelle_dataset
-from protpardelle.utils import unsqueeze_trailing_dims
+from protpardelle.utils import dict_to_namespace, unsqueeze_trailing_dims
 
 
 def masked_cross_entropy(
@@ -275,7 +275,7 @@ class ProtpardelleRunner:
                     # Compute loss on all 37 atoms
                     struct_loss_mask = torch.ones_like(
                         coords
-                    ) * protpardelle.utils.unsqueeze_trailing_dims(seq_mask, coords)
+                    ) * unsqueeze_trailing_dims(seq_mask, coords)
                 elif self.config.model.task == "ai-allatom-hybrid":
                     struct_loss_mask = torch.ones_like(coords) * hybrid_mask[..., None]
                 else:
@@ -380,7 +380,11 @@ def train(
             backend="nccl", timeout=datetime.timedelta(seconds=5400)
         )
         dist.barrier()
-    config, config_dict = protpardelle.utils.load_config(config_path, return_dict=True)
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config_dict = yaml.safe_load(f)
+    config = dict_to_namespace(config_dict)
+
     wandb_dir = str(Path(out_dir, project))
     Path(wandb_dir, "wandb").mkdir(parents=True, exist_ok=True)  # Create wandb dir
 
