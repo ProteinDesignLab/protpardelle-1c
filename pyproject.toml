@@ -59,4 +59,4 @@ where = ["src"]
 include = ["protpardelle", "protpardelle.*"]
 
 [tool.setuptools.package-data]
-protpardelle = ["common/**/*.txt", "configs/**/*.yaml"]
+protpardelle = ["configs/**/*.yaml"]
