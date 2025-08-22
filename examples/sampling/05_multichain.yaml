@@ -1,7 +1,7 @@
 search_space:
   models:
-    - ["cc83", "2616", "sampling_sidechain_conditional"] #* binder generation
-    - ["cc78", "1431", "sampling_sidechain_conditional"] #* intended for homodimer generation
+    - ["cc83", "2616", "sampling_sidechain_conditional"] # binder generation
+    - ["cc78", "1431", "sampling_sidechain_conditional"] # intended for homodimer generation
   step_scales: [1.2]
   schurns: [200]
   crop_cond_starts: [0.0]

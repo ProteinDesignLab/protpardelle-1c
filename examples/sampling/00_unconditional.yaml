@@ -1,10 +1,10 @@
 search_space:
   models:
-    - ["cc58", "416", "sampling_unconditional"] #* single chain model, backbone-only
-    - ["cc83", "2616", "sampling_unconditional"] #* binder generation
-    - ["cc91", "383", "sampling_unconditional_allatom_s1"] #* single chain model, all-atom
-    - ["cc94", "3100", "sampling_unconditional_allatom_s1"] #* multichain model, allatom
-    - ["cc95", "3490", "sampling_unconditional"] #* multichain model, backbone-only
+    - ["cc58", "416", "sampling_unconditional"] # single chain model, backbone-only
+    - ["cc83", "2616", "sampling_unconditional"] # binder generation
+    - ["cc91", "383", "sampling_unconditional_allatom_s1"] # single chain model, all-atom
+    - ["cc94", "3100", "sampling_unconditional_allatom_s1"] # multichain model, allatom
+    - ["cc95", "3490", "sampling_unconditional"] # multichain model, backbone-only
   step_scales: [1.2]
   schurns: [200]
   crop_cond_starts: [0.0]

@@ -4,7 +4,7 @@ partial_diffusion:
   rewind_steps: [500]
 search_space:
   models:
-    - ["cc89", "415", "sampling_partial_diffusion_allatom"] #* single chain model, allatom but must always give ground truth sequence
+    - ["cc89", "415", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
   step_scales: [1.0]
   schurns: [0]
   crop_cond_starts: [0.0]
