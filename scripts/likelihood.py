@@ -3,14 +3,39 @@
 Authors: Alex Chu, Tianyu Lu
 """
 
+from collections import defaultdict
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import torch
+from tqdm.auto import tqdm
 import typer
 
 from protpardelle import utils
 from protpardelle.common import residue_constants
+from protpardelle.core import diffusion
+from protpardelle.core.models import Protpardelle
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
+from protpardelle.env import PROTPARDELLE_MODEL_PARAMS, PROTPARDELLE_OUTPUT_DIR
+from protpardelle.utils import get_default_device, load_config, unsqueeze_trailing_dims
+
+
+def load_model(model_cfg: Path, model_ckpt: Path):
+    device = get_default_device()
+    m_cfg = load_config(model_cfg)
+
+    weights = torch.load(model_ckpt, map_location=device, weights_only=False)[
+        "model_state_dict"
+    ]
+    model = Protpardelle(m_cfg, device=device)
+    model.load_state_dict(weights, strict=False)
+    model.to(device)
+    model.eval()
+    model.device = device
+
+    return model
 
 
 def get_backbone_mask(atom_mask):
@@ -28,7 +53,7 @@ def batch_from_pdbs(list_of_pdbs):
     dict_of_lists = {"seq_mask": []}
     for feats in all_feats:
         for k, v in feats.items():
-            if k in ["atom_mask", "atom_positions", "residue_index"]:
+            if k in ["atom_mask", "atom_positions", "residue_index", "chain_index"]:
                 if k == "atom_positions":
                     v = dataset.apply_random_se3(
                         v, atom_mask=feats["atom_mask"], translation_scale=0
@@ -45,14 +70,13 @@ def forward_ode(
     n_steps=100,
     sigma_min=0.01,
     sigma_max=800,
-    tqdm_pbar=None,
     seed=0,
     verbose=False,
     eps=None,
 ):
     """Solve the probability flow ODE to get latent encodings and likelihoods.
 
-    Usage: given a backbone model `model` and a list of pdb paths `paths`
+    Usage: given a `model` and a list of pdb paths `paths`
     batch = batch_from_pdbs(paths)
     results = forward_ode(model, batch)
     nats_per_atom = results['npa']
@@ -61,23 +85,40 @@ def forward_ode(
     Based on https://github.com/yang-song/score_sde_pytorch/blob/main/likelihood.py
     See also https://github.com/crowsonkb/k-diffusion/blob/cc49cf6182284e577e896943f8e29c7c9d1a7f2c/k_diffusion/sampling.py#L281
     """
-    assert model.task == "backbone"
     device = model.device
     sigma_data = model.sigma_data
     torch.manual_seed(seed)
 
     seq_mask = batch["seq_mask"].to(device)
-    to_batch_size = lambda x: x * torch.ones(seq_mask.shape[0]).to(device)
+    batch_size = seq_mask.shape[0]
+    to_batch_size = lambda x: x * torch.ones(batch_size).to(device)
     residue_index = batch["residue_index"].to(device)
-    backbone_mask = get_backbone_mask(batch["atom_mask"]) * batch["atom_mask"]
-    backbone_mask = torch.ones_like(batch["atom_positions"]) * backbone_mask[..., None]
-    init_bb_coords = (batch["atom_positions"] * backbone_mask).to(device)
-    backbone_mask = backbone_mask.to(device)
-    batch_data_sizes = backbone_mask.sum((1, 2, 3))
+    chain_index = batch["chain_index"].to(device)
+
+    if model.task == "backbone":
+        atom_mask = get_backbone_mask(batch["atom_mask"]) * batch["atom_mask"]
+    else:
+        atom_mask = batch["atom_mask"]
+    atom_mask = (torch.ones_like(batch["atom_positions"]) * atom_mask[..., None]).to(device)
+
+    init_coords = batch["atom_positions"].to(device)
+    init_coords = init_coords - torch.mean(
+        init_coords[..., 1:2, :], dim=-3, keepdim=True
+    )
+    random_rots = torch.stack(
+        [
+            dataset.uniform_rand_rotation(1)[0].to(device)
+            for _ in range(batch_size)
+        ]
+    )
+    init_coords = torch.einsum("bij,blnj->blni", random_rots, init_coords)
+
+    init_coords = (init_coords * atom_mask)
+    batch_data_sizes = atom_mask.sum((1, 2, 3))
 
     # Noise for skilling-hutchinson
     if eps is None:
-        eps = torch.randn_like(init_bb_coords)
+        eps = torch.randn_like(init_coords)
     sum_dlogp = to_batch_size(0)
 
     # Initialize noise schedule/parameters
@@ -88,29 +129,41 @@ def forward_ode(
     sigma = noise_schedule(timesteps[0])
 
     # init to sigma_min
-    xt = init_bb_coords + torch.randn_like(init_bb_coords) * sigma
+    xt = init_coords + torch.randn_like(init_coords) * sigma
 
     sigma = to_batch_size(sigma)
-    if tqdm_pbar is None:
-        tqdm_pbar = lambda x: x
-    xt_traj, x0_traj = [], []
+    xt_traj = []
 
-    def dx_dt_f_theta(xt, sigma, sigma_next):
-        xt = xt * backbone_mask
+    def dx_dt_f_theta(xt, sigma, x0=None):
+        xt = xt * atom_mask
+
+        # For allatom-nomask models, need to inject fresh Gaussian noise
+        # at dummy atom dimensions at the current noise level
+        if model.task == "ai-allatom-nomask":
+            dummy_fill_mask = 1 - atom_mask
+            if x0 is not None:
+                dummy_fill_noise = (torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)) + x0[:, :, 1:2, :]
+            else:
+                dummy_fill_noise = (torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)) + xt[:, :, 1:2, :]
+            xt *= atom_mask
+            xt += dummy_fill_noise * dummy_fill_mask
+
         x0, _, _, _ = model.forward(
             noisy_coords=xt,
             noise_level=sigma,
             seq_mask=seq_mask,
             residue_index=residue_index,
+            chain_index=chain_index,
             run_mpnn_model=False,
         )
         dx_dt = (xt - x0) / utils.unsqueeze_trailing_dims(sigma, xt)
-        dx_dt = dx_dt * backbone_mask
-        return dx_dt
+        dx_dt = dx_dt * atom_mask
+        return dx_dt, x0
 
     # Forward PF ODE
     with torch.no_grad():
-        for i, t in tqdm_pbar(enumerate(iter(timesteps[1:]))):
+        x0 = None
+        for t in iter(timesteps[1:]):
             sigma_next = noise_schedule(t)
             sigma_next = to_batch_size(sigma_next)
             step_size = sigma_next - sigma
@@ -118,13 +171,13 @@ def forward_ode(
             # Euler integrator
             with torch.enable_grad():
                 xt.requires_grad_(True)
-                dx_dt = dx_dt_f_theta(xt, sigma, sigma_next)
-                hutch_proj = (dx_dt * eps * backbone_mask).sum()
+                dx_dt, x0 = dx_dt_f_theta(xt, sigma, x0=x0)
+                hutch_proj = (dx_dt * eps * atom_mask).sum()
                 grad = torch.autograd.grad(hutch_proj, xt)[0]
             xt.requires_grad_(False)
             dx = dx_dt * utils.unsqueeze_trailing_dims(step_size, dx_dt)
             xt = xt + dx
-            div = dlogp_dt = (grad * eps * backbone_mask).sum((1, 2, 3))
+            dlogp_dt = (grad * eps * atom_mask).sum((1, 2, 3))
             dlogp = dlogp_dt * utils.unsqueeze_trailing_dims(step_size, dlogp_dt)
             sum_dlogp = sum_dlogp + dlogp
 
@@ -144,17 +197,19 @@ def forward_ode(
     logp = prior_logp + sum_dlogp
     nats_per_atom = -logp / batch_data_sizes * 3
     bits_per_dim = -logp / batch_data_sizes / np.log(2)
+
     results = {
         "prior_logp": prior_logp,
         "prior_logp_per_atom": prior_logp / batch_data_sizes * 3,
         "deltalogp": sum_dlogp,
         "deltalogp_per_atom": sum_dlogp / batch_data_sizes * 3,
         "logp": logp,
-        "npa": nats_per_atom,
-        "bpd": bits_per_dim,
+        "nats_per_atom": nats_per_atom,
+        "bits_per_dim": bits_per_dim,
         "batch_data_sizes": batch_data_sizes,
         "protein_lengths": seq_mask.sum(-1),
         "encoded_latent": xt,
+        "seq_mask": seq_mask,
     }
     if verbose:
         for k, v in results.items():
@@ -162,8 +217,71 @@ def forward_ode(
     return results
 
 
-def runner():
-    pass
+def runner(model_name: str, epoch: str, pdb_path: Path, batch_size: int = 32):
+    """
+    model_name: name of model, e.g. cc58, cc89
+    epoch: epoch number that matches the available model checkpoint in PROTPARDELLE_MODEL_PARAMS
+    pdb_path: either the path to a single .pdb or a folder containing .pdb files on which to compute likelihoods
+    batch_size: Size per batch
+
+    Example:
+    python3 ./scripts/likelihood.py cc89 415 ./examples/motifs/nanobody/
+
+    Outputs are saved under PROTPARDELLE_OUTPUT_DIR
+    """
+    model_cfg = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
+    model_ckpt = PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+
+    model = load_model(model_cfg, model_ckpt)
+
+    if pdb_path.is_dir():
+        pdb_paths = list(pdb_path.glob("*.pdb"))
+    else:
+        pdb_paths = [pdb_path]
+    pdb_stems = [pdb_fp.stem for pdb_fp in pdb_paths]
+
+    n_samples = len(pdb_paths)
+
+    all_results = defaultdict(list)
+
+    batch_sizes = [batch_size] * (n_samples // batch_size)
+    if n_samples % batch_size != 0:
+        batch_sizes.append(n_samples % batch_size)
+
+    for i, bs in tqdm(enumerate(batch_sizes)):
+
+        si, ei = i * bs, (i + 1) * bs
+        if i == len(batch_sizes) - 1:
+            si, ei = -bs, n_samples
+
+        batch = batch_from_pdbs(pdb_paths[si:ei])
+        results = forward_ode(model, batch)
+
+        for k, v in results.items():
+            all_results[k].extend(v)
+
+    save_dir = PROTPARDELLE_OUTPUT_DIR / f"likelihood_{model_name}_{epoch}" / pdb_path.stem
+    save_dir.mkdir(exist_ok=True, parents=True)
+
+    latents = all_results.pop("encoded_latent")
+    seq_masks = all_results.pop("seq_mask")
+    latent_save_dir = save_dir / "latents"
+    latent_save_dir.mkdir(exist_ok=True, parents=True)
+    for i, latent in enumerate(latents):
+        curr_seq_mask = torch.nonzero(seq_masks[i]).flatten()
+        print(pdb_stems[i])
+        print(latent[curr_seq_mask].shape)
+        torch.save(latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_encoded_latent.pt")
+
+    for k, v in all_results.items():
+        all_results[k] = [value.item() for value in v]
+
+    df = pd.DataFrame(all_results)
+    df['pdb_path'] = pdb_paths
+    df['pdb_stem'] = pdb_stems
+    df.to_csv(save_dir / "likelihood_result.csv", float_format="%.4f", index=False)
+
+    print(f"Likelihood results saved to {save_dir / 'likelihood_result.csv'}")
 
 
 if __name__ == "__main__":
