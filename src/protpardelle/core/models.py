@@ -7,6 +7,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import argparse
 import copy
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from functools import partial
@@ -40,7 +41,7 @@ from protpardelle.data import atom, dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import apply_dotdict_recursively, parse_fixed_pos_str
+from protpardelle.utils import apply_dotdict_recursively
 
 parser = PDBParser(QUIET=True)
 
@@ -414,6 +415,71 @@ class CoordinateDenoiser(nn.Module):
         )
 
         return denoised_coords_x0, hidden
+
+
+def parse_fixed_pos_str(
+    fixed_pos_str: str,
+    chain_id_mapping: dict[str, int],
+    residue_index: TensorType["n", int],
+    chain_index: TensorType["n", int],
+) -> list[int]:
+    """Parse a string of fixed positions in the format "A1, A10-25" and
+    return the corresponding list of absolute indices.
+
+    Args:
+        fixed_pos_list (str): Comma-separated string representing fixed positions (e.g., "A1,A10-25").
+        chain_id_mapping (dict[str, int]): Mapping of chain letter to chain index (e.g., {'A': 0, 'B': 1}).
+        residue_index (torch.Tensor): Tensor of residue indices. (N,)
+        chain_index (torch.Tensor): Tensor of chain indices. (N,)
+
+    Returns:
+        list[int]: The absolute indices of the fixed positions.
+    """
+
+    fixed_pos_str = fixed_pos_str.strip()
+    if not fixed_pos_str:
+        return []  # no positions specified
+
+    fixed_indices = []
+
+    fixed_pos_list = [pos for item in fixed_pos_str.split(",") if (pos := item.strip())]
+
+    for pos in fixed_pos_list:
+        # Match pattern like "A10" or "A10-25"
+        match = re.match(r"([A-Za-z])(\d+)(?:-(\d+))?$", pos)
+        if not match:
+            raise ValueError(f"Invalid position format: {pos}")
+
+        chain_letter = match.group(1)
+        start_residue = int(match.group(2))
+        end_residue = int(match.group(3)) if match.group(3) else start_residue
+
+        if chain_letter not in chain_id_mapping:
+            raise ValueError(f"Chain ID {chain_letter} not found in mapping.")
+
+        # For the given chain, create a mask for all residues in the desired range
+        chain_i = chain_id_mapping[chain_letter]
+        range_mask = (
+            (chain_index == chain_i)
+            & (residue_index >= start_residue)
+            & (residue_index <= end_residue)
+        )
+        matching_indices = torch.where(range_mask)[0]
+
+        # Check that each residue in the requested range; warn if not found
+        found_residues = residue_index[matching_indices].tolist()
+        found_residues_set = set(found_residues)
+
+        for r in range(start_residue, end_residue + 1):
+            if r not in found_residues_set:
+                print(
+                    f"Warning: Requested position {chain_letter}{r} not found in structure."
+                )
+
+        # Extend our fixed indices with whatever we did find
+        fixed_indices.extend(matching_indices.tolist())
+
+    return fixed_indices
 
 
 class Protpardelle(nn.Module):

@@ -15,7 +15,7 @@ from protpardelle.common import residue_constants
 from protpardelle.data import atom
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import ESMFOLD_PATH
-from protpardelle.utils import get_default_device
+from protpardelle.utils import clean_gpu_cache, get_default_device
 
 
 def collate_dense_tensors(
@@ -193,6 +193,7 @@ class ESMFold(nn.Module):
         """Return the device on which the model is loaded."""
         return next(self.model.parameters()).device
 
+    @clean_gpu_cache
     @torch.no_grad()
     def batch_predict(
         self,
