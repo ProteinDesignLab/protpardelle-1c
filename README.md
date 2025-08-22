@@ -2,13 +2,44 @@
 
 The original Protpardelle is detailed in our paper [An all-atom protein generative model](https://www.pnas.org/doi/10.1073/pnas.2311500121). Protpardelle-1c provides new models which achieve more robust motif scaffolding results benchmarked with [MotifBench](https://github.com/blt2114/MotifBench) and [La-Proteina](https://research.nvidia.com/labs/genair/la-proteina/). The code includes examples of unconditional sampling, partial diffusion, motif scaffolding, binder generation, and model training. For more details on the benchmarking results, new multichain support, architectural and dataset changes, please see our [preprint](https://www.biorxiv.org/content/10.1101/2025.08.18.670959v2).
 
+<p align="center">
+  <img src="./assets/1qjg_esmfold_success.png" alt="ESMFold-predicted structures from Protpardelle-1c all-atom cc91 model given 1QJG motif scaffolding task. All samples shown have pass the success criteria described in the paper." width="1100px" align="middle"/>
+</p>
+
+# Table of Contents
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Install dependencies](#install-dependencies)
+  - [Download model weights and configs](#download-model-weights-and-configs)
+  - [Set environment variables](#set-environment-variables)
+  - [Available Models](#available-models)
+- [Output](#output)
+- [Sampling Examples](#sampling-examples)
+  - [Sampling configs](#sampling-configs)
+    - [`search_space.models`](#search_spacemodels)
+    - [`search_space.step_scales`](#search_spacestep_scales)
+    - [`search_space.schurns`](#search_spaceschurns)
+    - [`search_space.crop_cond_starts`](#search_spacecrop_cond_starts)
+    - [`search_space.translations`](#search_spacetranslations)
+    - [`motifs`](#motifs)
+    - [`motif_contigs`](#motif_contigs)
+      - [Example contigs](#example-contigs)
+    - [`total_lengths`](#total_lengths)
+    - [`hotspots`](#hotspots)
+    - [`ssadj`](#ssadj)
+- [Training](#training)
+  - [Datasets](#datasets)
+  - [Samples](#samples)
+- [Citation](#citation)
+
+
 # Installation
 
 ## Prerequisites
 
 To run the scripts in this repository, we recommend using `conda` for environment management and `uv` for python dependency management. If you don't have `conda` installed yet, you can follow the instructions [here](https://www.anaconda.com/docs/getting-started/miniconda/install); `uv` installation will be automatically handled within `setup.sh`. If you are working on a cluster with limited home storage, set `CONDA_PKGS_DIRS` and `UV_CACHE_DIR` to a directory with higher storage quotas.
 
-This repository is tested on Linux with `gcc>=12.4` and `cuda>=12.4`.
+This repository was tested on Linux with `gcc>=12.4` and `cuda>=12.4`.
 
 ## Install dependencies
 
@@ -52,7 +83,14 @@ We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](ht
 bash download_model_params.sh
 ```
 
-It takes some time to download all the files, and you should see the following directories created:
+We use features of `git` present in version `2.45.1`. With older versions, the ProteinMPNN weights download can also be done with
+```bash
+git clone https://github.com/dauparas/ProteinMPNN.git
+mv ProteinMPNN/vanilla_model_weights model_params/ProteinMPNN/
+rm -rf ProteinMPNN
+```
+
+It takes some time to download all the files; you should see the following directories created:
 
 - `<project_root>/model_params/`
 - `<project_root>/model_params/ESMFold/`
@@ -60,7 +98,7 @@ It takes some time to download all the files, and you should see the following d
 - `<project_root>/model_params/configs/`
 - `<project_root>/model_params/weights/`
 
-Then install [Foldseek](https://github.com/steineggerlab/foldseek) in your `PATH` following their instructions.
+Then install [Foldseek](https://github.com/steineggerlab/foldseek/tree/cfb431e98abcc5bcc49950285211d3723b47dc94) in your `PATH` following their instructions.
 
 Outputs will be saved in `<project_root>/results` by default.
 
@@ -147,7 +185,7 @@ This folder organization, in particular `scaffold_info.csv`, follow MotifBench i
 
 # Sampling Examples
 
-See `examples/sampling` for demos:
+We recommend reading and running the example sampling configs under `examples/sampling` that cover the intended use cases of Protpardelle-1c models. The commands to run each demo are provided below:
 
 ```bash
 python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0 --debug
@@ -175,15 +213,15 @@ Multiple entries can be specified per setting in `search_space` and are combined
 
 ### `search_space.models`
 
-Model weights to use for sampling formatted as `[model_name, epoch, sampling_config]`. The default backbone-only model is `cc58` epoch `416`. The default allatom model is `cc94` epoch `3100`. The default multichain model is `cc95` epoch `3490`.
+Model weights to use for sampling formatted as `[model_name, epoch, sampling_config]`. The recommended model is `cc58` for backbone-only single-chain conditional generation, `cc83` for backbone-only multi-chain conditional generation, `cc89` for all-atom single-chain structure refinement, and `cc91` for all-atom single-chain conditional generation.
 
 ### `search_space.step_scales`
 
-List of floats where the model's score is scaled by this amount, where higher step scales correspond to lower temperature sampling and lower step scales correspond to higher temperature sampling. Recommended setting is `1.2`.
+List of floats where the model's score is scaled by this amount, where higher step scales correspond to lower temperature sampling and lower step scales correspond to higher temperature sampling. Higher step scales will likely reduce sample diversity. Recommended range for sweeps is `[0.8, 1.6]` with `1.2` being a good default in most use cases.
 
 ### `search_space.schurns`
 
-List of floats where higher magnitudes inject more stochasticity during denoising and `0` is noise-free. The combination of step scale `1.0` and schurn `0` corresponds to ODE sampling. We recommend to always start with ODE sampling as this is exactly the denoising path the model has learned, without any _post hoc_ corrections. The same `schurn` may not generalize across different models; we have observed poor sample quality with `schurn=200` for the all-atom models while `schurn=200` is okay for backbone-only models.
+List of floats where higher magnitudes inject more stochasticity during denoising and `0` is noise-free. The combination of step scale `1.0` and schurn `0` corresponds to ODE sampling. When evaluating a new model, we recommend to start with ODE sampling as this is exactly the denoising path the model has learned, without any _post hoc_ corrections. The same `schurn` may not generalize across different models; we have observed poor sample quality with `schurn=200` for the multi-chain all-atom models while `schurn=200` is okay for single-chain models. Note that the provided `schurn` parameter is divided by the total number of denoising steps to obtain the `gamma` parameter which controls how much additional Gaussian noise to add. Note also there are two parameters `s_t_min` and `s_t_max` which are not exposed to the sampling configs but accessible through the `sample()` function. They control the specific range in which stochastic sampling is applied.
 
 ### `search_space.crop_cond_starts`
 
@@ -195,29 +233,30 @@ Translate the input motif by `[x, y, z]` Ångstroms.
 
 ### `motifs`
 
-Stem of the `.pdb` file containing the motif to scaffold. The file should be located under the `{MOTIF_DIR}` given to `eval_samples.sbatch`. Set as `null` for unconditional sampling and set to the path to the full structure for partial diffusion.
+Stem of the `.pdb` file containing the motif to scaffold. For convenience, the `.pdb` can contain extra residues, for example a native scaffold from the PDB. The `motif_contigs` will select the motif residues from the larger structure. The file should be located under the directory passed to `--motif-dir`. Set as `null` for unconditional sampling and set to the stem of the full structure for partial diffusion.
 
 ### `motif_contigs`
 
-For partial diffusion, write `partial_diffusion`. For motif scaffolding, the contig follows similar syntax as RFdiffusion but we use `;/;` to denote a chain break.
+For partial diffusion, write `partial_diffusion`. For motif scaffolding, the contig follows similar syntax as RFdiffusion but we use `;/;` to denote a chain break. Note that the motif segments can be shuffled in arbitrary order, e.g. last example.
 
 #### Example contigs
 
 - `0-100;A1-21;0-100`: sample 0 to 100 scaffold residues, followed by motif PDB's chain A residues 1 to 21, followed by 0 to 100 scaffold residues.
 - `A1-128;/;120-120`: condition on chain A residues 1 to 128, generate another chain with exactly 120 residues.
 - `A1-79;/;B1-141;/;C1-33;/;70-150`: condition on chains A, B, and C, generate another chain with 70 to 150 residues.
+- `F1-18;/;H1-92;/;20-40;D6-82;10-30;D101-125;20-40;A1-12;10-20`: condition on chains F and H, generate another chain containing residues D101-125 and A1-12 from the same input motif file with the specified flanking scaffold length ranges.
 
 ### `total_lengths`
 
-List of list of integers indicating the number of residues per chain, where each sublist is the length range for one chain. For binder generation, the total lengths for the target chain(s) should match their number of residues.
+List of list of integers indicating the number of residues per chain, where each sublist is the length range for each chain, so e.g. three chains require three sublists. For binder generation, the total lengths for the target chain(s) should match their number of residues.
 
 ### `hotspots`
 
-For multichain / binder generation, a comma-delimited string with format `{chain_id}{residue_index}`.
+For binder generation. A comma-delimited string with format `{chain_id}{residue_index}`.
 
 ### `ssadj`
 
-For fold-conditioning, the stems of the output files from running the `make_secstruc_adj.py`, script from RFdiffusion. Per-residue secondary structure labels and per residue pair block adjacency contact info are encoded as conditioning inputs. Fold-conditional model weights will be released at a later date.
+For fold-conditioning, the stems of the output files from running the `make_secstruc_adj.py`, script from RFdiffusion, e.g. `["1pdb_ss", "1pdb_adj"]`. Per-residue secondary structure labels and per residue-pair block adjacency contact info are encoded as conditioning inputs. Fold-conditional model weights will be released at a later date.
 
 # Training
 
