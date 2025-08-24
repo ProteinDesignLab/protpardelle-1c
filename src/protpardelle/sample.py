@@ -45,27 +45,11 @@ from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import (
     apply_dotdict_recursively,
     get_default_device,
+    load_model,
     seed_everything,
 )
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
-
-
-def load_model(model_cfg: Path, model_ckpt: Path):
-    device = get_default_device()
-    m_cfg = protpardelle.utils.load_config(model_cfg)
-
-    weights = torch.load(model_ckpt, map_location=device, weights_only=False)[
-        "model_state_dict"
-    ]
-    model = Protpardelle(m_cfg, device=device)
-    model.load_state_dict(weights, strict=False)
-    model.to(device)
-    model.eval()
-    model.device = device
-
-    return model
-
 
 def save_samples(
     aux,
@@ -640,10 +624,10 @@ def sample(
             )  # one config, one motif
             per_motif_save_dir.mkdir(exist_ok=True)
 
-            model_cfg = str(
+            config_path = str(
                 PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
             )
-            model_ckpt = str(
+            checkpoint_path = str(
                 PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
             )
 
@@ -724,9 +708,9 @@ def sample(
                 repack_seq = motif_contig.split("/")[-1]
                 sampling_config["sampling"]["partial_diffusion"]["seq"] = repack_seq
 
-            if model_info == (None, None) or model_info != (model_cfg, model_ckpt):
-                model = load_model(model_cfg, model_ckpt)
-                model_info = (model_cfg, model_ckpt)
+            if model_info == (None, None) or model_info != (config_path, checkpoint_path):
+                model = load_model(config_path, checkpoint_path)
+                model_info = (config_path, checkpoint_path)
 
             allatom = (
                 sampling_config["sampling"]["allatom_cfg"]["jump_steps"]

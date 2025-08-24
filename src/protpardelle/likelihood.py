@@ -15,7 +15,6 @@ from tqdm.auto import tqdm
 from protpardelle import utils
 from protpardelle.common import residue_constants
 from protpardelle.core import diffusion
-from protpardelle.core.models import Protpardelle
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import (
@@ -23,30 +22,9 @@ from protpardelle.env import (
     PROTPARDELLE_MODEL_PARAMS,
     PROTPARDELLE_OUTPUT_DIR,
 )
-from protpardelle.utils import (
-    get_default_device,
-    load_config,
-    seed_everything,
-    unsqueeze_trailing_dims,
-)
+from protpardelle.utils import load_model, seed_everything, unsqueeze_trailing_dims
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
-
-
-def load_model(model_cfg: Path, model_ckpt: Path):
-    device = get_default_device()
-    m_cfg = load_config(model_cfg)
-
-    weights = torch.load(model_ckpt, map_location=device, weights_only=False)[
-        "model_state_dict"
-    ]
-    model = Protpardelle(m_cfg, device=device)
-    model.load_state_dict(weights, strict=False)
-    model.to(device)
-    model.eval()
-    model.device = device
-
-    return model
 
 
 def get_backbone_mask(atom_mask):
@@ -256,12 +234,12 @@ def runner(
     if seed is not None:
         seed_everything(seed)
 
-    model_cfg = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
-    model_ckpt = (
+    config_path = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
+    checkpoint_path = (
         PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
     )
 
-    model = load_model(model_cfg, model_ckpt)
+    model = load_model(config_path, checkpoint_path)
 
     if pdb_path.is_dir():
         pdb_paths = list(pdb_path.glob("*.pdb"))

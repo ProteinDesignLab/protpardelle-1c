@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from omegaconf import DictConfig
+from torch.types import Device
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
@@ -31,7 +32,11 @@ from protpardelle.data.sequence import batched_seq_to_aatype_and_mask
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.evaluate import design_sequence
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import apply_dotdict_recursively, unsqueeze_trailing_dims
+from protpardelle.utils import (
+    apply_dotdict_recursively,
+    get_default_device,
+    unsqueeze_trailing_dims,
+)
 
 
 def fill_motif_seq(
@@ -487,13 +492,15 @@ class Protpardelle(nn.Module):
         'allatom': train only an allatom coords denoiser (cannot do all-atom generation
             by itself).
         'codesign': train both an allatom denoiser and mini-MPNN at once.
-
     """
 
-    def __init__(self, config: argparse.Namespace, device: str = "cpu"):
+    def __init__(self, config: argparse.Namespace, device: Device = None):
         super().__init__()
+        if device is None:
+            device = get_default_device()
+        self.to(device)
+
         self.config = config
-        self.device = device  # TODO: Change to property
         self.task = config.model.task
         self.n_tokens = config.data.n_aatype_tokens
 
@@ -531,6 +538,11 @@ class Protpardelle(nn.Module):
         self.sampling_noise_schedule_sc = partial(
             diffusion.noise_schedule, function="sidechain"
         )
+
+    @property
+    def device(self) -> torch.device:
+        """Return the device on which the model is loaded."""
+        return next(self.parameters()).device
 
     def load_pretrained_module(self, module_name: str, ckpt_path: str | None = None):
         """Load pretrained weights for a given module name."""
