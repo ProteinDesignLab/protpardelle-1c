@@ -18,7 +18,7 @@ import protpardelle.data.pdb_io
 from protpardelle.common import residue_constants
 from protpardelle.data import align
 from protpardelle.env import PROTEINMPNN_WEIGHTS
-from protpardelle.integrations import protein_mpnn as mpnn
+from protpardelle.integrations import protein_mpnn
 from protpardelle.integrations.esmfold import predict_structures
 
 
@@ -34,7 +34,7 @@ def design_sequence(
 ):
     # Returns list of strs; seqs like 'MKRLLDS', not aatypes
     if model is None:
-        model = mpnn.get_mpnn_model(PROTEINMPNN_WEIGHTS)
+        model = protein_mpnn.get_mpnn_model(PROTEINMPNN_WEIGHTS)
     if isinstance(coords, str):
         using_tmp_dir = False
         pdb_fn = coords
@@ -65,7 +65,7 @@ def design_sequence(
         fixed_pos_jsonl = make_fixed_pos_jsonl(chain_index, fixed_pos_mask, pdb_fn)
 
     with torch.no_grad():
-        designed_seqs = mpnn.run_proteinmpnn(
+        designed_seqs = protein_mpnn.run_proteinmpnn(
             model=model,
             pdb_path=pdb_fn,
             num_seq_per_target=num_seqs,
@@ -114,29 +114,6 @@ def make_fixed_pos_jsonl(
         json.dump(fixed_pos_dict, f)
 
     return fixed_pos_jsonl
-
-
-def recursive_to(obj, **kwargs):
-    # from omegafold.torch_utils
-    if isinstance(obj, torch.Tensor):
-        try:
-            return obj.to(**kwargs)
-        except RuntimeError:
-            kwargs.pop("non_blocking")
-            return obj.to(**kwargs)
-    elif isinstance(obj, list):
-        return [recursive_to(o, **kwargs) for o in obj]
-    elif isinstance(obj, tuple):
-        return tuple(recursive_to(o, **kwargs) for o in obj)
-    elif isinstance(obj, set):
-        return set(recursive_to(o, **kwargs) for o in obj)
-    elif isinstance(obj, dict):
-        return {k: recursive_to(v, **kwargs) for k, v in obj.items()}
-    elif hasattr(obj, "to"):
-        # this takes care of classes that implements the ~to method
-        return obj.to(**kwargs)
-    else:
-        return obj
 
 
 def compute_structure_metric(coords1, coords2, metric="ca_rmsd", atom_mask=None):
