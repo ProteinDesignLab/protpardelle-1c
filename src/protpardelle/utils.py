@@ -141,6 +141,7 @@ def load_config(config_path: StrPath) -> argparse.Namespace:
 def load_model(
     config_path: StrPath, checkpoint_path: StrPath, device: Device = None
 ) -> Protpardelle:
+    """Load a Protpardelle model from a configuration file and a checkpoint."""
     if device is None:
         device = get_default_device()
     assert isinstance(device, torch.device)  # for mypy
