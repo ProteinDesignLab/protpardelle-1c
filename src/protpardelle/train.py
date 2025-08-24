@@ -1,4 +1,4 @@
-"""General training script.
+"""Entrypoint for Protpardelle-1c training.
 
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 """
@@ -36,6 +36,8 @@ from protpardelle.utils import (
     seed_everything,
     unsqueeze_trailing_dims,
 )
+
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def masked_cross_entropy(
@@ -364,7 +366,7 @@ def train(
     gpu_id: int = 0,
     use_dataparallel: bool = False,
     num_workers: int = 0,
-):
+) -> None:
 
     with open(config_path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
@@ -555,6 +557,7 @@ def train(
         print("Training finished.")
 
 
+@app.command()
 def main(
     project: str = typer.Option("other", help="wandb project name"),
     wandb_id: str = typer.Option("", help="wandb username"),
@@ -583,4 +586,4 @@ def main(
 
 
 if __name__ == "__main__":
-    typer.run(main)
+    app()

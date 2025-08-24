@@ -1,4 +1,4 @@
-"""Utils for computing evaluation metrics.
+"""Entrypoint for Protpardelle-1c self-consistency evals.
 
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """

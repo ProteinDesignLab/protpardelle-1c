@@ -1,4 +1,4 @@
-"""Entrypoint for Protpardelle-1c self-consistency evals.
+"""Entrypoint for Protpardelle-1c sampling.
 
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
@@ -47,6 +47,8 @@ from protpardelle.utils import (
     get_default_device,
     seed_everything,
 )
+
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def load_model(model_cfg: Path, model_ckpt: Path):
@@ -478,7 +480,7 @@ def generate(
     return (trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
 
 
-def main(
+def sample(
     sampling_yaml_path: Path,
     project: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
@@ -1005,5 +1007,46 @@ def main(
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
 
 
+@app.command()
+def main(
+    project: str = typer.Option("protpardelle-1c-sampling", help="wandb project name"),
+    motif_dir: Path = typer.Option(
+        Path("motifs/nanobody"), help="Directory containing motif PDBs"
+    ),
+    n_samples: int = typer.Option(8, help="Number of samples to draw"),
+    num_mpnn_seqs: int = typer.Option(
+        8, help="Number of sequences to design with MPNN (0 to skip)"
+    ),
+    batch_size: int = typer.Option(32, help="Batch size for sampling"),
+    save_shortname: bool = typer.Option(
+        True, help="Whether to save with short names (motif name only)"
+    ),
+    seed: int | None = typer.Option(None, help="Random seed"),
+    use_wandb: bool = typer.Option(False, help="Whether to use wandb"),
+    array_id: int | None = typer.Option(
+        None, help="Slurm array ID for parallelization"
+    ),
+    num_arrays: int | None = typer.Option(
+        None, help="Number of arrays for parallelization"
+    ),
+    sampling_yaml_path: Path = typer.Argument(
+        ..., help="Path to sampling config YAML file"
+    ),
+) -> None:
+    sample(
+        sampling_yaml_path=sampling_yaml_path,
+        project=project,
+        motif_dir=motif_dir,
+        n_samples=n_samples,
+        num_mpnn_seqs=num_mpnn_seqs,
+        batch_size=batch_size,
+        save_shortname=save_shortname,
+        seed=seed,
+        use_wandb=use_wandb,
+        array_id=array_id,
+        num_arrays=num_arrays,
+    )
+
+
 if __name__ == "__main__":
-    typer.run(main)
+    app()

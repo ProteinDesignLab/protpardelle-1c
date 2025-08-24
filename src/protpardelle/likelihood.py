@@ -1,4 +1,4 @@
-"""Compute model likelihood.
+"""Entrypoint for Protpardelle-1c likelihood computation.
 
 Authors: Alex Chu, Tianyu Lu
 """
@@ -18,13 +18,19 @@ from protpardelle.core import diffusion
 from protpardelle.core.models import Protpardelle
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
-from protpardelle.env import PROJECT_ROOT_DIR, PROTPARDELLE_MODEL_PARAMS, PROTPARDELLE_OUTPUT_DIR
+from protpardelle.env import (
+    PROJECT_ROOT_DIR,
+    PROTPARDELLE_MODEL_PARAMS,
+    PROTPARDELLE_OUTPUT_DIR,
+)
 from protpardelle.utils import (
     get_default_device,
     load_config,
     seed_everything,
     unsqueeze_trailing_dims,
 )
+
+app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def load_model(model_cfg: Path, model_ckpt: Path):
@@ -310,5 +316,26 @@ def runner(
     print(f"Latents saved to {latent_save_dir}")
 
 
+@app.command()
+def main(
+    model_name: str = typer.Option("cc58", help="Model name, e.g., 'cc58', 'cc89'"),
+    epoch: str = typer.Option("416", help="Epoch number of the model checkpoint"),
+    pdb_path: Path = typer.Option(
+        PROJECT_ROOT_DIR / "examples/motifs/nanobody",
+        help="Path to a .pdb file or a directory containing .pdb files",
+    ),
+    batch_size: int = typer.Option(32, help="Batch size for processing samples"),
+    seed: int | None = typer.Option(None, help="Random seed for reproducibility"),
+):
+    """Compute likelihoods for given PDB files using a specified Protpardelle model."""
+    runner(
+        model_name=model_name,
+        epoch=epoch,
+        pdb_path=pdb_path,
+        batch_size=batch_size,
+        seed=seed,
+    )
+
+
 if __name__ == "__main__":
-    typer.run(runner)
+    app()
