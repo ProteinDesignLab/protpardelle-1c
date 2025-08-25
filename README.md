@@ -184,7 +184,7 @@ python -m protpardelle.sample ./examples/sampling/07_rfdiffusion.yaml --motif-di
 # All-atom La-Proteina / RFdiffusion benchmark
 python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
 
-# Generate structure conditioned on sequence: experimental feature
+# Generate structure conditioned on sequence: experimental feature, useful as a decoy generator
 python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
 ```
 
