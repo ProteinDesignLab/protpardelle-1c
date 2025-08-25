@@ -4,12 +4,10 @@ Authors: Alex Chu, Zhaoyang Li, Tianyu Lu
 """
 
 import argparse
-import os
 import random
 from collections.abc import Callable
 from functools import wraps
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import Any
 
 import numpy as np
 import torch
@@ -17,11 +15,7 @@ import yaml
 from torch.types import Device
 
 from protpardelle.core.models import Protpardelle
-
-if TYPE_CHECKING:
-    from _typeshed import StrPath
-else:
-    StrPath: TypeAlias = str | os.PathLike[str]
+from protpardelle.env import StrPath, norm_path
 
 
 class DotDict(dict):
@@ -160,36 +154,6 @@ def load_model(
     model.eval()
 
     return model
-
-
-def norm_path(
-    path: StrPath,
-    *,
-    expandvars: bool = True,
-    expanduser: bool = True,
-    resolve: bool = True,
-) -> Path:
-    """Normalize a file path.
-
-    Args:
-        path (StrPath): The file path to normalize.
-        expandvars (bool, optional): Whether to expand environment variables. Defaults to True.
-        expanduser (bool, optional): Whether to expand the user directory. Defaults to True.
-        resolve (bool, optional): Whether to resolve the path. Defaults to True.
-
-    Returns:
-        Path: The normalized file path.
-    """
-
-    p = Path(path)
-    if expandvars:
-        p = Path(os.path.expandvars(p))
-    if expanduser:
-        p = p.expanduser()
-    if resolve:
-        p = p.resolve()
-
-    return p
 
 
 def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
