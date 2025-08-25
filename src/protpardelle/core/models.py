@@ -33,8 +33,11 @@ from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.evaluate import design_sequence
 from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import (
+    StrPath,
     apply_dotdict_recursively,
     get_default_device,
+    load_config,
+    norm_path,
     unsqueeze_trailing_dims,
 )
 
@@ -2064,3 +2067,27 @@ class Protpardelle(nn.Module):
             }
         else:
             return xt_traj, x0_traj, st_traj, s0_traj, seq_mask
+
+
+def load_model(
+    config_path: StrPath, checkpoint_path: StrPath, device: Device = None
+) -> Protpardelle:
+    """Load a Protpardelle model from a configuration file and a checkpoint."""
+    if device is None:
+        device = get_default_device()
+    assert isinstance(device, torch.device)  # for mypy
+    config = load_config(config_path)
+
+    checkpoint_path = norm_path(checkpoint_path)
+    state_dict = torch.load(
+        checkpoint_path,
+        map_location=device,
+        weights_only=False,
+    )["model_state_dict"]
+
+    model = Protpardelle(config, device=device)
+    model.load_state_dict(state_dict, strict=False)
+    model.to(device)
+    model.eval()
+
+    return model

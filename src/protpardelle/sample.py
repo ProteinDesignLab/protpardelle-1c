@@ -30,7 +30,7 @@ import protpardelle.data.pdb_io
 import protpardelle.data.sequence
 import protpardelle.utils
 from protpardelle.common import residue_constants
-from protpardelle.core.models import Protpardelle
+from protpardelle.core.models import Protpardelle, load_model
 from protpardelle.data import atom
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
@@ -46,7 +46,6 @@ from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import (
     apply_dotdict_recursively,
     get_default_device,
-    load_model,
     seed_everything,
 )
 
@@ -923,7 +922,9 @@ def sample(
                 nonredundant_success_rate = num_unique_successes / n_samples
 
                 logger.info("Redundant success rate: %d/%d", num_success, n_samples)
-                logger.info("Non-redundant success rate: %d/%d", num_unique_successes, n_samples)
+                logger.info(
+                    "Non-redundant success rate: %d/%d", num_unique_successes, n_samples
+                )
 
                 metrics["redundant_success_rate"] = [redundant_success_rate] * len(
                     metrics
@@ -990,7 +991,9 @@ def sample(
         time_elapsed = time.time() - start_time
 
         logger.info("Sampling concluded after %.2f seconds.", time_elapsed)
-        logger.info("Of this, %.2f seconds were for actual sampling.", total_sampling_time)
+        logger.info(
+            "Of this, %.2f seconds were for actual sampling.", total_sampling_time
+        )
         logger.info("%d total samples were drawn.", n_samples * len(motif_fps))
 
         df_samp_info = pd.DataFrame()

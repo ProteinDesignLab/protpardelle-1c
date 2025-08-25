@@ -14,9 +14,6 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 import numpy as np
 import torch
 import yaml
-from torch.types import Device
-
-from protpardelle.core.models import Protpardelle
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
@@ -136,30 +133,6 @@ def load_config(config_path: StrPath) -> argparse.Namespace:
     config = dict_to_namespace(config_dict)
 
     return config
-
-
-def load_model(
-    config_path: StrPath, checkpoint_path: StrPath, device: Device = None
-) -> Protpardelle:
-    """Load a Protpardelle model from a configuration file and a checkpoint."""
-    if device is None:
-        device = get_default_device()
-    assert isinstance(device, torch.device)  # for mypy
-    config = load_config(config_path)
-
-    checkpoint_path = norm_path(checkpoint_path)
-    state_dict = torch.load(
-        checkpoint_path,
-        map_location=device,
-        weights_only=False,
-    )["model_state_dict"]
-
-    model = Protpardelle(config, device=device)
-    model.load_state_dict(state_dict, strict=False)
-    model.to(device)
-    model.eval()
-
-    return model
 
 
 def norm_path(

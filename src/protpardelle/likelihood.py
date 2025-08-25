@@ -16,6 +16,7 @@ from tqdm.auto import tqdm
 from protpardelle import utils
 from protpardelle.common import residue_constants
 from protpardelle.core import diffusion
+from protpardelle.core.models import load_model
 from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import (
@@ -23,7 +24,7 @@ from protpardelle.env import (
     PROTPARDELLE_MODEL_PARAMS,
     PROTPARDELLE_OUTPUT_DIR,
 )
-from protpardelle.utils import load_model, seed_everything, unsqueeze_trailing_dims
+from protpardelle.utils import seed_everything, unsqueeze_trailing_dims
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

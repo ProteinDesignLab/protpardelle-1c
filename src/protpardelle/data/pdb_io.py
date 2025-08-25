@@ -18,7 +18,6 @@ from protpardelle.data.atom import (
     atom37_mask_from_aatype,
     atom37_to_atom73,
 )
-from protpardelle.utils import StrPath
 
 
 def add_chain_gap(
