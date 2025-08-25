@@ -566,21 +566,9 @@ class PDBDataset(Dataset):
                 data_file, chain_residx_gap=self.chain_residx_gap, chain_id=chain_id
             )
             coords_in = example["atom_positions"]
-        except FileNotFoundError:
-            print(f"File {data_file} not found. Check if dataset is corrupted?")
-            return None
-        except RuntimeError as err_msg:
-            print(f"File {data_file} throws {err_msg}")
-            return None
-        except KeyError as err_msg:
-            print(f"File {data_file} throws {err_msg}")
-            return None
-        except IndexError as err_msg:
-            print(f"File {data_file} throws {err_msg}")
-            return None
-        except IsADirectoryError as err_msg:
-            print(f"File {data_file} throws {err_msg}")
-            return None
+        except Exception as e:
+            print(f"File {data_file} throws {e}")
+            return
 
         # Apply data augmentation
         if self.se3_data_augment:

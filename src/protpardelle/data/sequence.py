@@ -31,9 +31,8 @@ def aatype_to_seq(aatype, seq_mask=None):
             if seq_mask[i][j] == 1:
                 try:
                     seq.append(mapping[aa])
-                except IndexError:
-                    print(aatype[i])
-                    raise Exception(f"Error in mapping {aa} at {i},{j}")
+                except IndexError as e:
+                    raise ValueError(f"Error in mapping {aa} at {i},{j}") from e
         seqs.append("".join(seq))
 
     if unbatched:
