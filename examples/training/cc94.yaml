@@ -1,7 +1,7 @@
 # cc91 but multichain
 train:
   seed: 0
-  ckpt_path: null
+  ckpt_path: ""
   batch_size: 32
   max_epochs: 10000
   eval_freq: 8000000 # seconds
