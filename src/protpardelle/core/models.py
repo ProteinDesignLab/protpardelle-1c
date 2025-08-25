@@ -496,9 +496,6 @@ class Protpardelle(nn.Module):
 
     def __init__(self, config: argparse.Namespace, device: Device = None):
         super().__init__()
-        if device is None:
-            device = get_default_device()
-        self.to(device)
 
         self.config = config
         self.task = config.model.task
@@ -538,6 +535,10 @@ class Protpardelle(nn.Module):
         self.sampling_noise_schedule_sc = partial(
             diffusion.noise_schedule, function="sidechain"
         )
+
+        if device is None:
+            device = get_default_device()
+        self.to(device)
 
     @property
     def device(self) -> torch.device:

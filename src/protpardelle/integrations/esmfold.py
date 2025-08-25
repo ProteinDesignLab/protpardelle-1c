@@ -149,7 +149,7 @@ class EsmForProteinFoldingNew(EsmForProteinFolding):
             lambda x: x.to(device), (aatype, mask, residx, linker_mask)
         )
 
-        output = self.forward(
+        output = self(
             aatype,
             attention_mask=mask,
             position_ids=residx,
