@@ -192,16 +192,24 @@ def norm_path(
     return p
 
 
-def seed_everything(seed: int = 0) -> None:
+def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     """Set the seed for all random number generators.
+    Freeze CUDA for reproducibility if needed.
 
     Args:
         seed (int, optional): The seed value. Defaults to 0.
+        freeze_cuda (bool, optional): Whether to freeze CUDA for reproducibility. Defaults to False.
     """
 
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+    if freeze_cuda:
+        # nonrandom CUDNN convolution algo, maybe slower
+        torch.backends.cudnn.deterministic = True
+        # nonrandom selection of CUDNN convolution, maybe slower
+        torch.backends.cudnn.benchmark = False
 
 
 def unsqueeze_trailing_dims(
