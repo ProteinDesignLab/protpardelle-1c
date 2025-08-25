@@ -9,6 +9,7 @@ train:
   lr: 0.0001
   warmup_steps: 1000
   decay_steps: 2_000_000
+  use_amp: False
   clip_grad_norm: True
   grad_clip_val: 1.0
   weight_decay: 0.0
