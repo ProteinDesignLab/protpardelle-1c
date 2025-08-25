@@ -4,6 +4,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import itertools
+import logging
 import math
 import os
 import shutil
@@ -49,7 +50,11 @@ from protpardelle.utils import (
     seed_everything,
 )
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+
 
 def save_samples(
     aux,
@@ -668,9 +673,9 @@ def sample(
                 ]["strategy"] = "fixed"
                 # Do for each chain
                 chain_motif_contigs = motif_contig.split(";/;")
-                assert len(chain_motif_contigs) == len(length_ranges_per_chain), print(
-                    f"Contig {motif_contig} has {len(chain_motif_contigs)} chains but length ranges specify {len(length_ranges_per_chain)} chains."
-                )
+                assert len(chain_motif_contigs) == len(
+                    length_ranges_per_chain
+                ), f"Contig {motif_contig} has {len(chain_motif_contigs)} chains but length ranges specify {len(length_ranges_per_chain)} chains."
                 prev_length = 0
                 for ci, chain_motif_contig in enumerate(chain_motif_contigs):
                     (
@@ -708,7 +713,10 @@ def sample(
                 repack_seq = motif_contig.split("/")[-1]
                 sampling_config["sampling"]["partial_diffusion"]["seq"] = repack_seq
 
-            if model_info == (None, None) or model_info != (config_path, checkpoint_path):
+            if model_info == (None, None) or model_info != (
+                config_path,
+                checkpoint_path,
+            ):
                 model = load_model(config_path, checkpoint_path)
                 model_info = (config_path, checkpoint_path)
 
@@ -752,7 +760,7 @@ def sample(
             curr_runtime = aux[-2]["runtime"]
             total_sampling_time += curr_runtime
 
-            print(f"Sampling {motif_fp.stem} took {curr_runtime:.2f} seconds.")
+            logger.info("Sampling %s took %.2f seconds.", motif_fp.stem, curr_runtime)
 
             # save motif placements
             df_scaffold_info = defaultdict(list)
@@ -914,8 +922,8 @@ def sample(
                 redundant_success_rate = num_success / n_samples
                 nonredundant_success_rate = num_unique_successes / n_samples
 
-                print(f"Redundant success rate: {num_success}/{n_samples}")
-                print(f"Non-redundant success rate: {num_unique_successes}/{n_samples}")
+                logger.info("Redundant success rate: %d/%d", num_success, n_samples)
+                logger.info("Non-redundant success rate: %d/%d", num_unique_successes, n_samples)
 
                 metrics["redundant_success_rate"] = [redundant_success_rate] * len(
                     metrics
@@ -981,9 +989,9 @@ def sample(
 
         time_elapsed = time.time() - start_time
 
-        print(f"Sampling concluded after {time_elapsed:.2f} seconds.")
-        print(f"Of this, {total_sampling_time:.2f} seconds were for actual sampling.")
-        print(f"{n_samples * len(motif_fps)} total samples were drawn.")
+        logger.info("Sampling concluded after %.2f seconds.", time_elapsed)
+        logger.info("Of this, %.2f seconds were for actual sampling.", total_sampling_time)
+        logger.info("%d total samples were drawn.", n_samples * len(motif_fps))
 
         df_samp_info = pd.DataFrame()
         df_samp_info["pdb_path"] = all_samp_save_names

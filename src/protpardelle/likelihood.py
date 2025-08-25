@@ -3,6 +3,7 @@
 Authors: Alex Chu, Tianyu Lu
 """
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 
@@ -23,6 +24,9 @@ from protpardelle.env import (
     PROTPARDELLE_OUTPUT_DIR,
 )
 from protpardelle.utils import load_model, seed_everything, unsqueeze_trailing_dims
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -203,7 +207,7 @@ def forward_ode(
     }
     if verbose:
         for k, v in results.items():
-            print(k, v)
+            logger.info("%s: %s", k, v)
     return results
 
 
@@ -290,8 +294,8 @@ def runner(
     df["pdb_stem"] = pdb_stems
     df.to_csv(save_dir / "likelihood_result.csv", float_format="%.4f", index=False)
 
-    print(f"Likelihood results saved to {save_dir / 'likelihood_result.csv'}")
-    print(f"Latents saved to {latent_save_dir}")
+    logger.info("Likelihood results saved to %s", save_dir / "likelihood_result.csv")
+    logger.info("Latents saved to %s", latent_save_dir)
 
 
 @app.command()
