@@ -1,7 +1,7 @@
 # MiniMPNN trained on 1-step cc58 x0 structures
 train:
   seed: 0
-  ckpt_path: ""
+  ckpt_path: null
   batch_size: 32
   max_epochs: 10000
   eval_freq: 8000000 # seconds
