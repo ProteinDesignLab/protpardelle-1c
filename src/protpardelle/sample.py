@@ -422,7 +422,7 @@ def generate(
         runtime += samp_aux_bi["runtime"]
         sequences.extend(samp_aux_bi["s"])
         atom_mask.extend(samp_aux_bi["atom_mask"])
-    atom_mask = torch.stack(atom_mask)
+
     motif_coords = torch.cat(motif_coords, dim=0) if motif_coords else None
     if len(motif_aatypes) == 0:
         motif_idx = None
