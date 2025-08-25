@@ -8,42 +8,8 @@ import shutil
 import subprocess
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeAlias
 
-if TYPE_CHECKING:
-    from _typeshed import StrPath
-else:
-    StrPath: TypeAlias = str | os.PathLike[str]
-
-
-def norm_path(
-    path: StrPath,
-    *,
-    expandvars: bool = True,
-    expanduser: bool = True,
-    resolve: bool = True,
-) -> Path:
-    """Normalize a file path.
-
-    Args:
-        path (StrPath): The file path to normalize.
-        expandvars (bool, optional): Whether to expand environment variables. Defaults to True.
-        expanduser (bool, optional): Whether to expand the user directory. Defaults to True.
-        resolve (bool, optional): Whether to resolve the path. Defaults to True.
-
-    Returns:
-        Path: The normalized file path.
-    """
-
-    p = Path(path)
-    if expandvars:
-        p = Path(os.path.expandvars(p))
-    if expanduser:
-        p = p.expanduser()
-    if resolve:
-        p = p.resolve()
-
-    return p
+from protpardelle.utils import norm_path
 
 
 def _detect_project_root_dir() -> Path:
