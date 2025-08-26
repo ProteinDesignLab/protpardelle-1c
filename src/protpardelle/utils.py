@@ -204,9 +204,9 @@ def unsqueeze_trailing_dims(
 
     if target is None:
         for _ in range(add_ndims):
-            x = x[..., None]
+            x = x.unsqueeze(-1)
     else:
         while len(x.shape) < len(target.shape):
-            x = x[..., None]
+            x = x.unsqueeze(-1)
 
     return x

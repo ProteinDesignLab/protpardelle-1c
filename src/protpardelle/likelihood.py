@@ -91,7 +91,7 @@ def forward_ode(
         atom_mask = get_backbone_mask(batch["atom_mask"]) * batch["atom_mask"]
     else:
         atom_mask = batch["atom_mask"]
-    atom_mask = (torch.ones_like(batch["atom_positions"]) * atom_mask[..., None]).to(
+    atom_mask = (torch.ones_like(batch["atom_positions"]) * atom_mask.unsqueeze(-1)).to(
         device
     )
 

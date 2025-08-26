@@ -144,8 +144,8 @@ def compute_structure_metric(coords1, coords2, metric="ca_rmsd", atom_mask=None)
     ca_rmsd = (aligned_coords1_ca - coords2[:, 1]).pow(2).sum(-1).mean().sqrt()
 
     if "allatom" in metric:
-        aligned_coords1_masked = aligned_coords1 * atom_mask[..., None]
-        coords2_masked = coords2 * atom_mask[..., None]
+        aligned_coords1_masked = aligned_coords1 * atom_mask.unsqueeze(-1)
+        coords2_masked = coords2 * atom_mask.unsqueeze(-1)
         allatom_rmsd = torch.sqrt(
             (aligned_coords1_masked - coords2_masked).pow(2).sum(-1).sum()
             / atom_mask.sum()

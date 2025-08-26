@@ -15,10 +15,10 @@ from protpardelle.utils import norm_path
 def _detect_project_root_dir() -> Path:
     """Determine the project root directory with the following priority:
 
-    1) Explicit environment variable PROJECT_ROOT_DIR
-    2) Search upward from current file for directory containing pyproject.toml
-    3) git rev-parse --show-toplevel
-    4) Fallback: parent directory of the package src directory
+    1) Explicit environment variable `PROJECT_ROOT_DIR`
+    2) Search upward from current file for directory containing `pyproject.toml`
+    3) `git rev-parse --show-toplevel`
+    4) Fallback: parent directory of the package `src` directory
     """
 
     project_root_dir_env = os.getenv("PROJECT_ROOT_DIR")

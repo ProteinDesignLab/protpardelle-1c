@@ -351,7 +351,7 @@ class CoordinateDenoiser(nn.Module):
                 ):
                     hotspot_mask_rep = torch.stack(
                         [hotspot_mask.clone() for _ in range(emb.shape[-2])], dim=-1
-                    )[..., None]
+                    ).unsqueeze(-1)
                     hotspot_mask_rep[:, :, 3] = 0
                     hotspot_mask_rep[:, :, 5:] = 0
 
@@ -381,7 +381,7 @@ class CoordinateDenoiser(nn.Module):
             and "ssadj" in self.config.model.conditioning_style
         ):
             sse_cond = F.one_hot(sse_cond, num_classes=3)
-            sse_cond = sse_cond[..., None, :].expand(
+            sse_cond = sse_cond.unsqueeze(-2).expand(
                 -1, -1, emb.shape[-2], -1
             )  # expand along atom dimension to match emb shape
             emb = torch.cat([emb, sse_cond], dim=-1)
@@ -670,7 +670,7 @@ class Protpardelle(nn.Module):
                 seq_crop_cond=seq_crop_cond,
                 return_embeddings=False,
             )
-            aatype_logprobs = aatype_logprobs * seq_mask[..., None]
+            aatype_logprobs = aatype_logprobs * seq_mask.unsqueeze(-1)
 
         # Process outputs
         if aatype_logprobs is None:  # uniform prior on sequence without Mini-MPNN
@@ -733,13 +733,13 @@ class Protpardelle(nn.Module):
         residue_index = repeat(
             torch.arange(1, max_len + 1), "n -> b n", b=n_samples
         ).float()
-        mask = (residue_index <= total_prot_lens[:, None]).float().to(self.device)
+        mask = (residue_index <= total_prot_lens.unsqueeze(-1)).float().to(self.device)
 
         # Get chain IDs
         cum_lens = torch.cumsum(prot_lens_per_chain, dim=1)
         chain_index = torch.zeros_like(residue_index).long()
         for ci in range(cum_lens.shape[1]):
-            chain_index += (residue_index > cum_lens[:, ci][:, None]).long()
+            chain_index += (residue_index > cum_lens[:, ci].unsqueeze(-1)).long()
 
         # Add residue index gap between chains
         if chain_residx_gap is None:
@@ -975,7 +975,7 @@ class Protpardelle(nn.Module):
                 )
             else:
                 motif_all_atom = torch.tile(
-                    motif_all_atom[None], dims=(batch_size, 1, 1, 1)
+                    motif_all_atom.unsqueeze(0), dims=(batch_size, 1, 1, 1)
                 )
 
             if motif_all_atom_stage1 is not None:
@@ -996,7 +996,7 @@ class Protpardelle(nn.Module):
                 motif_all_atom = torch.einsum(
                     "bij,blnj->blni", random_rots, motif_all_atom
                 )
-                motif_all_atom = motif_all_atom * motif_atom_mask[..., None].to(
+                motif_all_atom = motif_all_atom * motif_atom_mask.unsqueeze(-1).to(
                     motif_all_atom
                 )
 
@@ -1040,7 +1040,7 @@ class Protpardelle(nn.Module):
                 and guidance_in is not None
             ):
                 guidance, guidance_mask = guidance_in
-                guidance = guidance * guidance_mask[..., None]
+                guidance = guidance * guidance_mask.unsqueeze(-1)
                 guidance_scale = get_time_dependent_scale(
                     cc.reconstruction_guidance.schedule,
                     cc.reconstruction_guidance.max_scale,
@@ -1380,7 +1380,7 @@ class Protpardelle(nn.Module):
             if sidechain_mode and jump_steps:
                 # Fill in noise for masked positions since xt is initialized to zeros at each step
                 zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
-                dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
 
                 if dummy_fill_mode == "CA":
                     if x0 is not None:
@@ -1398,12 +1398,12 @@ class Protpardelle(nn.Module):
                         sigma, xt
                     )
 
-                xt *= zero_atom_mask[..., None]
+                xt *= zero_atom_mask.unsqueeze(-1)
                 xt += dummy_fill_noise * dummy_fill_mask
                 atom_mask = zero_atom_mask
 
                 if self.config.model.task == "ai-allatom-hybrid":
-                    xt *= bb_atom_mask[..., None]
+                    xt *= bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
 
             if self.config.model.task == "ai-allatom" and uniform_steps:
@@ -1418,7 +1418,7 @@ class Protpardelle(nn.Module):
                     ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
                     ai_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
-                xt *= ai_atom_mask[..., None]
+                xt *= ai_atom_mask.unsqueeze(-1)
                 atom_mask = ai_atom_mask
             elif self.config.model.task == "ai-allatom-nomask" and uniform_steps:
                 if pd.enabled:
@@ -1436,7 +1436,7 @@ class Protpardelle(nn.Module):
                     zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
 
                 if x0 is not None:
-                    dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
                     if dummy_fill_mode == "zero":
                         dummy_fill_noise = torch.randn_like(
                             xt
@@ -1446,12 +1446,12 @@ class Protpardelle(nn.Module):
                             torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                             + x0[:, :, 1:2, :]
                         )
-                    xt *= zero_atom_mask[..., None]
+                    xt *= zero_atom_mask.unsqueeze(-1)
                     xt += dummy_fill_noise * dummy_fill_mask
                 atom_mask = zero_atom_mask
             elif self.config.model.task == "ai-allatom-hybrid" and uniform_steps:
                 if i < (0.5 * n_steps):
-                    xt *= bb_atom_mask[..., None]
+                    xt *= bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
                 else:
                     if pd.enabled:
@@ -1467,7 +1467,7 @@ class Protpardelle(nn.Module):
                         zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
 
                     if x0 is not None:
-                        dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                        dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
                         if dummy_fill_mode == "zero":
                             dummy_fill_noise = torch.randn_like(
                                 xt
@@ -1478,11 +1478,11 @@ class Protpardelle(nn.Module):
                                 * unsqueeze_trailing_dims(sigma, xt)
                                 + x0[:, :, 1:2, :]
                             )
-                        xt *= zero_atom_mask[..., None]
+                        xt *= zero_atom_mask.unsqueeze(-1)
                         xt += dummy_fill_noise * dummy_fill_mask
                     atom_mask = zero_atom_mask
             elif self.config.model.task == "backbone":
-                xt *= bb_atom_mask[..., None]
+                xt *= bb_atom_mask.unsqueeze(-1)
                 atom_mask = bb_atom_mask
 
             # Structure denoising step
@@ -1529,7 +1529,7 @@ class Protpardelle(nn.Module):
                                 ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
-                            xt_hat *= ai_atom_mask[..., None]
+                            xt_hat *= ai_atom_mask.unsqueeze(-1)
                             atom_mask = ai_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-nomask"
@@ -1557,7 +1557,7 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
                                 if dummy_fill_mode == "zero":
                                     dummy_fill_noise = torch.randn_like(
                                         xt_hat
@@ -1568,7 +1568,7 @@ class Protpardelle(nn.Module):
                                         * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                         + x0[:, :, 1:2, :]
                                     )
-                                xt_hat *= zero_atom_mask[..., None]
+                                xt_hat *= zero_atom_mask.unsqueeze(-1)
                                 xt_hat += dummy_fill_noise * dummy_fill_mask
                             atom_mask = zero_atom_mask
                         elif (
@@ -1576,7 +1576,7 @@ class Protpardelle(nn.Module):
                             and uniform_steps
                         ):
                             if i < (0.5 * n_steps):
-                                xt_hat *= bb_atom_mask[..., None]
+                                xt_hat *= bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
                                 if pd.enabled:
@@ -1603,7 +1603,7 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
                                     if dummy_fill_mode == "zero":
                                         dummy_fill_noise = torch.randn_like(
                                             xt_hat
@@ -1614,11 +1614,11 @@ class Protpardelle(nn.Module):
                                             * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                             + x0[:, :, 1:2, :]
                                         )
-                                    xt_hat *= zero_atom_mask[..., None]
+                                    xt_hat *= zero_atom_mask.unsqueeze(-1)
                                     xt_hat += dummy_fill_noise * dummy_fill_mask
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
-                            xt_hat *= bb_atom_mask[..., None]
+                            xt_hat *= bb_atom_mask.unsqueeze(-1)
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()
@@ -1712,7 +1712,7 @@ class Protpardelle(nn.Module):
                                 ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
-                            xt_hat *= ai_atom_mask[..., None]
+                            xt_hat *= ai_atom_mask.unsqueeze(-1)
                             atom_mask = ai_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-nomask"
@@ -1739,7 +1739,7 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
 
                                 if dummy_fill_mode == "zero":
                                     dummy_fill_noise = torch.randn_like(
@@ -1751,7 +1751,7 @@ class Protpardelle(nn.Module):
                                         * unsqueeze_trailing_dims(sigma, xt)
                                         + x0[:, :, 1:2, :]
                                     )
-                                xt_hat *= zero_atom_mask[..., None]
+                                xt_hat *= zero_atom_mask.unsqueeze(-1)
                                 xt_hat += dummy_fill_noise * dummy_fill_mask
                             atom_mask = zero_atom_mask
                         elif (
@@ -1759,7 +1759,7 @@ class Protpardelle(nn.Module):
                             and uniform_steps
                         ):
                             if i < (0.5 * n_steps):
-                                xt_hat *= bb_atom_mask[..., None]
+                                xt_hat *= bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
                                 if pd.enabled:
@@ -1785,7 +1785,7 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask[..., None]
+                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
 
                                     if dummy_fill_mode == "zero":
                                         dummy_fill_noise = torch.randn_like(
@@ -1797,11 +1797,11 @@ class Protpardelle(nn.Module):
                                             * unsqueeze_trailing_dims(sigma, xt)
                                             + x0[:, :, 1:2, :]
                                         )
-                                    xt_hat *= zero_atom_mask[..., None]
+                                    xt_hat *= zero_atom_mask.unsqueeze(-1)
                                     xt_hat += dummy_fill_noise * dummy_fill_mask
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
-                            xt_hat *= bb_atom_mask[..., None]
+                            xt_hat *= bb_atom_mask.unsqueeze(-1)
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()

@@ -138,7 +138,7 @@ def apply_random_se3(
     random_trans = torch.randn_like(coords_mean) * translation_scale
     coords_in += random_trans
     if atom_mask is not None:
-        coords_in = coords_in * atom_mask[..., None]
+        coords_in = coords_in * atom_mask.unsqueeze(-1)
     if return_rot:
         return coords_in, random_rot
     else:
@@ -187,13 +187,13 @@ def dummy_fill(
     else:
         dummy_fill_value = 0
     coords_in = (
-        coords_in * atom_mask[..., None] + dummy_fill_value * dummy_fill_mask[..., None]
+        coords_in * atom_mask.unsqueeze(-1) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
     )
     return coords_in
 
 
 def get_masked_coords_array(coords, atom_mask):
-    ma_mask = repeat(1 - atom_mask[..., None].cpu().numpy(), "... 1 -> ... 3")
+    ma_mask = repeat(1 - atom_mask.unsqueeze(-1).cpu().numpy(), "... 1 -> ... 3")
     return np.ma.array(coords.cpu().numpy(), mask=ma_mask)
 
 

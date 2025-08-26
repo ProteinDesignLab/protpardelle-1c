@@ -55,7 +55,7 @@ def lddt(
     dmat_true = torch.sqrt(
         eps
         + torch.sum(
-            (all_atom_positions[..., None, :] - all_atom_positions[..., None, :, :])
+            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3))
             ** 2,
             dim=-1,
         )
@@ -64,7 +64,7 @@ def lddt(
     dmat_pred = torch.sqrt(
         eps
         + torch.sum(
-            (all_atom_pred_pos[..., None, :] - all_atom_pred_pos[..., None, :, :]) ** 2,
+            (all_atom_pred_pos.unsqueeze(-2) - all_atom_pred_pos.unsqueeze(-3)) ** 2,
             dim=-1,
         )
     )
@@ -103,14 +103,12 @@ class RelativePositionalEncoding(nn.Module):
     def forward(self, index):
         if self.relchain:
             d_ij = torch.clamp(
-                torch.abs(index[..., None] - index[..., None, :]), min=0, max=1
+                torch.abs(index.unsqueeze(-1) - index.unsqueeze(-2)), min=0, max=1
             )
-            # d_ij = torch.abs(index[..., None] - index[..., None, :])
-            # d_ij = index[..., None] - index[..., None, :]
         else:
-            d_ij = index[..., None] - index[..., None, :]
+            d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
         v_bins = torch.arange(self.n_rel_pos).to(d_ij.device) - self.max_rel_idx
-        idxs = (d_ij[..., None] - v_bins[None, None]).abs().argmin(-1)
+        idxs = (d_ij.unsqueeze(-1) - v_bins[None, None]).abs().argmin(-1)
         p_ij = F.one_hot(idxs, num_classes=self.n_rel_pos)
         embeddings = self.linear(p_ij.float())
         return embeddings
@@ -135,7 +133,7 @@ def apply_rotary_emb(
         seq_len = t.shape[seq_dim]
         freqs = freqs[:, -seq_len:].to(t)
 
-    freqs = freqs[..., None, :, :]  # add attn head dimension
+    freqs = freqs.unsqueeze(-3)  # add attn head dimension
     rot_dim = freqs.shape[-1]
     end_index = start_index + rot_dim
 
@@ -238,7 +236,7 @@ class RotaryEmbedding(nn.Module):
         self.apply_rotary_emb = staticmethod(apply_rotary_emb)
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
         return self.dummy.device
 
     def tmp_store(self, key, value):
@@ -263,7 +261,7 @@ class RotaryEmbedding(nn.Module):
             seq_pos = residx
         else:
             seq_pos = torch.arange(seq_len, device=device, dtype=dtype) + offset
-            seq_pos = seq_pos[None, :].expand(B, -1)
+            seq_pos = seq_pos.unsqueeze(0).expand(B, -1)
         return seq_pos / self.interpolate_factor
 
     def rotate_queries_or_keys(
@@ -486,7 +484,7 @@ def posemb_sincos_1d(patches, temperature=10000, residue_index=None):
     omega = torch.arange(dim // 2, device=device) / (dim // 2 - 1)
     omega = 1.0 / (temperature**omega)
 
-    n = n[..., None] * omega
+    n = n.unsqueeze(-1) * omega
     pe = torch.cat((n.sin(), n.cos()), dim=-1)
     return pe.type(dtype)
 
@@ -682,7 +680,7 @@ class TimeCondAttention(nn.Module):
             context = self.norm_context(context)
 
         if seq_mask is not None:
-            x = x * seq_mask[..., None]
+            x = x * seq_mask.unsqueeze(-1)
 
         qkv = (self.to_q(x), *self.to_kv(context).chunk(2, dim=-1))
         q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=h), qkv)
@@ -699,7 +697,7 @@ class TimeCondAttention(nn.Module):
                 attn_bias = self.attn_bias_proj(attn_bias)
             sim += attn_bias
         if seq_mask is not None:
-            attn_mask = torch.einsum("b i, b j -> b i j", seq_mask, seq_mask)[:, None]
+            attn_mask = torch.einsum("b i, b j -> b i j", seq_mask, seq_mask).unsqueeze(1)
             sim -= (1 - attn_mask) * 1e6
         attn = sim.softmax(dim=-1)
 
@@ -713,7 +711,7 @@ class TimeCondAttention(nn.Module):
             out = out * (alpha_1 + 1)
 
         if seq_mask is not None:
-            out = out * seq_mask[..., None]
+            out = out * seq_mask.unsqueeze(-1)
 
         out = self.out_dropout(out)
 
@@ -929,7 +927,7 @@ class TimeCondTransformer(nn.Module):
                 pos_emb = self.relpos(residue_index)
             attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
         if seq_mask is not None:
-            x = x * seq_mask[..., None]
+            x = x * seq_mask.unsqueeze(-1)
 
         # Begin transformer layers
         for i, (attn, ff) in enumerate(self.layers):
@@ -946,7 +944,7 @@ class TimeCondTransformer(nn.Module):
             x = x + ff(x, time=time, motif=motif)
 
             if seq_mask is not None:
-                x = x * seq_mask[..., None]
+                x = x * seq_mask.unsqueeze(-1)
 
         return x
 

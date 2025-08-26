@@ -116,7 +116,7 @@ def noise_coords(
     else:
         dummy_fill_value = coords[..., 1:2, :]  # CA
     coords = (
-        coords * atom_mask[..., None] + dummy_fill_value * dummy_fill_mask[..., None]
+        coords * atom_mask.unsqueeze(-1) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
     )
 
     noise = torch.randn_like(coords) * unsqueeze_trailing_dims(noise_level, coords)

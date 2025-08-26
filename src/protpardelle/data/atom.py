@@ -14,12 +14,12 @@ def atom37_mask_from_aatype(
 ) -> torch.Tensor:
     # source_mask is (21,37) originally
     source_mask = torch.tensor(residue_constants.restype_atom37_mask).to(aatype)
-    bb_atoms = source_mask[residue_constants.restype_order["G"]][None]
+    bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
     atom_mask = source_mask[aatype]
     if seq_mask is not None:
-        atom_mask = atom_mask * seq_mask[..., None]
+        atom_mask = atom_mask * seq_mask.unsqueeze(-1)
 
     return atom_mask
 
@@ -27,12 +27,12 @@ def atom37_mask_from_aatype(
 def atom14_mask_from_aatype(aatype, seq_mask=None):
     # source_mask is (21,14) originally
     source_mask = torch.tensor(residue_constants.restype_atom14_mask).to(aatype.device)
-    bb_atoms = source_mask[residue_constants.restype_order["G"]][None]
+    bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
     atom_mask = source_mask[aatype]
     if seq_mask is not None:
-        atom_mask *= seq_mask[..., None]
+        atom_mask = atom_mask * seq_mask.unsqueeze(-1)
     return atom_mask
 
 
@@ -120,7 +120,7 @@ def atom73_mask_from_aatype(aatype, seq_mask=None):
     source_mask = torch.tensor(residue_constants.restype_atom73_mask).to(aatype.device)
     atom_mask = source_mask[aatype]
     if seq_mask is not None:
-        atom_mask *= seq_mask[..., None]
+        atom_mask = atom_mask * seq_mask.unsqueeze(-1)
     return atom_mask
 
 

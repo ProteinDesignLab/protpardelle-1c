@@ -100,7 +100,7 @@ def save_samples(
             dummy_aatype = (
                 seq_mask[idx][seq_mask[idx] == 1] * residue_constants.restype_order["G"]
             ).long()
-            dummy_aatype = torch.tile(dummy_aatype[None], dims=(len(sampled_coords), 1))
+            dummy_aatype = torch.tile(dummy_aatype.unsqueeze(0), dims=(len(sampled_coords), 1))
 
         if samp_aux["motif_idx"] is not None and len(samp_aux["motif_idx"]) > 0:
             for ii, mi in enumerate(samp_aux["motif_idx"][idx]):
@@ -734,10 +734,10 @@ def sample(
             if ssadj_fp is not None:
                 sse_cond = torch.from_numpy(
                     torch.load(motif_dir / f"{ssadj_fp[0]}.pt", weights_only=False)
-                ).long()[None]
+                ).long().unsqueeze(0)
                 adj_cond = torch.load(
                     motif_dir / f"{ssadj_fp[1]}.pt", weights_only=False
-                ).long()[None]
+                ).long().unsqueeze(0)
 
             aux = generate(
                 model,
