@@ -243,7 +243,7 @@ class ProtpardelleTrainer:
         """
 
         checkpoint_path = norm_path(checkpoint_path)
-        if not checkpoint_path.exists():
+        if not checkpoint_path.is_file():
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
         checkpoint = torch.load(
             checkpoint_path, map_location=self.device, weights_only=False
@@ -422,7 +422,9 @@ class ProtpardelleTrainer:
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
         # Some backbone atoms may be missing; mask them to zeros
-        bb_atom_mask = bb_atom_mask & atom_mask
+        bb_atom_mask = torch.logical_and(
+            bb_atom_mask, atom_mask
+        )  # both masks are float; cannot use &
         if self.config.model.task == "backbone":
             noised_coords = noised_coords * bb_atom_mask.unsqueeze(-1)
         elif self.config.model.task == "ai-allatom":
@@ -574,7 +576,7 @@ def train(
     trainer = ProtpardelleTrainer(config, device)
 
     checkpoint_path = norm_path(trainer.config.train.ckpt_path)
-    if checkpoint_path.exists():
+    if checkpoint_path.is_file():
         start_epoch, total_steps = trainer.load_checkpoint(checkpoint_path)
     else:
         start_epoch = 0
@@ -670,11 +672,11 @@ def main(
     config_path: str = typer.Option(..., help="Path to the config file."),
     output_dir: str = typer.Option(..., help="Path to the output directory."),
     device: str | None = typer.Option(None, help="Device to use for training."),
-    project_name: str = typer.Option("other", help="Project name for wandb."),
+    project_name: str | None = typer.Option(None, help="Project name for wandb."),
     wandb_id: str | None = typer.Option(None, help="User/entity ID for wandb."),
     exp_name: str | None = typer.Option(None, help="Run/experiment name for wandb."),
     overfit: int = typer.Option(
-        0, help="Number of examples to overfit to (0 disables)."
+        0, min=0, help="Number of examples to overfit to (0 disables)."
     ),
     num_workers: int = typer.Option(0, min=0, help="DataLoader num_workers."),
     debug: bool = typer.Option(False, help="Run one batch and eval offline."),

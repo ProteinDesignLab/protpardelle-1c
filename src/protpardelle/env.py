@@ -27,7 +27,7 @@ def _detect_project_root_dir() -> Path:
 
     here = norm_path(__file__)
     for parent_dir in (here, *here.parents):
-        if (parent_dir / "pyproject.toml").exists():
+        if (parent_dir / "pyproject.toml").is_file():
             return parent_dir
 
     try:

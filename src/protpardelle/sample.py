@@ -17,7 +17,6 @@ import hydra
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 import typer
 import wandb
 from Bio import SeqIO
@@ -472,7 +471,7 @@ def generate(
 
 def sample(
     sampling_yaml_path: Path,
-    project: str = "protpardelle-1c-sampling",
+    project_name: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
@@ -487,7 +486,7 @@ def sample(
 
     Args:
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
-        project (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
+        project_name (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
         motif_dir (Path, optional): Folder containing motifs to scaffold. Defaults to Path("motifs/nanobody").
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
@@ -595,7 +594,7 @@ def sample(
 
         if use_wandb and num_mpnn_seqs > 0:
             wandb.init(
-                project=project,
+                project=project_name,
                 name=save_suffix,
                 config=sampling_config,
             )
@@ -1014,7 +1013,7 @@ def sample(
 
 @app.command()
 def main(
-    project: str = typer.Option("protpardelle-1c-sampling", help="wandb project name"),
+    project_name: str = typer.Option("protpardelle-1c-sampling", help="wandb project name"),
     motif_dir: Path = typer.Option(
         Path("motifs/nanobody"), help="Directory containing motif PDBs"
     ),
@@ -1040,7 +1039,7 @@ def main(
 ) -> None:
     sample(
         sampling_yaml_path=sampling_yaml_path,
-        project=project,
+        project_name=project_name,
         motif_dir=motif_dir,
         num_samples=num_samples,
         num_mpnn_seqs=num_mpnn_seqs,

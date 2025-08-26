@@ -297,7 +297,7 @@ For example, to run a training job for the `cc58` model and save outputs to `/pa
 sbatch scripts/train.sbatch cc58 /path/to/experiments
 
 # Run in debug mode (runs on the login node without submitting a job)
-bash scripts/train.sbatch cc58 /path/to/experiments --debug
+source scripts/train.sbatch cc58 /path/to/experiments --debug
 ```
 
 A copy of the training config and model checkpoints will be saved under the specified output directory. You can also set the `WANDB_CACHE_DIR` environment variable to control where wandb stores its cache.

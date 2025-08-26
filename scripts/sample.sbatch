@@ -25,8 +25,8 @@ num_mpnn_seqs=$4
 use_wandb=$5
 
 python -m protpardelle.sample \
-    "${run_name}" \
+    --project-name "${run_name}" \
     --motif-dir "${motif_dir}" \
     --num-samples "${num_samples}" \
     --num-mpnn-seqs "${num_mpnn_seqs}" \
-    "${use_wandb}"
+    ${use_wandb:+$use_wandb}
