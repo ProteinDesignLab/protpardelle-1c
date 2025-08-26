@@ -435,39 +435,39 @@ class PDBDataset(Dataset):
         pdb_path: str,
         fixed_size: int,
         mode: str = "train",
-        overfit: int = -1,
+        overfit: int = 0,
         short_epoch: bool = False,
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
         dummy_fill_mode: str = "zero",
         subset: str | float = "",
-    ):
-        """_summary_
+    ) -> None:
+        """Initialize the PDBDataset.
 
-        Parameters
-        ----------
-        pdb_path : str
-            Path to PDB file
-        fixed_size : int
-            Length dimensionality to trim/pad tensors.
-        mode : str, optional
-            Training or evaluation mode, by default "train"
-        overfit : int, optional
-            For debugging: if > 0, overfits to a small subset, by default -1
-        short_epoch : bool, optional
-            For debugging: if True, stop an epoch early , by default False
-        se3_data_augment : bool, optional
-            Randomly rotate and translate the input coordinates, by default True
-        translation_scale : float, optional
-            Gaussian noise to add as translation perturbation, by default 1.0
-        chain_residx_gap : int, optional
-            Amount to add to the residue index that spaces two chains, by default 200
-        dummy_fill_mode : str, optional
-            How to fill the non-existing atom coordinate dimensions, by default "zero"
-        subset : str | float, optional
-            Dataset-specific subset tag to train on, by default ""
+        Args:
+            pdb_path (str): Path to the input PDB file.
+            fixed_size (int): Target length used to trim or pad per-example tensors.
+            mode (str, optional): Operating mode, either "train" or "eval".
+                Defaults to "train".
+            overfit (int, optional): For debugging: if > 0, restrict the dataset
+                to a small subset of this size to intentionally overfit. Defaults to 0.
+            short_epoch (bool, optional): For debugging: if True, stop an epoch early
+                to shorten iteration time. Defaults to False.
+            se3_data_augment (bool, optional): Apply random SE(3) rotation and
+                translation to input coordinates. Defaults to True.
+            translation_scale (float, optional): Standard deviation of the Gaussian
+                translational perturbation (in the same units as coordinates).
+                Defaults to 1.0.
+            chain_residx_gap (int, optional): Offset added to residue indices to
+                separate chains. Defaults to 200.
+            dummy_fill_mode (str, optional): Strategy to fill coordinates for
+                non-existing atoms (e.g., "zero"). Defaults to "zero".
+            subset (str | float, optional): Dataset-specific subset identifier to
+                train on; if a float in (0, 1], interpreted as a fraction of data
+                to sample. Defaults to "".
         """
+
         self.pdb_path = pdb_path
         self.fixed_size = fixed_size
         self.mode = mode
