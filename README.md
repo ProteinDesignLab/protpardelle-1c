@@ -149,34 +149,34 @@ We recommend reading and running the example sampling configs under `examples/sa
 # Activate installed environment
 
 # Unconditional sampling
-python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
 
 # Partial diffusion
-python -m protpardelle.sample ./examples/sampling/01_partial_diffusion.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
 
 # Motif scaffolding
-python -m protpardelle.sample ./examples/sampling/02_motif_scaffolding.yaml --motif-dir ./examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
 
 # MotifBench benchmark
-python -m protpardelle.sample ./examples/sampling/03_motifbench.yaml --motif-dir ./examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --use-wandb
+python -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --use-wandb
 
 # BindCraft benchmark
-python -m protpardelle.sample ./examples/sampling/04_bindcraft.yaml --motif-dir ./examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2
+python -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2
 
 # Multichain
-python -m protpardelle.sample ./examples/sampling/05_multichain.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/05_multichain.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
 
 # Thread in a new sequence given a backbone: experimental feature
-python -m protpardelle.sample ./examples/sampling/06_fastrelax.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/06_fastrelax.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
 
 # Backbone-only La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample ./examples/sampling/07_rfdiffusion.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+python -m protpardelle.sample examples/sampling/07_rfdiffusion.yaml --motif-dir examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # All-atom La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample ./examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir ./examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+python -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # Generate structure conditioned on sequence: experimental feature, useful as a decoy generator
-python -m protpardelle.sample ./examples/sampling/09_structure_prediction.yaml --motif-dir ./examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
 ```
 
 ## Sampling Examples
@@ -239,19 +239,16 @@ For fold-conditioning, the stems of the output files from running the `make_secs
 
 The sampling outputs are saved in a nested folder structure where the levels are organized as such:
 
-```
-
+```text
 PROTPARDELLE_OUTPUT_DIR
 └── sampling-experiment-name
     └── model-epoch-sampling_config-stepscale-schurn-ccstart-dx-dy-dz-rewind
         └── motif-pdb-stem
-
 ```
 
 For example, the demo `02_motif_scaffolding` with default sampling settings will generate the following folder structure under `PROTPARDELLE_OUTPUT_DIR`:
 
-```
-
+```text
 02_motif_scaffolding
 └── cc58-epoch416-sampling_sidechain_conditional-ss1.2-schurn200-ccstart0.0-dx0.0-dy0.0-dz0.0-rewindNone
     └── 7eow_CDR3_atom_rot_128
@@ -268,7 +265,6 @@ For example, the demo `02_motif_scaffolding` with default sampling settings will
         └── scaffold_info.csv
             7eow_CDR3_atom_rot_128_0.pdb
             ...
-
 ```
 
 This folder organization, in particular `scaffold_info.csv`, follows MotifBench input specifications.
@@ -312,12 +308,9 @@ A copy of the training config and model checkpoints will be saved under the spec
 We provide a script for computing likelihoods and latents as described in [Song _et al._, ICLR 2021](https://arxiv.org/abs/2011.13456)
 
 ```bash
-# Activate installed environment
-source $ENV_DIR/protpardelle/bin/activate
-
-python -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path ./examples/motifs/nanobody
-python -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path ./examples/motifs/nanobody
-python -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path ./examples/motifs/nanobody
+python -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path examples/motifs/nanobody
+python -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path examples/motifs/nanobody
+python -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path examples/motifs/nanobody
 ```
 
 Previously, all-atom model likelihoods were computed on backbone atoms only. Here we compute all-atom model likelihoods for the all-atom models and backbone-only model likelihoods for the backbone-only models.
