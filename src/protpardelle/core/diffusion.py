@@ -6,7 +6,6 @@ Authors: Alex Chu, Tianyu Lu, Zhaoyang Li
 from typing import Literal
 
 import torch
-from scipy.stats import norm
 
 from protpardelle.utils import unsqueeze_trailing_dims
 
@@ -74,7 +73,7 @@ def noise_schedule(
     """
 
     if function == "lognormal":
-        normal_sample = torch.tensor(norm.ppf(timestep.cpu())).to(timestep)
+        normal_sample = torch.special.ndtri(timestep)
         noise_level = sigma_data * torch.exp(psigma_mean + psigma_std * normal_sample)
     elif function == "uniform":
         noise_level = compute_sampling_noise(
@@ -86,7 +85,7 @@ def noise_schedule(
             timestep, sigma_data=sigma_data, s_min=s_min, s_max=s_max, rho=rho
         )
     elif function == "constant":
-        noise_level = torch.ones_like(timestep) * constant_val
+        noise_level = torch.full_like(timestep, constant_val)
     else:
         raise ValueError(f"Unknown noise schedule function: {function}")
 
@@ -115,9 +114,9 @@ def noise_coords(
         dummy_fill_value = torch.zeros_like(coords)
     else:
         dummy_fill_value = coords[..., 1:2, :]  # CA
-    coords = (
-        coords * atom_mask.unsqueeze(-1) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
-    )
+    coords = coords * atom_mask.unsqueeze(
+        -1
+    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
 
     noise = torch.randn_like(coords) * unsqueeze_trailing_dims(noise_level, coords)
     noisy_coords = coords + noise
