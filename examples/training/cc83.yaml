@@ -64,7 +64,7 @@ model:
   struct_model_checkpoint: ""
   mpnn_model_checkpoint: ""
   crop_conditional: True
-  conditioning_style: "concat_hotspot" # 'concat', 'noise_residual', 'concat_and_noise_residual'
+  conditioning_style: "concat_hotspots" # 'concat', 'noise_residual', 'concat_and_noise_residual'
   compute_loss_on_all_atoms: false
   struct_model:
     arch: "dit"

@@ -138,7 +138,7 @@ export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
 | **cc89_epoch415** | 1 | 0 | Allatom Sequence Mask | Rotary | Sequence must be provided at all sampling steps |
 | **cc91_epoch383** | 1 | 0 | Allatom No Mask | Relative | Allatom model trained on AI-CATH |
 | **cc91_tip_epoch480** | 1 | 0 | Allatom No Mask | Relative | cc91 finetuned on sidechain tip atom conditioning task |
-| **cc94_epoch3100** | 0.5 | 0.5 | Allatom No Mask | Relative | cc91 finetuned on multichain data but no hotspot |
+| **cc94_epoch3100** | 0.5 | 0.5 | Allatom No Mask | Relative | cc91 finetuned on multichain data but no hotspots |
 | **cc95_epoch3490** | 0.5 | 0.5 | Backbone | Relative + Relchain | cc83 finetuned with heavier hotspot dropout |
 
 # Sampling
