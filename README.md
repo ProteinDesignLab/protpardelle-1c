@@ -7,6 +7,7 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
 </p>
 
 # Table of Contents
+
 - [Protpardelle-1c](#protpardelle-1c)
 - [Table of Contents](#table-of-contents)
 - [Installation](#installation)
@@ -34,8 +35,6 @@ The original Protpardelle is detailed in our paper [An all-atom protein generati
   - [Datasets](#datasets)
 - [Likelihood](#likelihood)
 - [Citation](#citation)
-
-
 
 # Installation
 
@@ -87,13 +86,6 @@ We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](ht
 bash download_model_params.sh
 ```
 
-We use features of `git` present in version `2.45.1`. With older versions, the ProteinMPNN weights download can also be done with
-```bash
-git clone https://github.com/dauparas/ProteinMPNN.git
-mv ProteinMPNN/vanilla_model_weights model_params/ProteinMPNN/
-rm -rf ProteinMPNN
-```
-
 It takes some time to download all the files; you should see the following directories created:
 
 - `<project_root>/model_params/`
@@ -104,7 +96,7 @@ It takes some time to download all the files; you should see the following direc
 
 Then install [Foldseek](https://github.com/steineggerlab/foldseek/tree/cfb431e98abcc5bcc49950285211d3723b47dc94) in your `PATH` following their instructions.
 
-Outputs will be saved in `<project_root>/results` by default.
+Outputs will be saved in `<project_root>/results/` by default.
 
 ## Set environment variables
 
@@ -155,7 +147,6 @@ We recommend reading and running the example sampling configs under `examples/sa
 
 ```bash
 # Activate installed environment
-source $ENV_DIR/protpardelle/bin/activate
 
 # Unconditional sampling
 python -m protpardelle.sample ./examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
