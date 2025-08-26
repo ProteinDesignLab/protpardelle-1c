@@ -307,7 +307,7 @@ def draw_samples(
 def generate(
     model,
     sampling_config,
-    n_samples=8,
+    num_samples=8,
     num_mpnn_seqs=8,
     length_ranges_per_chain=None,
     all_lengths=None,
@@ -366,15 +366,15 @@ def generate(
         residue_index_input = torch.stack(all_residue_index)
         chain_index_input = torch.stack(all_chain_index)
 
-    batch_sizes = [batch_size] * (n_samples // batch_size)
-    if n_samples % batch_size != 0:
-        batch_sizes.append(n_samples % batch_size)
+    batch_sizes = [batch_size] * (num_samples // batch_size)
+    if num_samples % batch_size != 0:
+        batch_sizes.append(num_samples % batch_size)
 
     for i, bs in enumerate(batch_sizes):
 
         si, ei = i * bs, (i + 1) * bs
         if i == len(batch_sizes) - 1:
-            si, ei = -bs, n_samples
+            si, ei = -bs, num_samples
 
         if fixed_motif_pos is not None:
             sampling_config["sampling"]["conditional_cfg"][
@@ -474,7 +474,7 @@ def sample(
     sampling_yaml_path: Path,
     project: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
-    n_samples: int = 8,
+    num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
     save_shortname: bool = True,
@@ -489,7 +489,7 @@ def sample(
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
         project (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
         motif_dir (Path, optional): Folder containing motifs to scaffold. Defaults to Path("motifs/nanobody").
-        n_samples (int, optional): Total number of samples to draw. Defaults to 8.
+        num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
         seed (int | None, optional): Random seed. Defaults to None.
@@ -685,7 +685,7 @@ def sample(
                         chain_motif_placements_full,
                         chain_lengths,
                     ) = contig_to_motif_placement(
-                        chain_motif_contig, length_ranges_per_chain[ci], n_samples
+                        chain_motif_contig, length_ranges_per_chain[ci], num_samples
                     )
                     if motif_idx is None:
                         motif_idx = chain_motif_idx
@@ -750,7 +750,7 @@ def sample(
             aux = generate(
                 model,
                 sampling_config,
-                n_samples=n_samples,
+                num_samples=num_samples,
                 num_mpnn_seqs=num_mpnn_seqs,
                 length_ranges_per_chain=length_ranges_per_chain,
                 all_lengths=all_lengths,
@@ -772,7 +772,7 @@ def sample(
             # save motif placements
             df_scaffold_info = defaultdict(list)
 
-            df_scaffold_info["sample_num"] = list(range(n_samples))
+            df_scaffold_info["sample_num"] = list(range(num_samples))
             if motif_contig is not None:
                 df_scaffold_info["motif_placements"] = motif_placements
 
@@ -926,12 +926,14 @@ def sample(
                 else:
                     num_unique_successes = num_success
 
-                redundant_success_rate = num_success / n_samples
-                nonredundant_success_rate = num_unique_successes / n_samples
+                redundant_success_rate = num_success / num_samples
+                nonredundant_success_rate = num_unique_successes / num_samples
 
-                logger.info("Redundant success rate: %d/%d", num_success, n_samples)
+                logger.info("Redundant success rate: %d/%d", num_success, num_samples)
                 logger.info(
-                    "Non-redundant success rate: %d/%d", num_unique_successes, n_samples
+                    "Non-redundant success rate: %d/%d",
+                    num_unique_successes,
+                    num_samples,
                 )
 
                 metrics["redundant_success_rate"] = [redundant_success_rate] * len(
@@ -1002,7 +1004,7 @@ def sample(
         logger.info(
             "Of this, %.2f seconds were for actual sampling.", total_sampling_time
         )
-        logger.info("%d total samples were drawn.", n_samples * len(motif_fps))
+        logger.info("%d total samples were drawn.", num_samples * len(motif_fps))
 
         df_samp_info = pd.DataFrame()
         df_samp_info["pdb_path"] = all_samp_save_names
@@ -1016,7 +1018,7 @@ def main(
     motif_dir: Path = typer.Option(
         Path("motifs/nanobody"), help="Directory containing motif PDBs"
     ),
-    n_samples: int = typer.Option(8, help="Number of samples to draw"),
+    num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
         8, help="Number of sequences to design with MPNN (0 to skip)"
     ),
@@ -1040,7 +1042,7 @@ def main(
         sampling_yaml_path=sampling_yaml_path,
         project=project,
         motif_dir=motif_dir,
-        n_samples=n_samples,
+        num_samples=num_samples,
         num_mpnn_seqs=num_mpnn_seqs,
         batch_size=batch_size,
         save_shortname=save_shortname,
