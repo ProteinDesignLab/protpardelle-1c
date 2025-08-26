@@ -25,14 +25,13 @@ from omegaconf import OmegaConf
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
-import protpardelle.data.pdb_io
-import protpardelle.data.sequence
-import protpardelle.utils
 from protpardelle.common import residue_constants
 from protpardelle.core.models import Protpardelle, load_model
-from protpardelle.data import atom
+from protpardelle.data.atom import atom37_coords_from_bb
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
+from protpardelle.data.pdb_io import write_coords_to_pdb
+from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
     PACKAGE_ROOT_DIR,
@@ -108,7 +107,7 @@ def save_samples(
                 dummy_aatype[idx][mi] = samp_aux["motif_aatype"][idx][ii]
 
         if sampled_coords[idx].shape[-2] == 4:
-            coords_to_save = atom.atom37_coords_from_bb(sampled_coords[idx])
+            coords_to_save = atom37_coords_from_bb(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
         samp_save_name = save_dir / f"{save_name}_{idx}.pdb"
@@ -116,7 +115,7 @@ def save_samples(
         if bb_only:
             coords_to_save = coords_to_save[:, (0, 1, 2, 4), :]
 
-        protpardelle.data.pdb_io.write_coords_to_pdb(
+        write_coords_to_pdb(
             coords_to_save,
             samp_save_name,
             batched=False,
@@ -134,9 +133,7 @@ def save_samples(
         Path(f"{save_dir}/esmfold").mkdir(parents=True, exist_ok=True)
 
         for idx in range(len(designed_seqs)):
-            designed_seq = protpardelle.data.sequence.seq_to_aatype(
-                designed_seqs[idx].replace(":", "")
-            )
+            designed_seq = seq_to_aatype(designed_seqs[idx].replace(":", ""))
             scaffold_idx = idx // num_designs_per_structure
             if motif_placements is not None:
                 full_save_name = f"{save_name}_scrmsd{scrmsds[idx]:.2f}_motifcarmsd{motif_ca_rmsds[idx]:.2f}_motifaarmsd{motif_allatom_rmsds[idx]:.2f}_pae{paes[idx]:.2f}_plddt{plddts[idx]:.2f}_bb_pred_{scaffold_idx}".replace(
@@ -149,7 +146,7 @@ def save_samples(
             pred_save_name = f"{save_dir}/esmfold/{full_save_name}"
             pred_save_name = f"{pred_save_name}.pdb"
             all_pred_save_names.append(pred_save_name)
-            protpardelle.data.pdb_io.write_coords_to_pdb(
+            write_coords_to_pdb(
                 pred_coords[idx],
                 pred_save_name,
                 batched=False,
@@ -222,7 +219,7 @@ def draw_samples(
 
         for i in range(len(samp_coords)):
             length_bi = int(seq_mask[i].sum().item())
-            protpardelle.data.pdb_io.write_coords_to_pdb(
+            write_coords_to_pdb(
                 samp_coords[i][:length_bi],
                 str(tmp_dir / f"stage1_{i}.pdb"),
                 batched=False,
@@ -1013,7 +1010,9 @@ def sample(
 
 @app.command()
 def main(
-    project_name: str = typer.Option("protpardelle-1c-sampling", help="wandb project name"),
+    project_name: str = typer.Option(
+        "protpardelle-1c-sampling", help="wandb project name"
+    ),
     motif_dir: Path = typer.Option(
         Path("motifs/nanobody"), help="Directory containing motif PDBs"
     ),
