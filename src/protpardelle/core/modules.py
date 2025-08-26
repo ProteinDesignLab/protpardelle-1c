@@ -55,8 +55,7 @@ def lddt(
     dmat_true = torch.sqrt(
         eps
         + torch.sum(
-            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3))
-            ** 2,
+            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3)) ** 2,
             dim=-1,
         )
     )
@@ -446,7 +445,7 @@ class Noise_Embedding(nn.Module):
 
     def forward(self, x):
         freqs = torch.arange(
-            start=0, end=self.num_channels // 2, dtype=torch.float32, device=x.device
+            start=0, end=self.num_channels // 2, dtype=torch.float, device=x.device
         )
         freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
         freqs = (1 / self.max_positions) ** freqs
@@ -697,7 +696,9 @@ class TimeCondAttention(nn.Module):
                 attn_bias = self.attn_bias_proj(attn_bias)
             sim += attn_bias
         if seq_mask is not None:
-            attn_mask = torch.einsum("b i, b j -> b i j", seq_mask, seq_mask).unsqueeze(1)
+            attn_mask = torch.einsum("b i, b j -> b i j", seq_mask, seq_mask).unsqueeze(
+                1
+            )
             sim -= (1 - attn_mask) * 1e6
         attn = sim.softmax(dim=-1)
 

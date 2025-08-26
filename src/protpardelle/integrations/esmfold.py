@@ -70,7 +70,7 @@ def encode_sequence(
             )
             start += len(chain) + len(chain_linker)
 
-    linker_mask = torch.ones_like(encoded, dtype=torch.float32)
+    linker_mask = torch.ones_like(encoded, dtype=torch.float)
     chain_index = []
     offset = 0
     for i, chain in enumerate(chains):
@@ -81,7 +81,7 @@ def encode_sequence(
         linker_mask[offset : offset + len(chain_linker)] = 0
         offset += len(chain_linker)
 
-    chain_index_tensor = torch.tensor(chain_index, dtype=torch.int64)
+    chain_index_tensor = torch.tensor(chain_index, dtype=torch.long)
 
     return encoded, residx, linker_mask, chain_index_tensor
 

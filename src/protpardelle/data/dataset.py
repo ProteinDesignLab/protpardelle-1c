@@ -5,6 +5,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import argparse
 import math
+from collections.abc import Sequence
 from itertools import accumulate
 from pathlib import Path
 
@@ -186,9 +187,9 @@ def dummy_fill(
         ]  # idealized CB
     else:
         dummy_fill_value = 0
-    coords_in = (
-        coords_in * atom_mask.unsqueeze(-1) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
-    )
+    coords_in = coords_in * atom_mask.unsqueeze(
+        -1
+    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
     return coords_in
 
 
@@ -198,10 +199,10 @@ def get_masked_coords_array(coords, atom_mask):
 
 
 def make_crop_cond_mask_and_recenter_coords(
-    atom_mask: TensorType["b n a", float],
-    atom_coords: TensorType["b n a c", float],
-    aatype: TensorType["b n", int] | None = None,
-    chain_index: TensorType["b n", int] | None = None,
+    atom_mask: torch.Tensor,
+    atom_coords: torch.Tensor,
+    aatype: torch.Tensor | None = None,
+    chain_index: torch.Tensor | None = None,
     contiguous_prob: float = 0.05,
     discontiguous_prob: float = 0.9,
     sidechain_prob: float = 0.9,
@@ -675,8 +676,7 @@ class PDBDataset(Dataset):
 
 
 class StochasticMixedSampler(Sampler):
-    """
-    Stochastic Mixed Sampler.
+    """Stochastic Mixed Sampler.
 
     A sampler to draw samples from multiple datasets. This sampler is specifically designed
     to accommodate a setup where there's one primary dataset that needs to be fully iterated
@@ -706,7 +706,7 @@ class StochasticMixedSampler(Sampler):
     """
 
     def __init__(
-        self, datasets: list[Dataset], mixing_ratios: list[float], batch_size: int
+        self, datasets: Sequence[Dataset], mixing_ratios: list[float], batch_size: int
     ):
         self.datasets = datasets
         self.mixing_ratios = np.array(mixing_ratios)

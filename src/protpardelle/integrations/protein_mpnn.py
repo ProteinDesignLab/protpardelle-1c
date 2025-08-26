@@ -1244,20 +1244,20 @@ def tied_featurize(
 
     # Conversion
     pssm_coef_all = torch.from_numpy(pssm_coef_all).to(
-        dtype=torch.float32, device=device
+        dtype=torch.float, device=device
     )
     pssm_bias_all = torch.from_numpy(pssm_bias_all).to(
-        dtype=torch.float32, device=device
+        dtype=torch.float, device=device
     )
     pssm_log_odds_all = torch.from_numpy(pssm_log_odds_all).to(
-        dtype=torch.float32, device=device
+        dtype=torch.float, device=device
     )
 
-    tied_beta = torch.from_numpy(tied_beta).to(dtype=torch.float32, device=device)
+    tied_beta = torch.from_numpy(tied_beta).to(dtype=torch.float, device=device)
 
     jumps = ((residue_idx[:, 1:] - residue_idx[:, :-1]) == 1).astype(np.float32)
     bias_by_res_all = torch.from_numpy(bias_by_res_all).to(
-        dtype=torch.float32, device=device
+        dtype=torch.float, device=device
     )
     phi_mask = np.pad(jumps, [[0, 0], [1, 0]])
     psi_mask = np.pad(jumps, [[0, 0], [0, 1]])
@@ -1266,15 +1266,15 @@ def tied_featurize(
         [phi_mask[:, :, None], psi_mask[:, :, None], omega_mask[:, :, None]], -1
     )  # [B,L,3]
     dihedral_mask = torch.from_numpy(dihedral_mask).to(
-        dtype=torch.float32, device=device
+        dtype=torch.float, device=device
     )
     residue_idx = torch.from_numpy(residue_idx).to(dtype=torch.long, device=device)
     S = torch.from_numpy(S).to(dtype=torch.long, device=device)
-    X = torch.from_numpy(X).to(dtype=torch.float32, device=device)
-    mask = torch.from_numpy(mask).to(dtype=torch.float32, device=device)
-    chain_M = torch.from_numpy(chain_M).to(dtype=torch.float32, device=device)
-    chain_M_pos = torch.from_numpy(chain_M_pos).to(dtype=torch.float32, device=device)
-    omit_AA_mask = torch.from_numpy(omit_AA_mask).to(dtype=torch.float32, device=device)
+    X = torch.from_numpy(X).to(dtype=torch.float, device=device)
+    mask = torch.from_numpy(mask).to(dtype=torch.float, device=device)
+    chain_M = torch.from_numpy(chain_M).to(dtype=torch.float, device=device)
+    chain_M_pos = torch.from_numpy(chain_M_pos).to(dtype=torch.float, device=device)
+    omit_AA_mask = torch.from_numpy(omit_AA_mask).to(dtype=torch.float, device=device)
     chain_encoding_all = torch.from_numpy(chain_encoding_all).to(
         dtype=torch.long, device=device
     )
@@ -2210,12 +2210,11 @@ class ProteinMPNN(nn.Module):
         mask_fw = mask_1D * (1.0 - mask_attend)
 
         N_batch, N_nodes = X.size(0), X.size(1)
-        log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
         all_probs = torch.zeros(
-            (N_batch, N_nodes, 21), device=device, dtype=torch.float32
+            (N_batch, N_nodes, 21), device=device, dtype=torch.float
         )
         h_S = torch.zeros_like(h_V, device=device)
-        S = torch.zeros((N_batch, N_nodes), dtype=torch.int64, device=device)
+        S = torch.zeros((N_batch, N_nodes), dtype=torch.long, device=device)
         h_V_stack = [h_V] + [
             torch.zeros_like(h_V, device=device)
             for _ in range(len(self.decoder_layers))
@@ -2432,10 +2431,10 @@ class ProteinMPNN(nn.Module):
         N_batch, N_nodes = X.size(0), X.size(1)
         log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
         all_probs = torch.zeros(
-            (N_batch, N_nodes, 21), device=device, dtype=torch.float32
+            (N_batch, N_nodes, 21), device=device, dtype=torch.float
         )
         h_S = torch.zeros_like(h_V, device=device)
-        S = torch.zeros((N_batch, N_nodes), dtype=torch.int64, device=device)
+        S = torch.zeros((N_batch, N_nodes), dtype=torch.long, device=device)
         h_V_stack = [h_V] + [
             torch.zeros_like(h_V, device=device)
             for _ in range(len(self.decoder_layers))
