@@ -409,7 +409,9 @@ class CoordinateDenoiser(nn.Module):
         denoised_coords_x0 = emb + skip_info
 
         # Don't use atom mask; denoise all atoms
-        denoised_coords_x0 *= unsqueeze_trailing_dims(seq_mask, denoised_coords_x0)
+        denoised_coords_x0 = denoised_coords_x0 * unsqueeze_trailing_dims(
+            seq_mask, denoised_coords_x0
+        )
 
         return denoised_coords_x0, hidden
 
@@ -590,7 +592,6 @@ class Protpardelle(nn.Module):
         self.mpnn_model = MiniMPNN(self.config).to(self.device)
         self.load_pretrained_module("mpnn_model", ckpt_path=mpnn_ckpt_path)
         self.use_mpnn_model = True
-        return
 
     def remove_minimpnn(self):
         """Revert a codesign model to an allatom model."""
@@ -883,7 +884,6 @@ class Protpardelle(nn.Module):
         motif_all_atom = None
         motif_atom_mask = None
         if cc.enabled:
-            self.motif_file_path = motif_file_path
             motif_feats, hetero_obj = load_feats_from_pdb(
                 motif_file_path, include_pos_feats=True
             )
@@ -1132,8 +1132,6 @@ class Protpardelle(nn.Module):
             )
 
         # Initialize noise schedule/parameters
-        to_batch_size = lambda x: x * torch.ones(seq_mask.shape[0]).to(self.device)
-
         s_t_min = s_t_min * self.sigma_data
         s_t_max = s_t_max * self.sigma_data
 
@@ -1196,7 +1194,9 @@ class Protpardelle(nn.Module):
                     pd_feats["atom_positions"], (batch_size, 1, 1, 1)
                 ).to(self.device)
 
-            pd_noise_level = to_batch_size(noise_schedule(pd_timestep))
+            pd_noise_level = torch.full(
+                (seq_mask.shape[0],), noise_schedule(pd_timestep), device=self.device
+            )
             if "repack" in pd and pd.repack:
                 for pi, pd_aa in enumerate(pd.seq):
                     pd_motif_aatype[:, pi] = residue_constants.restype_order[pd_aa]
@@ -1222,7 +1222,7 @@ class Protpardelle(nn.Module):
         else:
             xt = torch.randn(*coords_shape).to(self.device)
 
-        xt *= unsqueeze_trailing_dims(seq_mask, xt)
+        xt = xt * unsqueeze_trailing_dims(seq_mask, xt)
 
         # Seqhat and mask used to choose sidechains for euler step (b, n)
         if not pd.enabled:
@@ -1261,7 +1261,7 @@ class Protpardelle(nn.Module):
         begin_mpnn_step = int(n_steps * skip_mpnn_proportion)
 
         # Prepare to run sampling trajectory
-        sigma = to_batch_size(sigma)
+        sigma = torch.full((seq_mask.shape[0],), sigma, device=self.device)
         x0 = None
         x_self_cond = None
         s_logprobs = None
@@ -1371,8 +1371,10 @@ class Protpardelle(nn.Module):
                 if (sigma_next >= s_t_min and sigma_next <= s_t_max)
                 else 0.0
             )
-            sigma = to_batch_size(sigma_float)
-            sigma_next = to_batch_size(sigma_next)
+            sigma = torch.full((seq_mask.shape[0],), sigma_float, device=self.device)
+            sigma_next = torch.full(
+                (seq_mask.shape[0],), sigma_next_float, device=self.device
+            )
 
             bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
             bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
@@ -1398,12 +1400,12 @@ class Protpardelle(nn.Module):
                         sigma, xt
                     )
 
-                xt *= zero_atom_mask.unsqueeze(-1)
-                xt += dummy_fill_noise * dummy_fill_mask
+                xt = xt * zero_atom_mask.unsqueeze(-1)
+                xt = xt + dummy_fill_noise * dummy_fill_mask
                 atom_mask = zero_atom_mask
 
                 if self.config.model.task == "ai-allatom-hybrid":
-                    xt *= bb_atom_mask.unsqueeze(-1)
+                    xt = xt * bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
 
             if self.config.model.task == "ai-allatom" and uniform_steps:
@@ -1418,7 +1420,7 @@ class Protpardelle(nn.Module):
                     ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
                     ai_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
-                xt *= ai_atom_mask.unsqueeze(-1)
+                xt = xt * ai_atom_mask.unsqueeze(-1)
                 atom_mask = ai_atom_mask
             elif self.config.model.task == "ai-allatom-nomask" and uniform_steps:
                 if pd.enabled:
@@ -1446,12 +1448,12 @@ class Protpardelle(nn.Module):
                             torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                             + x0[:, :, 1:2, :]
                         )
-                    xt *= zero_atom_mask.unsqueeze(-1)
-                    xt += dummy_fill_noise * dummy_fill_mask
+                    xt = xt * zero_atom_mask.unsqueeze(-1)
+                    xt = xt + dummy_fill_noise * dummy_fill_mask
                 atom_mask = zero_atom_mask
             elif self.config.model.task == "ai-allatom-hybrid" and uniform_steps:
                 if i < (0.5 * n_steps):
-                    xt *= bb_atom_mask.unsqueeze(-1)
+                    xt = xt * bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
                 else:
                     if pd.enabled:
@@ -1478,11 +1480,11 @@ class Protpardelle(nn.Module):
                                 * unsqueeze_trailing_dims(sigma, xt)
                                 + x0[:, :, 1:2, :]
                             )
-                        xt *= zero_atom_mask.unsqueeze(-1)
-                        xt += dummy_fill_noise * dummy_fill_mask
+                        xt = xt * zero_atom_mask.unsqueeze(-1)
+                        xt = xt + dummy_fill_noise * dummy_fill_mask
                     atom_mask = zero_atom_mask
             elif self.config.model.task == "backbone":
-                xt *= bb_atom_mask.unsqueeze(-1)
+                xt = xt * bb_atom_mask.unsqueeze(-1)
                 atom_mask = bb_atom_mask
 
             # Structure denoising step
@@ -1529,7 +1531,7 @@ class Protpardelle(nn.Module):
                                 ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
-                            xt_hat *= ai_atom_mask.unsqueeze(-1)
+                            xt_hat = xt_hat * ai_atom_mask.unsqueeze(-1)
                             atom_mask = ai_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-nomask"
@@ -1568,15 +1570,15 @@ class Protpardelle(nn.Module):
                                         * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                         + x0[:, :, 1:2, :]
                                     )
-                                xt_hat *= zero_atom_mask.unsqueeze(-1)
-                                xt_hat += dummy_fill_noise * dummy_fill_mask
+                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
+                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
                             if i < (0.5 * n_steps):
-                                xt_hat *= bb_atom_mask.unsqueeze(-1)
+                                xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
                                 if pd.enabled:
@@ -1614,11 +1616,11 @@ class Protpardelle(nn.Module):
                                             * unsqueeze_trailing_dims(sigma_hat, xt_hat)
                                             + x0[:, :, 1:2, :]
                                         )
-                                    xt_hat *= zero_atom_mask.unsqueeze(-1)
-                                    xt_hat += dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
+                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
-                            xt_hat *= bb_atom_mask.unsqueeze(-1)
+                            xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()
@@ -1712,7 +1714,7 @@ class Protpardelle(nn.Module):
                                 ai_atom_mask = atom37_mask_from_aatype(
                                     gt_aatype, seq_mask
                                 )
-                            xt_hat *= ai_atom_mask.unsqueeze(-1)
+                            xt_hat = xt_hat * ai_atom_mask.unsqueeze(-1)
                             atom_mask = ai_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-nomask"
@@ -1751,15 +1753,15 @@ class Protpardelle(nn.Module):
                                         * unsqueeze_trailing_dims(sigma, xt)
                                         + x0[:, :, 1:2, :]
                                     )
-                                xt_hat *= zero_atom_mask.unsqueeze(-1)
-                                xt_hat += dummy_fill_noise * dummy_fill_mask
+                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
+                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
                             if i < (0.5 * n_steps):
-                                xt_hat *= bb_atom_mask.unsqueeze(-1)
+                                xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
                                 if pd.enabled:
@@ -1797,11 +1799,11 @@ class Protpardelle(nn.Module):
                                             * unsqueeze_trailing_dims(sigma, xt)
                                             + x0[:, :, 1:2, :]
                                         )
-                                    xt_hat *= zero_atom_mask.unsqueeze(-1)
-                                    xt_hat += dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
+                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
-                            xt_hat *= bb_atom_mask.unsqueeze(-1)
+                            xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()

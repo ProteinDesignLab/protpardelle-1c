@@ -140,8 +140,8 @@ def forward_ode(
                 dummy_fill_noise = (
                     torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
                 ) + xt[:, :, 1:2, :]
-            xt *= atom_mask
-            xt += dummy_fill_noise * dummy_fill_mask
+            xt = xt * atom_mask
+            xt = xt + dummy_fill_noise * dummy_fill_mask
 
         x0, _, _, _ = model.forward(
             noisy_coords=xt,

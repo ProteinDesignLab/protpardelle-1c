@@ -1115,12 +1115,8 @@ class TimeCondUViT(nn.Module):
 
         x = self.to_patch_embedding(x)
 
-        # if self.position_embedding_type == 'absolute':
-        #     pos_emb = posemb_sincos_1d(x)
-        #     x = x + pos_emb
-
         if seq_mask is not None and x.shape[1] == seq_mask.shape[1]:
-            x *= utils.unsqueeze_trailing_dims(seq_mask, x)
+            x = x * utils.unsqueeze_trailing_dims(seq_mask, x)
 
         attn_bias = None
         if pair_bias is not None:

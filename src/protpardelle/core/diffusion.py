@@ -55,7 +55,8 @@ def noise_schedule(
 
     Args:
         timestep (torch.Tensor): The current timestep.
-        function (Literal["uniform", "lognormal", "mpnn", "constant"], optional): The noise schedule function to use. Defaults to "uniform".
+        function (Literal["uniform", "lognormal", "mpnn", "constant"], optional):
+            The noise schedule function to use. Defaults to "uniform".
         sigma_data (float, optional): The data noise level. Defaults to 10.0.
         psigma_mean (float, optional): The mean of the log-normal distribution. Defaults to -0.5.
         psigma_std (float, optional): The standard deviation of the log-normal distribution. Defaults to 1.5.
