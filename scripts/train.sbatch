@@ -1,36 +1,38 @@
 #!/bin/bash
-#SBATCH --output=R-%x.%j.out
-#SBATCH --error=R-%x.%j.err
-#SBATCH -p your-partition-name
-#SBATCH --gpus-per-node=1
+#SBATCH --job-name=protpardelle_training
+#SBATCH --output=train-%x.%j.out
+#SBATCH --error=train-%x.%j.err
+#SBATCH --partition=your-partition-name
+#SBATCH --gpus-per-node=2
 #SBATCH --gpu_cmode=shared
-#SBATCH --cpus-per-task=8
-#SBATCH --time=72:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --time=3-00:00:00
 
-
-source $ENV_DIR/protpardelle/bin/activate
-
-BASE_DIR=/your/path/to/code/protpardelle-1c
-MODEL_NAME=$1
-DEBUG=$2
-PROTPARDELLE_EXPERIMENT_DIR=/your/path/to/protpardelle-1c-experiments
-
-# Set num_workers depending on DEBUG
-if [[ "$DEBUG" == *"--debug"* ]]; then
-    NUM_WORKERS=0
-else
-    NUM_WORKERS=8
+if command -v module >/dev/null 2>&1; then
+    module load gcc/12.4.0
 fi
 
-# Run commands
-cd ${BASE_DIR}
+if [ -z "$ENV_DIR" ]; then
+    conda activate protpardelle
+else
+    source "$ENV_DIR"/protpardelle/bin/activate
+fi
 
-WANDB__SERVICE_WAIT=300 CUDA_VISIBLE_DEVICES="0" python3 src/protpardelle/train.py \
-    --config examples/training/${MODEL_NAME}.yaml \
-    --project protpardelle-1c \
-    --wandb-id your-wandb-id \
-    --exp-name ${MODEL_NAME} \
-    --use-dataparallel \
-    --num-workers ${NUM_WORKERS} \
-    --out-dir ${PROTPARDELLE_EXPERIMENT_DIR} \
-    ${DEBUG}
+PROJECT_ROOT_DIR=$(python -c "from protpardelle.env import PROJECT_ROOT_DIR; print(PROJECT_ROOT_DIR)")
+
+model_name=$1
+output_dir=$2
+debug=$3
+config_path="${PROJECT_ROOT_DIR}/examples/training/${model_name}.yaml"
+project_name="protpardelle-1c"
+wandb_id="your-wandb-id"
+
+WANDB__SERVICE_WAIT=300 python -m protpardelle.train \
+    --config-path "${config_path}" \
+    --output-dir "${output_dir}" \
+    --project-name "${project_name}" \
+    --wandb-id "${wandb_id}" \
+    --exp-name "${model_name}" \
+    --overfit 0 \
+    --num-workers 8 \
+    "${debug}"
