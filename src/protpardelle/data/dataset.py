@@ -770,7 +770,7 @@ class StochasticMixedSampler(Sampler):
 
 
 def calc_sigma_data(
-    dataset: PDBDataset,
+    dataset: Dataset,
     config: argparse.Namespace,
     num_workers: int,
 ) -> float:

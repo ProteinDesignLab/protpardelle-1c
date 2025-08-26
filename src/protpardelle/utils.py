@@ -96,16 +96,14 @@ def clean_gpu_cache(func: Callable) -> Callable:
     return wrapper
 
 
-def dict_to_namespace(config: dict) -> argparse.Namespace:
+def dict_to_namespace(d: dict) -> argparse.Namespace:
     """Convert a dictionary to a namespace recursively."""
-
     namespace = argparse.Namespace()
-    for key, value in config.items():
+    for key, value in d.items():
         if isinstance(value, dict):
-            new_value = dict_to_namespace(value)
+            setattr(namespace, key, dict_to_namespace(value))
         else:
-            new_value = value
-        setattr(namespace, key, new_value)
+            setattr(namespace, key, value)
 
     return namespace
 
@@ -136,6 +134,18 @@ def load_config(config_path: StrPath) -> argparse.Namespace:
     config = dict_to_namespace(config_dict)
 
     return config
+
+
+def namespace_to_dict(namespace: argparse.Namespace) -> dict:
+    """Convert a namespace to a dictionary recursively."""
+    d = {}
+    for key, value in vars(namespace).items():
+        if isinstance(value, argparse.Namespace):
+            d[key] = namespace_to_dict(value)
+        else:
+            d[key] = value
+
+    return d
 
 
 def norm_path(
