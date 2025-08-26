@@ -275,7 +275,7 @@ class RotaryEmbedding(nn.Module):
 
         assert (
             not self.use_xpos
-        ), "you must use `.rotate_queries_and_keys` method instead and pass in both queries and keys, for length extrapolatable rotary embeddings"
+        ), "you must use .rotate_queries_and_keys method instead and pass in both queries and keys, for length extrapolatable rotary embeddings"
 
         device, dtype, seq_len, B = t.device, t.dtype, t.shape[seq_dim], t.shape[0]
 

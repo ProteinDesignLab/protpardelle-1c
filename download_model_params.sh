@@ -10,7 +10,7 @@ fi
 # Download Protpadelle model params
 echo "Downloading Protpadelle model parameters..."
 aria2c -x16 -s16 -o protpardelle-1c.tar.gz "https://zenodo.org/records/16817230/files/protpardelle-1c.tar.gz?download=1"
-tar -xzvf protpardelle-1c.tar.gz --strip-components=1 # there will be a `model_params/` directory
+tar -xzvf protpardelle-1c.tar.gz --strip-components=1 # there will be a model_params/ directory
 rm protpardelle-1c.tar.gz
 echo "Protpadelle model parameters downloaded."
 

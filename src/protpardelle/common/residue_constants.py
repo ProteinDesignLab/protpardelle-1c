@@ -797,7 +797,7 @@ def chi_angle_atom(atom_index: int) -> np.ndarray:
         one_hot = np.eye(atom_type_num)[chi_angles_index[res3]]
         one_hots.append(one_hot)
 
-    one_hots.append(np.zeros([4, atom_type_num]))  # Add zeros for residue `X`.
+    one_hots.append(np.zeros([4, atom_type_num]))  # Add zeros for residue X.
     one_hot = np.stack(one_hots, axis=0)
     one_hot = np.transpose(one_hot, [0, 2, 1])
 

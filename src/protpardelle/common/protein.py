@@ -96,7 +96,7 @@ def _chain_end(atom_index, end_resname, chain_name, residue_index) -> str:
 
 
 def to_pdb(prot: Protein) -> str:
-    """Converts a `Protein` instance to a PDB string.
+    """Converts a Protein instance to a PDB string.
 
     Args:
         prot: The protein to convert to PDB.

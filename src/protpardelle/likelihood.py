@@ -69,7 +69,7 @@ def forward_ode(
 ):
     """Solve the probability flow ODE to get latent encodings and likelihoods.
 
-    Usage: given a `model` and a list of pdb paths `paths`
+    Usage: given a model and a list of pdb paths paths
     batch = batch_from_pdbs(paths)
     results = forward_ode(model, batch)
     nats_per_atom = results['npa']

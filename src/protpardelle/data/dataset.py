@@ -247,7 +247,7 @@ def make_crop_cond_mask_and_recenter_coords(
             residues that can be sampled. Defaults to 8.
         dist_threshold (float, optional): Neighborhood distance threshold used to
             include additional residues for discontiguous motifs (in the same
-            units as `atom_coords`). Defaults to 8.0.
+            units as atom_coords). Defaults to 8.0.
         recenter_coords (bool, optional): If True, recenter the entire structure so
             the motif center of mass is at the origin. Defaults to True.
         add_coords_noise (float, optional): Standard deviation of Gaussian noise
