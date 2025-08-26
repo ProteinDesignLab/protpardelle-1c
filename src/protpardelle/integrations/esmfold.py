@@ -190,7 +190,7 @@ class ESMFold(nn.Module):
         return model
 
     @property
-    def device(self) -> Device:
+    def device(self) -> torch.device:
         """Return the device on which the model is loaded."""
         return next(self.model.parameters()).device
 
