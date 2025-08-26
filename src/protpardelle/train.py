@@ -9,7 +9,6 @@ import random
 import shlex
 import subprocess
 from contextlib import nullcontext
-from typing import Annotated
 
 import numpy as np
 import torch
@@ -590,7 +589,6 @@ def train(
 
     # Set output directories for wandb
     output_dir = norm_path(output_dir)
-    wandb_dir = output_dir / project_name
 
     # Create dataloader
     dataloader = trainer.get_dataloader(
@@ -605,7 +603,7 @@ def train(
         name=exp_name,
         job_type="debug" if debug else "train",
         config=trainer.config,  # type: ignore
-        dir=wandb_dir,
+        dir=output_dir,
     )
     if wandb.run is None:
         raise RuntimeError("Failed to initialize wandb run")
@@ -626,7 +624,7 @@ def train(
         "Training configuration: %s, %s, %s", config_path, output_dir, project_name
     )
 
-    log_dir = wandb_dir / (f"{run_name}_debug" if debug else run_name)
+    log_dir = output_dir / (f"{run_name}_debug" if debug else run_name)
     checkpoint_dir = log_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -634,6 +632,7 @@ def train(
     with open(log_dir / "config.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(namespace_to_dict(trainer.config), f)
 
+    trainer.log_training_info()
     with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
         for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
             for input_dict in tqdm(
