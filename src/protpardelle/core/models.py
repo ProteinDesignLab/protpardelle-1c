@@ -7,6 +7,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import argparse
 import copy
+import logging
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -40,6 +41,9 @@ from protpardelle.utils import (
     norm_path,
     unsqueeze_trailing_dims,
 )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def fill_motif_seq(
@@ -406,14 +410,14 @@ class CoordinateDenoiser(nn.Module):
         skip_scale = actual_var_data / var_noisy_coords.clamp(min=1e-6)
         emb = emb * unsqueeze_trailing_dims(out_scale, emb)
         skip_info = noisy_coords * unsqueeze_trailing_dims(skip_scale, noisy_coords)
-        denoised_coords_x0 = emb + skip_info
+        denoised_coords = emb + skip_info
 
         # Don't use atom mask; denoise all atoms
-        denoised_coords_x0 = denoised_coords_x0 * unsqueeze_trailing_dims(
-            seq_mask, denoised_coords_x0
+        denoised_coords = denoised_coords * unsqueeze_trailing_dims(
+            seq_mask, denoised_coords
         )
 
-        return denoised_coords_x0, hidden
+        return denoised_coords, hidden
 
 
 def parse_fixed_pos_str(
@@ -471,9 +475,7 @@ def parse_fixed_pos_str(
 
         for r in range(start_residue, end_residue + 1):
             if r not in found_residues_set:
-                print(
-                    f"Warning: Requested position {chain_letter}{r} not found in structure."
-                )
+                logger.warning("Requested position %s%d not found in structure.", chain_letter, r)
 
         # Extend our fixed indices with whatever we did find
         fixed_indices.extend(matching_indices.tolist())
@@ -493,10 +495,10 @@ class Protpardelle(nn.Module):
     or allatom denoiser. The two can be combined to yield all-atom (co-design) Protpardelle
     without further training.
         'backbone': train only a backbone coords denoiser.
-        'seqdes': train only a mini-MPNN, using a pretrained coords denoiser.
+        'seqdes': train only a MiniMPNN, using a pretrained coords denoiser.
         'allatom': train only an allatom coords denoiser (cannot do all-atom generation
             by itself).
-        'codesign': train both an allatom denoiser and mini-MPNN at once.
+        'codesign': train both an allatom denoiser and MiniMPNN at once.
     """
 
     def __init__(self, config: argparse.Namespace, device: Device = None):
@@ -509,18 +511,16 @@ class Protpardelle(nn.Module):
         self.use_mpnn_model = self.task in ["seqdes", "codesign"]
 
         # Modules
-        self.all_modules = {}
         self.bb_idxs = [0, 1, 2, 4]
         self.n_atoms = 37
         self.struct_model = CoordinateDenoiser(config)
-        self.all_modules["struct_model"] = self.struct_model
+
         self.bb_idxs = self.struct_model.bb_idxs
         self.n_atoms = self.struct_model.n_atoms
         self.chain_residx_gap = config.data.chain_residx_gap
 
         if self.use_mpnn_model:
             self.mpnn_model = MiniMPNN(config)
-            self.all_modules["mpnn_model"] = self.mpnn_model
 
         # Load any pretrained modules
         for module_name in self.config.model.pretrained_modules:
@@ -597,7 +597,6 @@ class Protpardelle(nn.Module):
         """Revert a codesign model to an allatom model."""
         self.use_mpnn_model = False
         self.mpnn_model = None
-        self.all_modules["mpnn_model"] = None
 
     def make_sampling_noise_schedule(self, **noise_kwargs):
         """Make the default sampling noise schedule function."""
@@ -623,7 +622,7 @@ class Protpardelle(nn.Module):
         seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
         run_struct_model: bool = True,
         run_mpnn_model: bool = True,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Main forward function for denoising/co-design.
 
         Arguments:
@@ -637,13 +636,12 @@ class Protpardelle(nn.Module):
                 data inside the denoiser)
             seq_self_cond: mpnn-predicted sequence logprobs from the previous step.
             run_struct_model: flag to optionally not run structure denoiser.
-            run_mpnn_model: flag to optionally not run mini-mpnn.
+            run_mpnn_model: flag to optionally not run MiniMPNN.
         """
 
         # Coordinate denoiser
-        denoised_x0 = noisy_coords
         if run_struct_model:
-            denoised_x0, denoised_emb = self.struct_model(
+            denoised_coords, _ = self.struct_model(
                 noisy_coords,
                 noise_level,
                 seq_mask,
@@ -656,14 +654,14 @@ class Protpardelle(nn.Module):
                 adj_cond=adj_cond,
                 return_emb=True,
             )
+        else:
+            denoised_coords = noisy_coords
 
-        # Mini-MPNN
-        aatype_logprobs = None
-
+        # MiniMPNN
         if self.use_mpnn_model and run_mpnn_model:
-
+            assert isinstance(self.mpnn_model, MiniMPNN)
             aatype_logprobs = self.mpnn_model(
-                denoised_x0.detach(),
+                denoised_coords.detach(),
                 noise_level,
                 seq_mask,
                 residue_index,
@@ -672,18 +670,16 @@ class Protpardelle(nn.Module):
                 return_embeddings=False,
             )
             aatype_logprobs = aatype_logprobs * seq_mask.unsqueeze(-1)
-
-        # Process outputs
-        if aatype_logprobs is None:  # uniform prior on sequence without Mini-MPNN
+        else:
             aatype_logprobs = repeat(seq_mask, "b n -> b n t", t=self.n_tokens)
             aatype_logprobs = torch.ones_like(aatype_logprobs)
             aatype_logprobs = F.log_softmax(aatype_logprobs, -1)
 
-        struct_self_cond_out = denoised_x0.detach() / self.sigma_data
+        struct_self_cond_out = denoised_coords.detach() / self.sigma_data
 
         seq_self_cond_out = aatype_logprobs.detach()
 
-        return denoised_x0, aatype_logprobs, struct_self_cond_out, seq_self_cond_out
+        return denoised_coords, aatype_logprobs, struct_self_cond_out, seq_self_cond_out
 
     def make_seq_mask_for_sampling(
         self,
@@ -833,9 +829,9 @@ class Protpardelle(nn.Module):
         disallow_aas: don't sample these token indices.
         sidechain_mode: whether to do all-atom sampling (False for backbone-only).
         skip_mpnn_proportion: proportion of timesteps from the start to skip running
-            mini-MPNN.
+            MiniMPNN.
         anneal_seq_resampling_rate: whether and how to decay the probability of
-            running mini-MPNN. None, 'linear', or 'cosine'
+            running MiniMPNN. None, 'linear', or 'cosine'
         use_fullmpnn: use "full" ProteinMPNN at each step.
         use_fullmpnn_for_final: use "full" ProteinMPNN at the final step.
         noise_schedule: specify the noise level timesteps for sampling.
