@@ -200,6 +200,8 @@ def get_masked_coords_array(coords, atom_mask):
 def make_crop_cond_mask_and_recenter_coords(
     atom_mask: TensorType["b n a", float],
     atom_coords: TensorType["b n a c", float],
+    aatype: TensorType["b n", int] | None = None,
+    chain_index: TensorType["b n", int] | None = None,
     contiguous_prob: float = 0.05,
     discontiguous_prob: float = 0.9,
     sidechain_prob: float = 0.9,
@@ -215,56 +217,62 @@ def make_crop_cond_mask_and_recenter_coords(
     hotspot_max: int = 8,
     hotspot_dropout: float = 0.1,
     paratope_prob: float = 0.5,
-    chain_index: TensorType["b n", int] | None = None,
-    aatype: TensorType["b n", int] | None = None,
-):
-    """Generate random crop of a batch of structures as motifs.
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Generate a random motif crop from a batch of protein structures.
 
-    Parameters
-    ----------
-    atom_mask
-        1 at dimensions where atoms exist, 0 otherwise.
-    atom_coords
-        xyz coordinates of a batch of structures in atom37 format.
-    contiguous_prob, optional
-        Probability of sampling a contiguous motif, by default 0.05
-    discontiguous_prob, optional
-        Probability of sampling a discontiguous motif, by default 0.9
-    sidechain_prob, optional
-        Probability of including sidechain coordinates in the motif info, by default 0.9
-    sidechain_only_prob, optional
-        Probability of *only* including sidechain coordinates (mask backbone coordinates), by default 0.0
-    sidechain_tip_prob, optional
-        Probability of *only* include sidechain tip atom coordinates (mask backbone and non-tip sidechain coordinates), by default 0.0
-    max_span_len, optional
-        Longest length of contiguous motif sample-able, by default 10
-    max_discontiguous_res, optional
-        Largest number of discontiguous residues sample-able, by default 8
-    dist_threshold, optional
-        For discontiguous motifs, neighborhood size for inclusion of other motif residues, by default 8.0
-    recenter_coords, optional
-        Whether to center the whole structure to have motif center of mass at the origin, by default True
-    add_coords_noise, optional
-        Amount of Gaussian noise to add to the motif coordinates (for regularization), by default 0.0
-    multichain_prob, optional
-        Probability of using the multichain motif scaffolding task: motif is one entire chain, scaffold is the partner chain, by default 0.0
-    hotspot_min, optional
-        Minimum number of hotspots to give for the multichain task, by default 3
-    hotspot_max, optional
-        Maximum number of hotspots to give for the multichain task, by default 8
-    hotspot_dropout, optional
-        Probability of dropping out hotspot info to all zeros, by default 0.1
-    paratope_prob, optional
-        Probability of including additional paratope residues together with target chain as motif, by default 0.5
-    chain_index, optional
-        Integer encoding of chain ID, by default None
-    aatype, optional
-        Integer encoding of amino acid types, by default None
+    Args:
+        atom_mask (torch.Tensor): Binary mask where 1 indicates an existing atom
+            and 0 otherwise. (B, N, A)
+        atom_coords (torch.Tensor): Cartesian atom coordinates in atom37 order
+            (typically A=37, C=3). (B, N, A, C)
+        aatype (torch.Tensor | None, optional): Integer-encoded amino acid types.
+            Defaults to None. (B, N)
+        chain_index (torch.Tensor | None, optional): Integer-encoded chain IDs.
+            Defaults to None. (B, N)
+        contiguous_prob (float, optional): Probability of sampling a contiguous
+            motif. Defaults to 0.05.
+        discontiguous_prob (float, optional): Probability of sampling a
+            discontiguous motif. Defaults to 0.9.
+        sidechain_prob (float, optional): Probability of including sidechain
+            coordinates in the motif information. Defaults to 0.9.
+        sidechain_only_prob (float, optional): Probability of including only
+            sidechain coordinates (mask backbone coordinates). Defaults to 0.0.
+        sidechain_tip_prob (float, optional): Probability of including only
+            sidechain tip atoms (mask backbone and non-tip sidechain atoms).
+            Defaults to 0.0.
+        max_span_len (int, optional): Maximum contiguous motif length that can be
+            sampled. Defaults to 10.
+        max_discontiguous_res (int, optional): Maximum number of discontiguous
+            residues that can be sampled. Defaults to 8.
+        dist_threshold (float, optional): Neighborhood distance threshold used to
+            include additional residues for discontiguous motifs (in the same
+            units as `atom_coords`). Defaults to 8.0.
+        recenter_coords (bool, optional): If True, recenter the entire structure so
+            the motif center of mass is at the origin. Defaults to True.
+        add_coords_noise (float, optional): Standard deviation of Gaussian noise
+            added to motif coordinates for regularization. Defaults to 0.0.
+        multichain_prob (float, optional): Probability of using the multichain
+            scaffolding task (motif is one entire chain; scaffold is the partner
+            chain). Defaults to 0.0.
+        hotspot_min (int, optional): Minimum number of hotspots for the multichain
+            task. Defaults to 3.
+        hotspot_max (int, optional): Maximum number of hotspots for the multichain
+            task. Defaults to 8.
+        hotspot_dropout (float, optional): Probability of dropping hotspot
+            information (set to all zeros). Defaults to 0.1.
+        paratope_prob (float, optional): Probability of including additional
+            paratope residues together with the target chain as the motif.
+            Defaults to 0.5.
 
-    Returns
-    -------
-        _description_
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing:
+            - coords_out: Cropped (and optionally recentered/noised) coordinates.
+            (B, N, A, C)
+            - crop_cond_mask: Binary mask indicating atoms included in the motif
+            crop/conditioning. (B, N, A)
+            - hotspot_mask: Binary mask indicating hotspot atoms. (B, N, A)
     """
+
     b, n, a = atom_mask.shape
     device = atom_mask.device
     seq_mask = atom_mask[..., 1]
