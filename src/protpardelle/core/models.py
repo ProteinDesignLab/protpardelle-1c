@@ -2079,6 +2079,8 @@ def load_model(
     config = load_config(config_path)
 
     checkpoint_path = norm_path(checkpoint_path)
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
     state_dict = torch.load(
         checkpoint_path,
         map_location=device,
