@@ -275,27 +275,32 @@ This folder organization, in particular `scaffold_info.csv`, follows MotifBench 
 
 # Training
 
-First change these lines in `scripts/train.sbatch`:
+First, modify `scripts/train.sbatch` to suit your environment. You will likely need to change the SLURM partition name and your wandb user/entity ID:
 
 ```bash
-#SBATCH -p your-partition-name
-PROTPARDELLE_EXPERIMENT_DIR=/your/path/to/output/dir
---wandb_id your-wandb-id
+# In scripts/train.sbatch
+#SBATCH --partition=your-partition-name
+# ...
+wandb_id="your-wandb-id"
 ```
 
-See `examples/training` for the exact model architecture and training hyperparameters used in Protpardelle-1c models. Look for `/your/path/to` which need to be changed to paths on your current system. The training script can be called with
+The training script can then be launched via `sbatch`. It takes the following arguments:
+
+1. `model_name`: The name of the model config in `examples/training/` (e.g., `cc58`).
+2. `output_dir`: The directory where experiment results will be saved.
+3. `--debug` (optional): A flag to run in debug mode.
+
+For example, to run a training job for the `cc58` model and save outputs to `/path/to/experiments`:
 
 ```bash
-# Check if everything works
-source scripts/train.sbatch cc58 --debug
+# Submit a training job
+sbatch scripts/train.sbatch cc58 /path/to/experiments
 
-# Then submit job
-sbatch -J cc58 scripts/train.sbatch cc58
+# Run in debug mode (runs on the login node without submitting a job)
+bash scripts/train.sbatch cc58 /path/to/experiments --debug
 ```
 
-A copy of the training config and model checkpoints will be saved under `PROTPARDELLE_EXPERIMENT_DIR`.
-
-You may change your `WANDB_CACHE_DIR` environment variable to control where wandb stores its cache.
+A copy of the training config and model checkpoints will be saved under the specified output directory. You can also set the `WANDB_CACHE_DIR` environment variable to control where wandb stores its cache.
 
 ## Datasets
 
