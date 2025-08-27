@@ -290,7 +290,7 @@ For example, to run a training job for the `cc58` model and save outputs to `/pa
 # Submit a training job
 sbatch scripts/train.sbatch cc58 /path/to/experiments
 
-# Run in debug mode (runs on the login node without submitting a job)
+# Run in debug mode (run on an interactive node without submitting a job)
 source scripts/train.sbatch cc58 /path/to/experiments --debug
 ```
 
