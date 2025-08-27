@@ -683,7 +683,7 @@ class Protpardelle(nn.Module):
         self,
         prot_lens_per_chain: TensorType["b c", int] | None = None,
         length_ranges_per_chain: TensorType["c 2", int] | None = None,
-        n_samples: int | None = None,
+        num_samples: int | None = None,
         chain_residx_gap: int | None = None,
     ) -> tuple[
         TensorType["b n", float], TensorType["b n", float], TensorType["b n", int]
@@ -694,7 +694,7 @@ class Protpardelle(nn.Module):
         Args:
         - prot_lens_per_chain: tensor of protein lengths for each chain (batch size, num_chains)
         - length_ranges_per_chain: tensor of min and max protein lengths for each chain (num_chains, 2) if prot_lens_per_chain is None
-        - n_samples: number of samples to generate if providing length_ranges_per_chain
+        - num_samples: number of samples to generate if providing length_ranges_per_chain
         - chain_residx_gap: gap between chains in residue indices (defaults to model config)
 
         Returns:
@@ -710,23 +710,23 @@ class Protpardelle(nn.Module):
         # Make protein lengths by sampling from provided ranges
         if length_ranges_per_chain is not None:
             assert (
-                n_samples is not None
-            ), f"Must provide n_samples if providing length_ranges_per_chain"
+                num_samples is not None
+            ), f"Must provide num_samples if providing length_ranges_per_chain"
             prot_lens_per_chain = torch.stack(
                 [
-                    torch.randint(low=start, high=end + 1, size=(n_samples,))
+                    torch.randint(low=start, high=end + 1, size=(num_samples,))
                     for start, end in length_ranges_per_chain
                 ],
                 dim=1,
             )
 
-        n_samples = prot_lens_per_chain.shape[0]
+        num_samples = prot_lens_per_chain.shape[0]
 
         # Make sequence mask
         total_prot_lens = prot_lens_per_chain.sum(dim=1)  # total length across chains
         max_len = torch.max(total_prot_lens)
         residue_index = repeat(
-            torch.arange(1, max_len + 1), "n -> b n", b=n_samples
+            torch.arange(1, max_len + 1), "n -> b n", b=num_samples
         ).float()
         mask = (residue_index <= total_prot_lens.unsqueeze(-1)).float().to(self.device)
 
@@ -740,7 +740,7 @@ class Protpardelle(nn.Module):
         if chain_residx_gap is None:
             chain_residx_gap = self.chain_residx_gap
         if chain_residx_gap == 0 and torch.sum(chain_index) > 0:
-            for bi in range(n_samples):
+            for bi in range(num_samples):
                 for ci in range(1, int(torch.max(chain_index[bi]).item()) + 1):
                     curr_chain_pos = torch.nonzero(chain_index[bi] == ci).flatten()
                     residue_index[bi, curr_chain_pos] = (

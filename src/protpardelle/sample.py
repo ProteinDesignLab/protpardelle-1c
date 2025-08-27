@@ -167,7 +167,7 @@ def draw_samples(
     sse_cond: TensorType["b n", int] | None = None,
     adj_cond: TensorType["b n n", int] | None = None,
     motif_placements_full: list[str] | None = None,
-    n_samples: int | None = None,
+    num_samples: int | None = None,
     length_ranges_per_chain: list[tuple[int, int]] = [(50, 512)],
     return_aux: bool = False,
     return_sampling_runtime: bool = False,
@@ -178,7 +178,7 @@ def draw_samples(
     device = model.device
     if seq_mask is None:
         seq_mask, residue_index, chain_index = model.make_seq_mask_for_sampling(
-            length_ranges_per_chain=length_ranges_per_chain, n_samples=n_samples
+            length_ranges_per_chain=length_ranges_per_chain, num_samples=num_samples
         )
 
     start = time.time()
@@ -346,7 +346,7 @@ def generate(
                 curr_length_ranges_per_chain.append([curr_chain_len, curr_chain_len])
             seq_mask_in, residue_index_in, chain_index_in = (
                 model.make_seq_mask_for_sampling(
-                    length_ranges_per_chain=curr_length_ranges_per_chain, n_samples=1
+                    length_ranges_per_chain=curr_length_ranges_per_chain, num_samples=1
                 )
             )
             all_seq_mask.append(
@@ -386,7 +386,7 @@ def generate(
         trimmed_coords_bi, trimmed_chain_index_bi, seq_mask_bi, samp_aux_bi = (
             draw_samples(
                 model,
-                n_samples=bs,
+                num_samples=bs,
                 seq_mask=seq_mask_input[si:ei] if seq_mask_input is not None else None,
                 residue_index=(
                     residue_index_input[si:ei]

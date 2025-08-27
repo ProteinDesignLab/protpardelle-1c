@@ -147,34 +147,34 @@ We recommend reading and running the example sampling configs under `examples/sa
 
 ```bash
 # Unconditional sampling
-python -m protpardelle.sample examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/00_unconditional.yaml --num-samples 8 --num-mpnn-seqs 0
 
 # Partial diffusion
-python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
 # Motif scaffolding
-python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
 # MotifBench benchmark
-python -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --n-samples 100 --num-mpnn-seqs 8 --use-wandb
+python -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --num-samples 100 --num-mpnn-seqs 8 --use-wandb
 
 # BindCraft benchmark
-python -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --n-samples 100 --num-mpnn-seqs 2
+python -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --num-samples 100 --num-mpnn-seqs 2 --use-wandb
 
 # Multichain
-python -m protpardelle.sample examples/sampling/05_multichain.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/05_multichain.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 
 # Thread in a new sequence given a backbone: experimental feature
-python -m protpardelle.sample examples/sampling/06_fastrelax.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/06_fastrelax.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 
 # Backbone-only La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample examples/sampling/07_rfdiffusion.yaml --motif-dir examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+python -m protpardelle.sample examples/sampling/07_rfdiffusion.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # All-atom La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir examples/motifs/rfdiffusion/ --n-samples 200 --num-mpnn-seqs 1 --use-wandb
+python -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # Generate structure conditioned on sequence: experimental feature, useful as a decoy generator
-python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --n-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 ```
 
 ## Sampling Examples
