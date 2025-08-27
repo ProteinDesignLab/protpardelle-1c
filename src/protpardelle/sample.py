@@ -132,7 +132,7 @@ def save_samples(
 
         Path(f"{save_dir}/esmfold").mkdir(parents=True, exist_ok=True)
 
-        for idx in range(len(designed_seqs)):
+        for idx, _ in enumerate(designed_seqs):
             designed_seq = seq_to_aatype(designed_seqs[idx].replace(":", ""))
             scaffold_idx = idx // num_designs_per_structure
             if motif_placements is not None:
@@ -163,7 +163,7 @@ def draw_samples(
     seq_mask: TensorType["b n", float] | None = None,
     residue_index: TensorType["b n", float] | None = None,
     chain_index: TensorType["b n", int] | None = None,
-    hotspot: str | list[str] | None = None,
+    hotspots: str | list[str] | None = None,
     sse_cond: TensorType["b n", int] | None = None,
     adj_cond: TensorType["b n n", int] | None = None,
     motif_placements_full: list[str] | None = None,
@@ -193,7 +193,7 @@ def draw_samples(
         seq_mask=seq_mask,
         residue_index=residue_index,
         chain_index=chain_index,
-        hotspot=hotspot,
+        hotspots=hotspots,
         sse_cond=sse_cond,
         adj_cond=adj_cond,
         motif_placements_full=motif_placements_full,
@@ -217,7 +217,7 @@ def draw_samples(
         tmp_dir = Path(f"tmp-{unique_id}")
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        for i in range(len(samp_coords)):
+        for i, _ in enumerate(samp_coords):
             length_bi = int(seq_mask[i].sum().item())
             write_coords_to_pdb(
                 samp_coords[i][:length_bi],
@@ -249,7 +249,7 @@ def draw_samples(
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
-            hotspot=hotspot,
+            hotspots=hotspots,
             sse_cond=sse_cond,
             adj_cond=adj_cond,
             motif_placements_full=motif_placements_full,
@@ -310,7 +310,7 @@ def generate(
     batch_size=32,
     fixed_motif_pos=None,
     motif_placements_full=None,
-    hotspot=None,
+    hotspots=None,
     sse_cond=None,
     adj_cond=None,
     run_name="",
@@ -398,7 +398,7 @@ def generate(
                 ),
                 length_ranges_per_chain=length_ranges_per_chain,
                 return_coords_and_aux=True,
-                hotspot=hotspot,
+                hotspots=hotspots,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
                 motif_placements_full=(
@@ -422,7 +422,7 @@ def generate(
         atom_mask.extend(samp_aux_bi["atom_mask"])
 
     motif_coords = torch.cat(motif_coords, dim=0) if motif_coords else None
-    if len(motif_aatypes) == 0:
+    if not motif_aatypes:
         motif_idx = None
         motif_aatypes = None
         motif_atom_mask = None
@@ -439,12 +439,10 @@ def generate(
 
     sampled_sequences = None
     if allatom:
-        sampled_sequences = []
-        for s_hat_bi in sequences:
-            sampled_sequences.append(
-                "".join([residue_constants.restypes[aaint] for aaint in s_hat_bi])
-            )
-
+        sampled_sequences = [
+            "".join([residue_constants.restypes[aaint] for aaint in s_hat_bi])
+            for s_hat_bi in sequences
+        ]
     # just need motif_idx and motif_aatype from samp_aux, don't need to keep anything else
     sc_aux = None
     if num_mpnn_seqs > 0:
@@ -603,7 +601,7 @@ def sample(
         start_time = time.time()
         total_sampling_time = 0
 
-        model_info = (None, None)
+        model_info = None, None
 
         for (
             motif_fp,
@@ -753,7 +751,7 @@ def sample(
                 batch_size=batch_size,
                 fixed_motif_pos=motif_idx,
                 motif_placements_full=motif_placements_full,
-                hotspot=hotspot,
+                hotspots=hotspot,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
                 run_name=run_name,

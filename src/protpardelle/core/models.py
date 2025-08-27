@@ -50,7 +50,7 @@ def fill_motif_seq(
     s_hat: TensorType["b n", int],
     motif_idx: list[list[int]],
     motif_aatype: list[list[int]],
-):
+) -> torch.Tensor:
     batch_size, seq_length = s_hat.shape
     for bi in range(batch_size):
         ii = 0
@@ -75,7 +75,7 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
         crop_cond_coords[:, :, 5:, :] = 0
     elif "sidechain" in strategy:
         if "sidechain-tip" in strategy:
-            for bi in range(len(motif_idx)):
+            for bi, _ in enumerate(motif_idx):
                 for mi, aa3 in enumerate(motif_aatype[bi]):
                     if aa3 in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS:
                         atom_idx = [
@@ -88,8 +88,6 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
                         crop_cond_coords[bi, motif_idx[bi][mi], inv_atom_idx, :] = 0
         if "backbone" not in strategy:  # given sc, not given bb
             crop_cond_coords[:, :, (0, 1, 2, 4), :] = 0
-        else:
-            pass  # no need to zero-out anything
 
     return crop_cond_coords
 
@@ -99,8 +97,6 @@ def get_time_dependent_scale(
 ) -> float:
     if schedule == "constant":
         scale = 1.0
-    elif schedule == "quadratic":
-        scale = (curr_step / n_steps) ** 2
     elif schedule == "cubic":
         scale = (curr_step / n_steps) ** 3
     elif schedule == "custom-stepscale":
@@ -112,29 +108,29 @@ def get_time_dependent_scale(
             scale = 0.9
         else:
             scale = 1.0
-    else:  # custom step-wise guidance schedule
-        if stage2:
-            if curr_step < 25:
-                scale = 0.01
-            elif curr_step < 40:
-                scale = 0.1
-            elif curr_step < 45:
-                scale = 0.5
-            else:
-                scale = 1.0
+    elif schedule == "quadratic":
+        scale = (curr_step / n_steps) ** 2
+    elif stage2:
+        if curr_step < 25:
+            scale = 0.01
+        elif curr_step < 40:
+            scale = 0.1
+        elif curr_step < 45:
+            scale = 0.5
         else:
-            if curr_step < 250:
-                scale = 0.01
-            elif curr_step < 400:
-                scale = 0.1
-            elif curr_step < 450:
-                scale = 0.5
-            else:
-                scale = 1.0
+            scale = 1.0
+    elif curr_step < 250:
+        scale = 0.01
+    elif curr_step < 400:
+        scale = 0.1
+    elif curr_step < 450:
+        scale = 0.5
+    else:
+        scale = 1.0
     return w * scale
 
 
-def motif_loss(x0_in, motif_idx, motif_coords, atom_mask):
+def motif_loss(x0_in, motif_idx, motif_coords, atom_mask) -> torch.Tensor:
     batch_size = x0_in.shape[0]
     losses = torch.zeros(
         batch_size,
@@ -164,6 +160,7 @@ def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
     for c in contig:
         result.append(list(range(start_idx, start_idx + len(c))))
         start_idx = start_idx + len(c)
+
     return result
 
 
@@ -316,7 +313,6 @@ class CoordinateDenoiser(nn.Module):
         noise_level = noise_level.clamp(min=1e-6)
 
         # Prep inputs and time conditioning
-        batch_lengths = seq_mask.sum(-1)
         actual_var_data = self.sigma_data**2
         var_noisy_coords = noise_level**2 + actual_var_data
         emb = noisy_coords / unsqueeze_trailing_dims(
@@ -475,7 +471,9 @@ def parse_fixed_pos_str(
 
         for r in range(start_residue, end_residue + 1):
             if r not in found_residues_set:
-                logger.warning("Requested position %s%d not found in structure.", chain_letter, r)
+                logger.warning(
+                    "Requested position %s%d not found in structure.", chain_letter, r
+                )
 
         # Extend our fixed indices with whatever we did find
         fixed_indices.extend(matching_indices.tolist())
@@ -764,7 +762,7 @@ class Protpardelle(nn.Module):
         seq_mask: TensorType["b n", float],
         residue_index: TensorType["b n", int],
         chain_index: TensorType["b n", int] | None = None,
-        hotspot: list[str] | str | None = None,
+        hotspots: str | list[str] | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
         gt_aatype: TensorType["b n", int] | None = None,
@@ -776,7 +774,7 @@ class Protpardelle(nn.Module):
         s_t_max: float = 50.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        disallow_aas: list[int] = [4, 20],  # cys, unk
+        disallow_aas: tuple[int, ...] = (4, 20),  # CYS, UNK
         sidechain_mode: bool = False,
         skip_mpnn_proportion: float = 0.7,
         anneal_seq_resampling_rate: str | None = None,  # linear, cosine
@@ -802,13 +800,12 @@ class Protpardelle(nn.Module):
         stage2: bool = False,
         tip_atom_conditioning: bool = False,
     ):
-        """
-        Sampling function for backbone or all-atom diffusion.
+        """Sampling function for backbone or all-atom diffusion.
 
         seq_mask: mask defining the number and lengths of proteins to be sampled.
         residue_index: residue index of proteins to be sampled.
         chain_index: integers denoting different chains, e.g. 0, 0, 1, 1 denotes two chains of two residues each
-        hotspot: {chain}{residx} list or comma-delimited string indicating hotspot residues, e.g. A33,A95,A98,A102
+        hotspots: {chain}{residx} list or comma-delimited string indicating hotspot residues, e.g. A33,A95,A98,A102
         sse_cond: integer denoting the secondary structure class, corresponds to ordering in scripts/make_secstruc_adj.py
         adj_cond: block-adjacency matrix indicating contact of secondary structure elements, obtained from scripts/make_secstruc_adj.py
         gt_coords: conditioning information for coords.
@@ -854,6 +851,7 @@ class Protpardelle(nn.Module):
         stage2: flag to indicate stage2
         tip_atom_conditioning: true to use reconstruction and replacement guidance for tip atom conditioning
         """
+
         cc = apply_dotdict_recursively(conditional_cfg)  # shorthand
         pd = apply_dotdict_recursively(partial_diffusion)
 
@@ -896,9 +894,9 @@ class Protpardelle(nn.Module):
             # Parse hotspots on motif chains
             motif_hotspot_mask = torch.zeros_like(motif_feats["chain_index"])
             chain_id_mapping = motif_feats.pop("chain_id_mapping")
-            if hotspot is not None:
+            if hotspots is not None:
                 hotspot_indices = parse_fixed_pos_str(
-                    hotspot,
+                    hotspots,
                     chain_id_mapping,
                     motif_feats["residue_index_orig"],
                     motif_feats["chain_index"],
@@ -1287,26 +1285,22 @@ class Protpardelle(nn.Module):
                     for mic in motif_idx_contigs
                 ]  # flattened motif_idx, to use in actual indexing
 
-                if cc.enabled:
-                    if (
-                        cc.discontiguous_motif_assignment.enabled
-                        and cc.discontiguous_motif_assignment.strategy == "fixed"
-                    ):
-                        assert (
-                            len(cc.discontiguous_motif_assignment.fixed_motif_pos) > 0
-                        )
-                        m_idx = cc.discontiguous_motif_assignment.fixed_motif_pos
-                        if isinstance(m_idx[0], int):
-                            motif_idx = [m_idx for _ in range(batch_size)]
-                        else:
-                            motif_idx = m_idx
+                if cc.enabled and (
+                    cc.discontiguous_motif_assignment.enabled
+                    and cc.discontiguous_motif_assignment.strategy == "fixed"
+                ):
+                    assert len(cc.discontiguous_motif_assignment.fixed_motif_pos) > 0
+                    m_idx = cc.discontiguous_motif_assignment.fixed_motif_pos
+                    if isinstance(m_idx[0], int):
+                        motif_idx = [m_idx for _ in range(batch_size)]
+                    else:
+                        motif_idx = m_idx
             else:
                 motif_idx = motif_idx_stage1
 
             to_motif_size = lambda x: x * torch.ones(batch_size, motif_size).to(
                 self.device
             )
-            noise_levels = [to_motif_size(noise_schedule(tt)) for tt in timesteps]
 
         if (
             cc.crop_conditional_guidance.enabled
@@ -1314,7 +1308,7 @@ class Protpardelle(nn.Module):
         ):
             crop_cond_coords = torch.zeros_like(xt).to(xt.device)
             # fill in with motif coords at the current motif_idx
-            for bi in range(batch_size):
+            for bi, _ in enumerate(motif_idx):
                 crop_cond_coords[bi, motif_idx[bi]] = motif_all_atom[bi]
 
             crop_cond_coords = apply_crop_cond_strategy(
@@ -1338,7 +1332,7 @@ class Protpardelle(nn.Module):
 
         # Place motif hotspot mask into full hotspot mask
         hotspot_mask = torch.zeros_like(residue_index)
-        if hotspot is not None:
+        if hotspots is not None:
             for bi in range(batch_size):
                 for ii, mi in enumerate(motif_idx[bi]):
                     hotspot_mask[bi, mi] = motif_hotspot_mask[bi, ii]
@@ -1627,7 +1621,7 @@ class Protpardelle(nn.Module):
                                 and i >= (cc.replacement_guidance.start * n_steps)
                                 and i < (cc.replacement_guidance.end * n_steps)
                             ):
-                                for bi in range(len(motif_idx)):
+                                for bi, _ in enumerate(motif_idx):
                                     for raw_mi, mi in enumerate(motif_idx[bi]):
                                         replacement_idx = torch.nonzero(
                                             atom_mask[bi, mi]
@@ -1810,7 +1804,7 @@ class Protpardelle(nn.Module):
                                 and i >= (cc.replacement_guidance.start * n_steps)
                                 and i < (cc.replacement_guidance.end * n_steps)
                             ):
-                                for bi in range(len(motif_idx)):
+                                for bi, _ in enumerate(motif_idx):
                                     for raw_mi, mi in enumerate(motif_idx[bi]):
                                         replacement_idx = torch.nonzero(
                                             atom_mask[bi, mi]
@@ -1871,7 +1865,7 @@ class Protpardelle(nn.Module):
                     if cc.reconstruction_guidance.enabled:
                         loss_mask37 = guidance_mask37
                         if tip_atom_conditioning:
-                            for bi in range(len(motif_idx)):
+                            for bi, _ in enumerate(motif_idx):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
                                     aatype_int = motif_aatype[bi][raw_mi]
                                     motif_aatype_str = residue_constants.restype_1to3[
