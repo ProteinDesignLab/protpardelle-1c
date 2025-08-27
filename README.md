@@ -80,7 +80,7 @@ uv pip install -e .
 
 Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
 
-We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running
+We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running:
 
 ```bash
 bash download_model_params.sh
@@ -146,8 +146,6 @@ export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
 We recommend reading and running the example sampling configs under `examples/sampling` that cover the intended use cases of Protpardelle-1c models. The commands to run each demo are provided below:
 
 ```bash
-# Activate installed environment
-
 # Unconditional sampling
 python -m protpardelle.sample examples/sampling/00_unconditional.yaml --n-samples 8 --num-mpnn-seqs 0
 
