@@ -252,19 +252,19 @@ def runner(
         pdb_paths = [pdb_path]
     pdb_stems = [pdb_fp.stem for pdb_fp in pdb_paths]
 
-    n_samples = len(pdb_paths)
+    num_samples = len(pdb_paths)
 
     all_results = defaultdict(list)
 
-    batch_sizes = [batch_size] * (n_samples // batch_size)
-    if n_samples % batch_size != 0:
-        batch_sizes.append(n_samples % batch_size)
+    batch_sizes = [batch_size] * (num_samples // batch_size)
+    if num_samples % batch_size != 0:
+        batch_sizes.append(num_samples % batch_size)
 
     for i, bs in tqdm(enumerate(batch_sizes)):
 
         si, ei = i * bs, (i + 1) * bs
         if i == len(batch_sizes) - 1:
-            si, ei = -bs, n_samples
+            si, ei = -bs, num_samples
 
         batch = batch_from_pdbs(pdb_paths[si:ei])
         results = forward_ode(model, batch)
