@@ -477,7 +477,7 @@ def sample(
     array_id: int | None = None,
     num_arrays: int | None = None,
 ):
-    """Entrypoint for Protpardelle-1c sampling.
+    """Sampling with Protpardelle-1c.
 
     Args:
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
@@ -786,10 +786,10 @@ def sample(
 
             curr_fix_pos = []
             if motif_idx is not None:
-                for motif_idx_bi in motif_idx:
-                    curr_fix_pos.append(
-                        " ".join([str(mi + 1) for mi in motif_idx_bi])
-                    )  # adjust to be 1-indexed
+                curr_fix_pos.extend(
+                    " ".join([str(mi + 1) for mi in motif_idx_bi])
+                    for motif_idx_bi in motif_idx
+                )
                 all_fix_pos.extend(curr_fix_pos)
             else:
                 all_fix_pos.extend([""] * len(curr_samp_save_names))
@@ -818,45 +818,7 @@ def sample(
                 best_per_structure_metric_dfs = []
 
                 for _, per_structure_metrics in metrics.groupby("structure_index"):
-                    if motif_contig is not None:
-                        if allatom:
-                            per_structure_df_best = per_structure_metrics[
-                                (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                                & (
-                                    per_structure_metrics["allatom_motif_sample_rmsd"]
-                                    < 2.0
-                                )
-                                & (
-                                    per_structure_metrics["allatom_scaffold_scrmsd"]
-                                    < 2.0
-                                )
-                            ]
-                            if not per_structure_df_best.empty:
-                                per_structure_df_best = per_structure_df_best.loc[
-                                    [
-                                        per_structure_df_best[
-                                            "allatom_motif_sample_rmsd"
-                                        ].idxmin()
-                                    ]
-                                ]
-                        else:
-                            per_structure_df_best = per_structure_metrics[
-                                (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                                & (
-                                    per_structure_metrics["allatom_motif_pred_rmsd"]
-                                    < 1.0
-                                )  # More strict
-                                & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
-                            ]
-                            if not per_structure_df_best.empty:
-                                per_structure_df_best = per_structure_df_best.loc[
-                                    [
-                                        per_structure_df_best[
-                                            "allatom_motif_pred_rmsd"
-                                        ].idxmin()
-                                    ]
-                                ]
-                    else:
+                    if motif_contig is None:
                         if allatom:
                             per_structure_df_best = per_structure_metrics[
                                 (per_structure_metrics["allatom_scaffold_scrmsd"] < 2.0)
@@ -882,6 +844,43 @@ def sample(
                                     ]
                                 ]
 
+                    elif allatom:
+                        per_structure_df_best = per_structure_metrics[
+                            (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
+                            & (
+                                per_structure_metrics["allatom_motif_sample_rmsd"]
+                                < 2.0
+                            )
+                            & (
+                                per_structure_metrics["allatom_scaffold_scrmsd"]
+                                < 2.0
+                            )
+                        ]
+                        if not per_structure_df_best.empty:
+                            per_structure_df_best = per_structure_df_best.loc[
+                                [
+                                    per_structure_df_best[
+                                        "allatom_motif_sample_rmsd"
+                                    ].idxmin()
+                                ]
+                            ]
+                    else:
+                        per_structure_df_best = per_structure_metrics[
+                            (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
+                            & (
+                                per_structure_metrics["allatom_motif_pred_rmsd"]
+                                < 1.0
+                            )  # More strict
+                            & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
+                        ]
+                        if not per_structure_df_best.empty:
+                            per_structure_df_best = per_structure_df_best.loc[
+                                [
+                                    per_structure_df_best[
+                                        "allatom_motif_pred_rmsd"
+                                    ].idxmin()
+                                ]
+                            ]
                     if not per_structure_df_best.empty:
                         best_per_structure_metric_dfs.append(per_structure_df_best)
 
@@ -945,11 +944,12 @@ def sample(
                     per_motif_save_dir / "scaffold_info.csv", index=False
                 )
 
-                log_dict = {}
-                log_dict["redundant_success_rate"] = redundant_success_rate
-                log_dict["nonredundant_success_rate"] = nonredundant_success_rate
-                log_dict["redundant_success_count"] = num_success
-                log_dict["nonredundant_success_count"] = num_unique_successes
+                log_dict = {
+                    "redundant_success_rate": redundant_success_rate,
+                    "nonredundant_success_rate": nonredundant_success_rate,
+                    "redundant_success_count": num_success,
+                    "nonredundant_success_count": num_unique_successes,
+                }
                 if allatom:
                     log_dict["ca_motif_sample_rmsd_best"] = metrics[
                         "ca_motif_sample_rmsd"
@@ -1034,6 +1034,7 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
 ) -> None:
+    """Entrypoint for Protpardelle-1c sampling."""
     sample(
         sampling_yaml_path=sampling_yaml_path,
         project_name=project_name,
