@@ -73,7 +73,7 @@ uv venv $ENV_DIR/protpardelle -p python3.10
 source $ENV_DIR/protpardelle/bin/activate
 
 uv pip sync uv_indexes.txt uv.lock  --index-strategy=unsafe-best-match
-uv pip install -e .
+uv pip install -e . --no-deps
 ```
 
 ## Download model weights and configs
