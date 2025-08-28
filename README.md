@@ -299,7 +299,8 @@ A copy of the training config and model checkpoints will be saved under the spec
 ## Datasets
 
 - [AI-CATH](https://zenodo.org/records/15881564): The CATH dataset described in the original Protpardelle paper but augmented with 32 ProteinMPNN sequences per structure. Structures are predicted by ESMFold. Models are trained on only the designable subset (337,936 / 704,448).
-- Boltz Interfaces: PDB chain pairs curated following [Boltz-1](https://www.biorxiv.org/content/10.1101/2024.11.19.624167v4), total 1,593,738 chain pairs used for training.
+- [Boltz Interfaces](https://zenodo.org/records/16002744): PDB chain pairs curated following [Boltz-1](https://www.biorxiv.org/content/10.1101/2024.11.19.624167v4). Due to size, we only release the interface info from which PDB chain pairs can be extracted.
+- [Secondary Structure / Adjacency](todo): Pre-computed `ssadj` inputs using [RFdiffusion's helper script](https://github.com/RosettaCommons/RFdiffusion/blob/main/helper_scripts/make_secstruc_adj.py) for both AI-CATH and Boltz interfaces passing resolution and length cutoffs.
 
 # Likelihood
 
