@@ -121,7 +121,7 @@ export PROTEINMPNN_WEIGHTS=/abs/path/to/ProteinMPNN/vanilla_model_weights
 export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir
 
 # Foldseek binary path (set this if foldseek is not already on PATH)
-export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
+export FOLDSEEK_PATH=/abs/path/to/foldseek/bin
 ```
 
 ## Available Models
