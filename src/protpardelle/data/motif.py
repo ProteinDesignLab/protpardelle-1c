@@ -44,10 +44,9 @@ def motif_idx_to_motif_placement(motif_idx, total_length: int):
     motif_idx_sorted = np.sort(motif_idx)
     motif_placement = [str(motif_idx_sorted[0]), chains[0]]
     for i, idx in enumerate(motif_idx_sorted[1:], start=1):
-        motif_placement.append(str(idx - motif_idx_sorted[i - 1] - 1))
-        motif_placement.append(chains[i])
+        motif_placement.extend((str(idx - motif_idx_sorted[i - 1] - 1), chains[i]))
     motif_placement.append(str(total_length - motif_idx_sorted[-1] - 1))
-    scaffold_length = sum([int(sl) for sl in motif_placement if not str(sl).isalpha()])
+    scaffold_length = sum(int(sl) for sl in motif_placement if not str(sl).isalpha())
     assert scaffold_length + len(motif_idx) == total_length
     return "/".join(motif_placement)
 

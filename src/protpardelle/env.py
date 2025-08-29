@@ -67,7 +67,7 @@ PROTPARDELLE_OUTPUT_DIR = norm_path(
 )
 
 if (
-    _default_foldseek_bin_env := os.getenv("FOLDSEEK_PATH", shutil.which("foldseek"))
+    _default_foldseek_bin_env := os.getenv("FOLDSEEK_BIN", shutil.which("foldseek"))
 ) is None:
     raise ValueError("Foldseek executable not found")
 FOLDSEEK_BIN = norm_path(_default_foldseek_bin_env)

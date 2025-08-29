@@ -132,7 +132,7 @@ def save_samples(
 
         Path(f"{save_dir}/esmfold").mkdir(parents=True, exist_ok=True)
 
-        for idx in range(len(designed_seqs)):
+        for idx, _ in enumerate(designed_seqs):
             designed_seq = seq_to_aatype(designed_seqs[idx].replace(":", ""))
             scaffold_idx = idx // num_designs_per_structure
             if motif_placements is not None:
@@ -163,7 +163,7 @@ def draw_samples(
     seq_mask: TensorType["b n", float] | None = None,
     residue_index: TensorType["b n", float] | None = None,
     chain_index: TensorType["b n", int] | None = None,
-    hotspot: str | list[str] | None = None,
+    hotspots: str | list[str] | None = None,
     sse_cond: TensorType["b n", int] | None = None,
     adj_cond: TensorType["b n n", int] | None = None,
     motif_placements_full: list[str] | None = None,
@@ -193,7 +193,7 @@ def draw_samples(
         seq_mask=seq_mask,
         residue_index=residue_index,
         chain_index=chain_index,
-        hotspot=hotspot,
+        hotspots=hotspots,
         sse_cond=sse_cond,
         adj_cond=adj_cond,
         motif_placements_full=motif_placements_full,
@@ -217,7 +217,7 @@ def draw_samples(
         tmp_dir = Path(f"tmp-{unique_id}")
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
-        for i in range(len(samp_coords)):
+        for i, _ in enumerate(samp_coords):
             length_bi = int(seq_mask[i].sum().item())
             write_coords_to_pdb(
                 samp_coords[i][:length_bi],
@@ -249,7 +249,7 @@ def draw_samples(
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
-            hotspot=hotspot,
+            hotspots=hotspots,
             sse_cond=sse_cond,
             adj_cond=adj_cond,
             motif_placements_full=motif_placements_full,
@@ -310,7 +310,7 @@ def generate(
     batch_size=32,
     fixed_motif_pos=None,
     motif_placements_full=None,
-    hotspot=None,
+    hotspots=None,
     sse_cond=None,
     adj_cond=None,
     run_name="",
@@ -398,7 +398,7 @@ def generate(
                 ),
                 length_ranges_per_chain=length_ranges_per_chain,
                 return_coords_and_aux=True,
-                hotspot=hotspot,
+                hotspots=hotspots,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
                 motif_placements_full=(
@@ -422,7 +422,7 @@ def generate(
         atom_mask.extend(samp_aux_bi["atom_mask"])
 
     motif_coords = torch.cat(motif_coords, dim=0) if motif_coords else None
-    if len(motif_aatypes) == 0:
+    if not motif_aatypes:
         motif_idx = None
         motif_aatypes = None
         motif_atom_mask = None
@@ -439,12 +439,10 @@ def generate(
 
     sampled_sequences = None
     if allatom:
-        sampled_sequences = []
-        for s_hat_bi in sequences:
-            sampled_sequences.append(
-                "".join([residue_constants.restypes[aaint] for aaint in s_hat_bi])
-            )
-
+        sampled_sequences = [
+            "".join([residue_constants.restypes[aaint] for aaint in s_hat_bi])
+            for s_hat_bi in sequences
+        ]
     # just need motif_idx and motif_aatype from samp_aux, don't need to keep anything else
     sc_aux = None
     if num_mpnn_seqs > 0:
@@ -479,7 +477,7 @@ def sample(
     array_id: int | None = None,
     num_arrays: int | None = None,
 ):
-    """Entrypoint for Protpardelle-1c sampling.
+    """Sampling with Protpardelle-1c.
 
     Args:
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
@@ -603,7 +601,7 @@ def sample(
         start_time = time.time()
         total_sampling_time = 0
 
-        model_info = (None, None)
+        model_info = None, None
 
         for (
             motif_fp,
@@ -753,7 +751,7 @@ def sample(
                 batch_size=batch_size,
                 fixed_motif_pos=motif_idx,
                 motif_placements_full=motif_placements_full,
-                hotspot=hotspot,
+                hotspots=hotspot,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
                 run_name=run_name,
@@ -788,10 +786,10 @@ def sample(
 
             curr_fix_pos = []
             if motif_idx is not None:
-                for motif_idx_bi in motif_idx:
-                    curr_fix_pos.append(
-                        " ".join([str(mi + 1) for mi in motif_idx_bi])
-                    )  # adjust to be 1-indexed
+                curr_fix_pos.extend(
+                    " ".join([str(mi + 1) for mi in motif_idx_bi])
+                    for motif_idx_bi in motif_idx
+                )
                 all_fix_pos.extend(curr_fix_pos)
             else:
                 all_fix_pos.extend([""] * len(curr_samp_save_names))
@@ -820,45 +818,7 @@ def sample(
                 best_per_structure_metric_dfs = []
 
                 for _, per_structure_metrics in metrics.groupby("structure_index"):
-                    if motif_contig is not None:
-                        if allatom:
-                            per_structure_df_best = per_structure_metrics[
-                                (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                                & (
-                                    per_structure_metrics["allatom_motif_sample_rmsd"]
-                                    < 2.0
-                                )
-                                & (
-                                    per_structure_metrics["allatom_scaffold_scrmsd"]
-                                    < 2.0
-                                )
-                            ]
-                            if not per_structure_df_best.empty:
-                                per_structure_df_best = per_structure_df_best.loc[
-                                    [
-                                        per_structure_df_best[
-                                            "allatom_motif_sample_rmsd"
-                                        ].idxmin()
-                                    ]
-                                ]
-                        else:
-                            per_structure_df_best = per_structure_metrics[
-                                (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                                & (
-                                    per_structure_metrics["allatom_motif_pred_rmsd"]
-                                    < 1.0
-                                )  # More strict
-                                & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
-                            ]
-                            if not per_structure_df_best.empty:
-                                per_structure_df_best = per_structure_df_best.loc[
-                                    [
-                                        per_structure_df_best[
-                                            "allatom_motif_pred_rmsd"
-                                        ].idxmin()
-                                    ]
-                                ]
-                    else:
+                    if motif_contig is None:
                         if allatom:
                             per_structure_df_best = per_structure_metrics[
                                 (per_structure_metrics["allatom_scaffold_scrmsd"] < 2.0)
@@ -884,6 +844,43 @@ def sample(
                                     ]
                                 ]
 
+                    elif allatom:
+                        per_structure_df_best = per_structure_metrics[
+                            (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
+                            & (
+                                per_structure_metrics["allatom_motif_sample_rmsd"]
+                                < 2.0
+                            )
+                            & (
+                                per_structure_metrics["allatom_scaffold_scrmsd"]
+                                < 2.0
+                            )
+                        ]
+                        if not per_structure_df_best.empty:
+                            per_structure_df_best = per_structure_df_best.loc[
+                                [
+                                    per_structure_df_best[
+                                        "allatom_motif_sample_rmsd"
+                                    ].idxmin()
+                                ]
+                            ]
+                    else:
+                        per_structure_df_best = per_structure_metrics[
+                            (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
+                            & (
+                                per_structure_metrics["allatom_motif_pred_rmsd"]
+                                < 1.0
+                            )  # More strict
+                            & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
+                        ]
+                        if not per_structure_df_best.empty:
+                            per_structure_df_best = per_structure_df_best.loc[
+                                [
+                                    per_structure_df_best[
+                                        "allatom_motif_pred_rmsd"
+                                    ].idxmin()
+                                ]
+                            ]
                     if not per_structure_df_best.empty:
                         best_per_structure_metric_dfs.append(per_structure_df_best)
 
@@ -947,11 +944,12 @@ def sample(
                     per_motif_save_dir / "scaffold_info.csv", index=False
                 )
 
-                log_dict = {}
-                log_dict["redundant_success_rate"] = redundant_success_rate
-                log_dict["nonredundant_success_rate"] = nonredundant_success_rate
-                log_dict["redundant_success_count"] = num_success
-                log_dict["nonredundant_success_count"] = num_unique_successes
+                log_dict = {
+                    "redundant_success_rate": redundant_success_rate,
+                    "nonredundant_success_rate": nonredundant_success_rate,
+                    "redundant_success_count": num_success,
+                    "nonredundant_success_count": num_unique_successes,
+                }
                 if allatom:
                     log_dict["ca_motif_sample_rmsd_best"] = metrics[
                         "ca_motif_sample_rmsd"
@@ -1036,6 +1034,7 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
 ) -> None:
+    """Entrypoint for Protpardelle-1c sampling."""
     sample(
         sampling_yaml_path=sampling_yaml_path,
         project_name=project_name,

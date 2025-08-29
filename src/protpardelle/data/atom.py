@@ -12,7 +12,17 @@ from protpardelle.common import residue_constants
 def atom37_mask_from_aatype(
     aatype: torch.Tensor, seq_mask: torch.Tensor | None = None
 ) -> torch.Tensor:
-    # source_mask is (21,37) originally
+    """Generate a mask for atom37 representation from amino acid type.
+
+    Args:
+        aatype (torch.Tensor): Amino acid type tensor of shape (B, L).
+        seq_mask (torch.Tensor | None, optional): Sequence mask tensor of shape (B, L). Defaults to None.
+
+    Returns:
+        torch.Tensor: Atom37 mask tensor of shape (B, L, 37).
+    """
+
+    # source_mask is (21, 37) originally
     source_mask = torch.tensor(residue_constants.restype_atom37_mask).to(aatype)
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
@@ -24,8 +34,20 @@ def atom37_mask_from_aatype(
     return atom_mask
 
 
-def atom14_mask_from_aatype(aatype, seq_mask=None):
-    # source_mask is (21,14) originally
+def atom14_mask_from_aatype(
+    aatype: torch.Tensor, seq_mask: torch.Tensor | None = None
+) -> torch.Tensor:
+    """Generate a mask for atom14 representation from amino acid type.
+
+    Args:
+        aatype (torch.Tensor): Amino acid type tensor of shape (B, L).
+        seq_mask (torch.Tensor | None, optional): Sequence mask tensor of shape (B, L). Defaults to None.
+
+    Returns:
+        torch.Tensor: Atom14 mask tensor of shape (B, L, 14).
+    """
+
+    # source_mask is (21, 14) originally
     source_mask = torch.tensor(residue_constants.restype_atom14_mask).to(aatype.device)
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask

@@ -106,7 +106,7 @@ Outputs will be saved in `<project_root>/results/` by default.
 
 > If you keep the default layout above, you can skip this section.
 
-If the `foldseek` binary is already on your `PATH`, you do not need to set `FOLDSEEK_PATH`; otherwise set it explicitly (see below). To override file locations, set the following variables to absolute paths:
+If the `foldseek` binary is already on your `PATH`, you do not need to set `FOLDSEEK_BIN`; otherwise set it explicitly (see below). To override file locations, set the following variables to absolute paths:
 
 ```bash
 # (Optional) only if auto-detection of project root fails:
@@ -125,7 +125,7 @@ export PROTEINMPNN_WEIGHTS=/abs/path/to/ProteinMPNN/vanilla_model_weights
 export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir
 
 # Foldseek binary path (set this if foldseek is not already on PATH)
-export FOLDSEEK_PATH=/abs/path/to/foldseek/bin
+export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
 ```
 
 ## Available Models

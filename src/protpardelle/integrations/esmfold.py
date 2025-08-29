@@ -3,6 +3,7 @@
 Author: Zhaoyang Li
 """
 
+import logging
 from collections import defaultdict
 
 import torch
@@ -17,6 +18,8 @@ from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import ESMFOLD_PATH
 from protpardelle.utils import clean_gpu_cache, get_default_device
 
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+
 
 def collate_dense_tensors(
     samples: list[torch.Tensor], pad_v: float = 0.0
@@ -24,11 +27,15 @@ def collate_dense_tensors(
     """Adapted from https://github.com/facebookresearch/esm/blob/main/esm/esmfold/v1/misc.py"""
     if not samples:
         return torch.tensor([])
-    if len(set(x.dim() for x in samples)) != 1:
+    if len({x.dim() for x in samples}) != 1:
         raise RuntimeError(
             f"Samples has varying dimensions: {[x.dim() for x in samples]}"
         )
-    (device,) = tuple(set(x.device for x in samples))  # assumes all on same device
+    if len({x.device for x in samples}) != 1:
+        raise RuntimeError(
+            f"Samples has varying devices: {[x.device for x in samples]}"
+        )
+    device = samples[0].device
     max_shape = [max(lst) for lst in zip(*[x.shape for x in samples])]
     result = torch.empty(
         len(samples), *max_shape, dtype=samples[0].dtype, device=device
