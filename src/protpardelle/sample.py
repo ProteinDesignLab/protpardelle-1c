@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import time
 from collections import defaultdict
 from copy import deepcopy
@@ -847,14 +848,8 @@ def sample(
                     elif allatom:
                         per_structure_df_best = per_structure_metrics[
                             (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                            & (
-                                per_structure_metrics["allatom_motif_sample_rmsd"]
-                                < 2.0
-                            )
-                            & (
-                                per_structure_metrics["allatom_scaffold_scrmsd"]
-                                < 2.0
-                            )
+                            & (per_structure_metrics["allatom_motif_sample_rmsd"] < 2.0)
+                            & (per_structure_metrics["allatom_scaffold_scrmsd"] < 2.0)
                         ]
                         if not per_structure_df_best.empty:
                             per_structure_df_best = per_structure_df_best.loc[
@@ -868,8 +863,7 @@ def sample(
                         per_structure_df_best = per_structure_metrics[
                             (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
                             & (
-                                per_structure_metrics["allatom_motif_pred_rmsd"]
-                                < 1.0
+                                per_structure_metrics["allatom_motif_pred_rmsd"] < 1.0
                             )  # More strict
                             & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
                         ]
@@ -907,8 +901,37 @@ def sample(
 
                     # Foldseek clustering command from La-Proteina
                     foldseek_dir = per_motif_save_dir / "foldseek"
-                    foldseek_cmd = f"{FOLDSEEK_BIN} easy-cluster {self_consistent_dir} {foldseek_dir}/res {foldseek_dir} --alignment-type 1 --cov-mode 0 --min-seq-id 0 --tmscore-threshold 0.5 --single-step-clustering > /dev/null 2>&1"
-                    os.system(foldseek_cmd)
+                    foldseek_dir.mkdir(parents=True, exist_ok=True)
+
+                    cmd = [
+                        FOLDSEEK_BIN,
+                        "easy-cluster",
+                        str(self_consistent_dir),
+                        str(foldseek_dir / "res"),
+                        str(foldseek_dir),
+                        "--alignment-type",
+                        "1",
+                        "--cov-mode",
+                        "0",
+                        "--min-seq-id",
+                        "0",
+                        "--tmscore-threshold",
+                        "0.5",
+                        "--single-step-clustering",
+                    ]
+
+                    # Quiet run (portable equivalent of > /dev/null 2>&1)
+                    try:
+                        subprocess.run(
+                            cmd,
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        raise RuntimeError(
+                            f"Foldseek easy-cluster failed with exit code {e.returncode}"
+                        ) from e
 
                     # parse Foldseek output for unique successes
                     cluster_fp = foldseek_dir / "res_rep_seq.fasta"
@@ -989,7 +1012,7 @@ def sample(
                         "ca_scaffold_scrmsd"
                     ].mean()
 
-                if use_wandb and num_mpnn_seqs > 0:
+                if use_wandb:
                     wandb.log(log_dict)
 
         time_elapsed = time.time() - start_time
