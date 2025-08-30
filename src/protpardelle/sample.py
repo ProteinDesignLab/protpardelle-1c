@@ -6,14 +6,13 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 import itertools
 import logging
 import math
-import os
 import shutil
 import subprocess
 import time
+import uuid
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-import uuid
 
 import hydra
 import numpy as np
@@ -24,6 +23,7 @@ import wandb
 from Bio import SeqIO
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
+from torch.types import Device
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
@@ -52,7 +52,27 @@ from protpardelle.utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+class ProtpardelleSampler:
+    def __init__(
+        self,
+        model: Protpardelle,
+        device: Device,
+        num_mpnn_seqs: int = 8,
+    ):
+        self.model = model
+        self.device = device
+        self.num_mpnn_seqs = num_mpnn_seqs
+        if self.num_mpnn_seqs > 0:
+            self.mpnn_model = protein_mpnn.get_mpnn_model(
+                PROTEINMPNN_WEIGHTS,
+                device=self.device,
+            )
+        else:
+            self.mpnn_model = None
 
 
 def save_samples(
@@ -233,14 +253,6 @@ def draw_samples(
         sampling_kwargs["jump_steps"] = False
         sampling_kwargs["uniform_steps"] = True
 
-        # Here, an alternative strategy is to set stage2 as partial diffusion conditioned on backbone
-        # uncomment the subsequent lines to achieve this
-        # sampling_kwargs['conditional_cfg']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['strategy'] = 'backbone'
-        # sampling_kwargs['conditional_cfg']['reconstruction_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['replacement_guidance']['enabled'] = False
-
         sampling_kwargs["partial_diffusion"]["enabled"] = True
         sampling_kwargs["partial_diffusion"]["n_steps"] = rewind_steps
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
@@ -293,13 +305,12 @@ def draw_samples(
 
     if return_aux:
         return aux
-    else:
-        if return_sampling_runtime:
-            return cropped_samp_coords, cropped_chain_index, seq_mask, aux["runtime"]
-        elif return_coords_and_aux:
-            return cropped_samp_coords, cropped_chain_index, seq_mask, aux
-        else:
-            return cropped_samp_coords, cropped_chain_index, seq_mask
+    if return_sampling_runtime:
+        return cropped_samp_coords, cropped_chain_index, seq_mask, aux["runtime"]
+    if return_coords_and_aux:
+        return cropped_samp_coords, cropped_chain_index, seq_mask, aux
+
+    return cropped_samp_coords, cropped_chain_index, seq_mask
 
 
 def generate(
@@ -343,9 +354,9 @@ def generate(
     if all_lengths is not None:
         max_length = np.array(all_lengths).sum(1).max()
         for curr_len in all_lengths:
-            curr_length_ranges_per_chain = []
-            for curr_chain_len in curr_len:
-                curr_length_ranges_per_chain.append([curr_chain_len, curr_chain_len])
+            curr_length_ranges_per_chain = [
+                [curr_chain_len, curr_chain_len] for curr_chain_len in curr_len
+            ]
             seq_mask_in, residue_index_in, chain_index_in = (
                 model.make_seq_mask_for_sampling(
                     length_ranges_per_chain=curr_length_ranges_per_chain, num_samples=1
@@ -463,7 +474,7 @@ def generate(
             motif_atom_mask=motif_atom_mask,
         )
 
-    return (trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
+    return trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux
 
 
 def sample(

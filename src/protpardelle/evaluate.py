@@ -8,6 +8,7 @@ import shutil
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
@@ -16,7 +17,7 @@ from torchtyping import TensorType
 import protpardelle.core.modules as modules
 import protpardelle.data.pdb_io
 from protpardelle.common import residue_constants
-from protpardelle.data import align
+from protpardelle.data.align import kabsch_align, tm_score
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.integrations import protein_mpnn
 from protpardelle.integrations.esmfold import predict_structures
@@ -116,38 +117,49 @@ def make_fixed_pos_jsonl(
     return fixed_pos_jsonl
 
 
-def compute_structure_metric(coords1, coords2, metric="ca_rmsd", atom_mask=None):
-    # coords1 tensor[l][a][3]
-    def _tmscore(a, b, mask=None):
-        length = len(b)
-        dists = (a - b).pow(2).sum(-1)
-        d0 = 1.24 * ((length - 15) ** (1 / 3)) - 1.8
-        term = 1 / (1 + ((dists) / (d0**2)))
-        if mask is None:
-            return term.mean()
-        else:
-            term = term * mask
-            return term.sum() / mask.sum().clamp(min=1)
+def compute_structure_metric(
+    coords1: torch.Tensor,
+    coords2: torch.Tensor,
+    metric: Literal[
+        "ca_rmsd", "allatom_rmsd", "tm_score", "allatom_tm", "allatom_lddt"
+    ] = "ca_rmsd",
+    atom_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute structure metric between two sets of coordinates.
 
-    aligned_coords1_ca, (R, t) = align.kabsch_align(coords1[:, 1], coords2[:, 1])
+    Args:
+        coords1 (torch.Tensor): First set of coordinates.
+        coords2 (torch.Tensor): Second set of coordinates.
+        metric (Literal["ca_rmsd", "allatom_rmsd", "tm_score", "allatom_tm", "allatom_lddt"], optional): Metric to compute.
+            Defaults to "ca_rmsd".
+        atom_mask (torch.Tensor | None, optional): Mask to apply. Defaults to None.
+
+    Raises:
+        NotImplementedError: If the metric is not implemented.
+
+    Returns:
+        torch.Tensor: The computed structure metric.
+    """
+
+    aligned_coords1_ca, (R, t) = kabsch_align(coords1[:, 1], coords2[:, 1])
     aligned_coords1_based_on_ca = coords1 - coords1[:, 1:2].mean(0, keepdim=True)
     aligned_coords1_based_on_ca = aligned_coords1_based_on_ca @ R.t() + t
 
     if "allatom" in metric:
         atom_mask = atom_mask[: coords1.shape[0]].bool()
-        _, (R, t) = align.kabsch_align(coords1[atom_mask], coords2[atom_mask])
+        _, (R, t) = kabsch_align(coords1[atom_mask], coords2[atom_mask])
         aligned_coords1 = coords1 - coords1[atom_mask].mean(0, keepdim=True)
         aligned_coords1 = aligned_coords1 @ R.t() + t
     else:
         aligned_coords1 = aligned_coords1_based_on_ca
 
-    ca_rmsd = (aligned_coords1_ca - coords2[:, 1]).pow(2).sum(-1).mean().sqrt()
+    ca_rmsd = (aligned_coords1_ca - coords2[:, 1]).square().sum(-1).mean().sqrt()
 
     if "allatom" in metric:
         aligned_coords1_masked = aligned_coords1 * atom_mask.unsqueeze(-1)
         coords2_masked = coords2 * atom_mask.unsqueeze(-1)
         allatom_rmsd = torch.sqrt(
-            (aligned_coords1_masked - coords2_masked).pow(2).sum(-1).sum()
+            (aligned_coords1_masked - coords2_masked).square().sum(-1).sum()
             / atom_mask.sum()
         )
 
@@ -158,12 +170,11 @@ def compute_structure_metric(coords1, coords2, metric="ca_rmsd", atom_mask=None)
     elif metric == "ca_rmsd":
         return ca_rmsd
     elif metric == "tm_score":
-        tm = _tmscore(aligned_coords1_ca, coords2[:, 1])
-        return tm
+        return tm_score(aligned_coords1_ca, coords2[:, 1])
     elif metric == "allatom_tm":
         # Align on Ca, compute allatom TM
         assert atom_mask is not None
-        return _tmscore(aligned_coords1, coords2, mask=atom_mask)
+        return tm_score(aligned_coords1, coords2, mask=atom_mask)
     elif metric == "allatom_lddt":
         assert atom_mask is not None
         lddt = modules.lddt(
