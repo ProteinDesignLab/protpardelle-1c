@@ -774,7 +774,7 @@ class Protpardelle(nn.Module):
         s_t_max: float = 50.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
-        disallow_aas: tuple[int, ...] = (4, 20),  # CYS, UNK
+        disallow_aas: list[int] = [4, 20],  # CYS, UNK
         sidechain_mode: bool = False,
         skip_mpnn_proportion: float = 0.7,
         anneal_seq_resampling_rate: str | None = None,  # linear, cosine
