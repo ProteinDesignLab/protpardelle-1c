@@ -329,7 +329,20 @@ class CoordinateDenoiser(nn.Module):
             sse_cond = torch.zeros_like(residue_index).long()
 
         if self.config.model.crop_conditional:
-            if (
+            print('in the crop conditional')
+            if self.config.model.is_unidx:
+                print('in the unindexed')
+                if struct_crop_cond is None:
+                    struct_crop_cond = torch.zeros_like(noisy_coords)
+                else:
+                    struct_crop_cond = struct_crop_cond / self.sigma_data
+
+                extend_residx = torch.full((residue_index.size('b'), struct_crop_cond.size('n')), -1) # add -1s for the remaining residues to the residue index
+                residue_index = torch.cat(residue_index, extend_residx)
+
+                emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=1) # concatenate along the 'n' dimension
+          
+            elif (
                 "conditioning_style" in self.config.model
                 and "concat" in self.config.model.conditioning_style
             ):
@@ -372,13 +385,6 @@ class CoordinateDenoiser(nn.Module):
                 )  # spacing info is leaked
                 if "noise_residual" in self.config.model.conditioning_style:
                     noise_cond = noise_cond + motif_cond
-
-        elif self.config.model.is_unidx:
-            print('in the unindexed')
-            extend_residx = torch.full((residue_index.size('b'), struct_crop_cond.size('n')), -1) # add -1s for the remaining residues to the residue index
-            residue_index = torch.cat(residue_index, extend_residx)
-
-            emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=1) # concatenate along the 'n' dimension
 
         else:
             emb = torch.cat([emb, struct_self_cond], dim=-1)
