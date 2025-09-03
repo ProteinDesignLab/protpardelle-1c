@@ -373,6 +373,13 @@ class CoordinateDenoiser(nn.Module):
                 if "noise_residual" in self.config.model.conditioning_style:
                     noise_cond = noise_cond + motif_cond
 
+        elif self.config.model.is_unidx:
+            print('in the unindexed')
+            extend_residx = torch.full((residue_index.size('b'), struct_crop_cond.size('n')), -1) # add -1s for the remaining residues to the residue index
+            residue_index = torch.cat(residue_index, extend_residx)
+
+            emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=1) # concatenate along the 'n' dimension
+
         else:
             emb = torch.cat([emb, struct_self_cond], dim=-1)
 
