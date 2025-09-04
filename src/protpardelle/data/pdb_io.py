@@ -274,6 +274,7 @@ def feats_to_pdb_str(
 def bb_coords_to_pdb_str(
     coords,
     atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
+    residue_index: TensorType["n"] | None = None,
     chain_index: TensorType["n"] | None = None,
     aatype: TensorType["n"] | None = None,
 ) -> str:
@@ -336,7 +337,11 @@ def bb_coords_to_pdb_str(
 
             if chain_idx not in res_counter:
                 res_counter[chain_idx] = 1
-            resnum = res_counter[chain_idx]
+
+            if residue_index is not None:
+                resnum = residue_index[residx].long().item()
+            else:
+                resnum = res_counter[chain_idx]
 
             pdb_str += _bb_pdb_line(
                 atom,
@@ -399,6 +404,7 @@ def write_coords_to_pdb(
                 c_flat,
                 atoms,
                 aatype=feats_i.get("aatype", None),
+                residue_index=feats_i.get("residue_index", None),
                 chain_index=feats_i.get("chain_index", None),
             )
         else:

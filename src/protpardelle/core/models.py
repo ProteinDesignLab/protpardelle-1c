@@ -1341,7 +1341,11 @@ class Protpardelle(nn.Module):
 
         if partial_diffusion is not None and pd.enabled:
             sigma = sigma_float = noise_schedule(timesteps[pd_step])
-            timesteps = timesteps[pd_step + 1 :]
+            timesteps = timesteps[pd_step:]
+
+            # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
+            residue_index = torch.tile(pd_feats["residue_index"][None], (batch_size, 1)).to(residue_index)
+            chain_index = torch.tile(pd_feats["chain_index"][None], (batch_size, 1)).to(chain_index)
 
         # Sampling trajectory
         pbar = tqdm(total=len(timesteps[1:]), desc="Sampling backbones")
@@ -2056,6 +2060,8 @@ class Protpardelle(nn.Module):
                 "motif_all_atom": motif_all_atom,
                 "motif_atom_mask": motif_atom_mask,
                 "motif_aa3": motif_aa3,
+                "residue_index": residue_index,
+                "chain_index": chain_index,
             }
         else:
             return xt_traj, x0_traj, st_traj, s0_traj, seq_mask

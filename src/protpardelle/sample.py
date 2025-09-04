@@ -64,6 +64,7 @@ def save_samples(
 ):
     (
         sampled_coords,
+        trimmed_residue_index,
         trimmed_chain_index,
         seq_mask,
         samp_aux,
@@ -121,6 +122,7 @@ def save_samples(
             samp_save_name,
             batched=False,
             aatype=dummy_aatype[idx],
+            residue_index=trimmed_residue_index[idx],
             chain_index=trimmed_chain_index[idx],
         )
         all_samp_save_names.append(str(samp_save_name.resolve()))
@@ -152,6 +154,7 @@ def save_samples(
                 pred_save_name,
                 batched=False,
                 aatype=designed_seq,
+                residue_index=trimmed_residue_index[scaffold_idx],
                 chain_index=trimmed_chain_index[scaffold_idx],
                 b_factors=all_atom_plddts[idx],
             )
@@ -203,6 +206,9 @@ def draw_samples(
         dummy_fill_mode=model.config.data.dummy_fill_mode,
         **sampling_kwargs,
     )
+    # account for possible override from partial diffusion input structure
+    residue_index = aux["residue_index"]
+    chain_index = aux["chain_index"]
 
     # Stage 2 sampling is allatom partial diffusion given sequence from stage1 for more explicit sidechain-driven backbone change
     stage2_enabled = stage2_cfg.pop("enabled")
@@ -288,17 +294,18 @@ def draw_samples(
         cropped_samp_coords = [
             s[: seq_lens[i], model.bb_idxs] for i, s in enumerate(aux[xt_traj_key][-1])
         ]
+    cropped_residue_index = [r[: seq_lens[i]] for i, r in enumerate(residue_index)]
     cropped_chain_index = [c[: seq_lens[i]] for i, c in enumerate(chain_index)]
 
     if return_aux:
         return aux
     else:
         if return_sampling_runtime:
-            return cropped_samp_coords, cropped_chain_index, seq_mask, aux["runtime"]
+            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux["runtime"]
         elif return_coords_and_aux:
-            return cropped_samp_coords, cropped_chain_index, seq_mask, aux
+            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux
         else:
-            return cropped_samp_coords, cropped_chain_index, seq_mask
+            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask
 
 
 def generate(
@@ -327,6 +334,7 @@ def generate(
         mpnn_model = None
 
     trimmed_coords = []
+    trimmed_residue_index = []
     trimmed_chain_index = []
     seq_mask = []
     atom_mask = []
@@ -384,7 +392,7 @@ def generate(
 
         curr_sampling_config = deepcopy(sampling_config["sampling"])
 
-        trimmed_coords_bi, trimmed_chain_index_bi, seq_mask_bi, samp_aux_bi = (
+        trimmed_coords_bi, trimmed_residue_index_bi, trimmed_chain_index_bi, seq_mask_bi, samp_aux_bi = (
             draw_samples(
                 model,
                 num_samples=bs,
@@ -411,6 +419,7 @@ def generate(
             )
         )
         trimmed_coords.extend(trimmed_coords_bi)
+        trimmed_residue_index.extend(trimmed_residue_index_bi)
         trimmed_chain_index.extend(trimmed_chain_index_bi)
         seq_mask.extend(seq_mask_bi)
         if samp_aux_bi["motif_idx"] is not None:
@@ -462,7 +471,7 @@ def generate(
             motif_atom_mask=motif_atom_mask,
         )
 
-    return (trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
+    return (trimmed_coords, trimmed_residue_index, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
 
 
 def sample(
