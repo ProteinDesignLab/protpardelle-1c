@@ -543,7 +543,10 @@ def sample(
     ):
         if motif_cfg is None:
             motif_cfg = f"{ri:03}_unconditional"
-        motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+        if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
+            motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+        else:
+            motif_fps.append(motif_dir / motif_cfg)
         motif_contigs.append(motif_contig)
         scaffold_lengths.append(length_range)
         hotspots.append(hs)
