@@ -342,17 +342,28 @@ class CoordinateDenoiser(nn.Module):
 
                 if self.config.model.is_unidx: # Check if unindexed
                     print('in unindexed')
-                    res_mask = (crop_cond_mask == 1).any(dim = -1) # check which residues are in the crop
-                    n_res_crop = res_mask.sum(dim = 1) # get the number of residues in the crop
+                    crop_res_mask = (crop_cond_mask == 1).any(dim = -1) # check which residues are in the crop
+                    n_res_crop = crop_res_mask.sum(dim = 1) # get the number of residues in the crop
                     n_res_seq = seq_mask.sum(-1) # get the number of residues in the orig sequence
                     # print('res crop', n_res_crop, n_res_crop.shape, 'res seq', n_res_seq, n_res_seq.shape)
-                    for i in range(residue_index.shape[0]):
+                    batch = residue_index.shape[0]
+                    for i in range(batch):
                         # print(i, n_res_seq[i], n_res_crop[i], n_res_seq[i].shape, n_res_crop[i].shape)
                         start = int(n_res_seq[i].item())
                         end = int(start + n_res_crop[i].item())
+
+                        # update residue index
                         residue_index[i, start:end] = -1
+
+                        # update embedding
+                        print('crop res shape', crop_res.shape, 'crop res', crop_res)
+
+                        crop_res = struct_crop_cond[i][crop_res_mask[i]]
+                        emb[i, start:end, :, :] = crop_res
+
+
+                    emb = torch.cat([emb, struct_self_cond], dim= -1) # concatenate self conditioning coords as usual
                     
-                    emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=1) # concatenate along the 'n' dimension
 
                 else:
                     emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=-1)
