@@ -439,6 +439,7 @@ class ProtpardelleTrainer:
             "chain_index": chain_index,
             "hotspot_mask": hotspot_mask,
             "struct_crop_cond": struct_crop_cond,
+            "crop_cond_mask": crop_cond_mask,
             "sse_cond": sse_cond,
             "adj_cond": adj_cond,
         }

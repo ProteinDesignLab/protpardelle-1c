@@ -31,7 +31,7 @@ train:
     recenter_coords: True
 
 data:
-  pdb_paths: ["/your/path/to/augmented_ingraham_cath_bugfree"]
+  pdb_paths: ["/scratch/users/tianyulu/augmented_ingraham_cath_bugfree"]
   mixing_ratios: [1.0]
   fixed_size: 512
   n_aatype_tokens: 21
