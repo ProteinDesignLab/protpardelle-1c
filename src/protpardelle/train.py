@@ -398,6 +398,7 @@ class ProtpardelleTrainer:
                 hotspot_mask = None  # type: ignore
         else:
             struct_crop_cond = None
+            crop_cond_mask = None
             hotspot_mask = None
 
         # Secondary structure conditioning

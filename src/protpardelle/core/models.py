@@ -243,6 +243,7 @@ class CoordinateDenoiser(nn.Module):
             9
             if config.model.crop_conditional
             and "concat" in config.model.conditioning_style
+            and not config.model.is_unidx
             else 6
         )
         if (
@@ -356,9 +357,8 @@ class CoordinateDenoiser(nn.Module):
                         residue_index[i, start:end] = -1
 
                         # update embedding
-                        print('crop res shape', crop_res.shape, 'crop res', crop_res)
-
                         crop_res = struct_crop_cond[i][crop_res_mask[i]]
+                        # print('crop res shape', crop_res.shape, 'crop res', crop_res)
                         emb[i, start:end, :, :] = crop_res
 
 
