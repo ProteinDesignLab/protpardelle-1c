@@ -345,8 +345,12 @@ class CoordinateDenoiser(nn.Module):
                     res_mask = (crop_cond_mask == 1).any(dim = -1) # check which residues are in the crop
                     n_res_crop = res_mask.sum(dim = 1) # get the number of residues in the crop
                     n_res_seq = seq_mask.sum(-1) # get the number of residues in the orig sequence
+                    # print('res crop', n_res_crop, n_res_crop.shape, 'res seq', n_res_seq, n_res_seq.shape)
                     for i in range(residue_index.shape[0]):
-                        residue_index[i, n_res_seq:n_res_seq + n_res_crop[i]] = -1
+                        # print(i, n_res_seq[i], n_res_crop[i], n_res_seq[i].shape, n_res_crop[i].shape)
+                        start = int(n_res_seq[i].item())
+                        end = int(start + n_res_crop[i].item())
+                        residue_index[i, start:end] = -1
                     
                     emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=1) # concatenate along the 'n' dimension
 
