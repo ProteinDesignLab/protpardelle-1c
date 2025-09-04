@@ -627,6 +627,7 @@ class Protpardelle(nn.Module):
         hotspot_mask: TensorType["b n", int] | None = None,
         struct_self_cond: TensorType["b n a x", float] | None = None,
         struct_crop_cond: TensorType["b n a x", float] | None = None,
+        crop_cond_mask: TensorType["b n a", int] | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
         seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
@@ -661,6 +662,7 @@ class Protpardelle(nn.Module):
                 hotspot_mask=hotspot_mask,
                 struct_self_cond=struct_self_cond,
                 struct_crop_cond=struct_crop_cond,
+                crop_cond_mask=crop_cond_mask,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
                 return_emb=True,
