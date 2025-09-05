@@ -417,6 +417,6 @@ def write_coords_to_pdb(
             )
         else:
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
-            pdb_str = feats_to_pdb_str(c, **feats_i)
+            pdb_str = feats_to_pdb_str(c, chain_id_mapping=chain_id_mapping, **feats_i)
 
         write_pdb_str(pdb_str, fname, append=write_to_frames and i > 0)

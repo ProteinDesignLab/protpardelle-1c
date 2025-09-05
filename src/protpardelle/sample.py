@@ -425,7 +425,7 @@ def generate(
         trimmed_coords.extend(trimmed_coords_bi)
         trimmed_residue_index.extend(trimmed_residue_index_bi)
         trimmed_chain_index.extend(trimmed_chain_index_bi)
-        all_chain_id_mappings.append(samp_aux_bi["chain_id_mapping"])
+        all_chain_id_mappings.extend([samp_aux_bi["chain_id_mapping"]] * len(trimmed_coords_bi))
         seq_mask.extend(seq_mask_bi)
         if samp_aux_bi["motif_idx"] is not None:
             motif_idx.extend(samp_aux_bi["motif_idx"])
