@@ -12,6 +12,7 @@ import time
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
+import shutil
 import uuid
 
 import hydra
@@ -112,7 +113,7 @@ def save_samples(
             coords_to_save = atom37_coords_from_bb(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
-        samp_save_name = save_dir / f"{save_name}_{idx}.pdb"
+        samp_save_name = save_dir / f"sample_{save_name}_{idx}.pdb"
 
         if bb_only:
             coords_to_save = coords_to_save[:, (0, 1, 2, 4), :]
@@ -486,7 +487,7 @@ def sample(
     use_wandb: bool = False,
     array_id: int | None = None,
     num_arrays: int | None = None,
-):
+) -> list[Path]:
     """Sampling with Protpardelle-1c.
 
     Args:
@@ -531,6 +532,7 @@ def sample(
     scaffold_lengths = []
     hotspots = []
     ssadj_fps = []
+    all_save_dirs = []
 
     for ri, (motif_cfg, motif_contig, length_range, hs, ssadj) in enumerate(
         zip(
@@ -636,6 +638,7 @@ def sample(
                 per_config_save_dir / motif_fp.stem
             )  # one config, one motif
             per_motif_save_dir.mkdir(exist_ok=True)
+            all_save_dirs.append(per_motif_save_dir)
 
             config_path = str(
                 PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
@@ -650,6 +653,7 @@ def sample(
                 "start"
             ] = cc_start
             if partial_diffusion:
+                shutil.copy(motif_fp, per_motif_save_dir)
                 sampling_config["sampling"]["partial_diffusion"][
                     "pdb_file_path"
                 ] = motif_fp
@@ -1017,6 +1021,8 @@ def sample(
         df_samp_info["pdb_path"] = all_samp_save_names
         df_samp_info["fix_pos"] = all_fix_pos
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
+    
+    return all_save_dirs
 
 
 @app.command()
