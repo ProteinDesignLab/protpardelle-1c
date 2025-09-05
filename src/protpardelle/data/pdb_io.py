@@ -293,7 +293,7 @@ def bb_coords_to_pdb_str(
         atomname = atom.center(4)
         resname = res.ljust(3)
         if chain_id_mapping is not None:
-            chain = id_chain_mapping.get(chain_index).rjust(1)
+            chain = id_chain_mapping.get(chain_idx).rjust(1)
         else:
             chain = chr(ord("A") + chain_idx).rjust(1)
         resnum = str(resnum).rjust(4)
