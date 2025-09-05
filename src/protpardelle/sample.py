@@ -479,6 +479,7 @@ def sample(
     sampling_yaml_path: Path,
     project_name: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
+    motif_pdb: Path | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
@@ -494,6 +495,7 @@ def sample(
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
         project_name (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
         motif_dir (Path, optional): Folder containing motifs to scaffold. Defaults to Path("motifs/nanobody").
+        motif_pdb (Path, optional): Overrides motif_dir, use by specifying the motifs inside sampling_yaml_path to null
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
@@ -544,11 +546,15 @@ def sample(
         )
     ):
         if motif_cfg is None:
-            motif_cfg = f"{ri:03}_unconditional"
-        if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
-            motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+            if motif_pdb is not None:
+                motif_fps.append(motif_pdb)
+            else:
+                motif_fps.append(motif_dir / f"{ri:03}_unconditional")
         else:
-            motif_fps.append(motif_dir / motif_cfg)
+            if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
+                motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+            else:
+                motif_fps.append(motif_dir / motif_cfg)
         motif_contigs.append(motif_contig)
         scaffold_lengths.append(length_range)
         hotspots.append(hs)
