@@ -229,6 +229,7 @@ def feats_to_pdb_str(
     atom_mask=None,
     residue_index=None,
     chain_index=None,
+    chain_id_mapping=None,
     b_factors=None,
     atom_lines_only=True,
 ):
@@ -257,7 +258,7 @@ def feats_to_pdb_str(
         chain_index=cast(chain_index),
         b_factors=cast(b_factors),
     )
-    pdb_str = to_pdb(prot)
+    pdb_str = to_pdb(prot, chain_id_mapping=chain_id_mapping)
 
     if atom_lines_only:
         pdb_lines = pdb_str.split("\n")
@@ -276,6 +277,7 @@ def bb_coords_to_pdb_str(
     atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
     residue_index: TensorType["n"] | None = None,
     chain_index: TensorType["n"] | None = None,
+    chain_id_mapping: dict[str, int] | None = None,
     aatype: TensorType["n"] | None = None,
 ) -> str:
     """
@@ -283,13 +285,17 @@ def bb_coords_to_pdb_str(
     - chain_index: 0-indexed chain index for each residue, starting from A
     - aatype: aatype for each residue (if not specified, default to GLY)
     """
+    id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
 
     def _bb_pdb_line(atom, atomnum, resnum, chain_idx, coords, elem, res="GLY"):
         atm = "ATOM".ljust(6)
         atomnum = str(atomnum).rjust(5)
         atomname = atom.center(4)
         resname = res.ljust(3)
-        chain = chr(ord("A") + chain_idx).rjust(1)
+        if chain_id_mapping is not None:
+            chain = id_chain_mapping.get(chain_index).rjust(1)
+        else:
+            chain = chr(ord("A") + chain_idx).rjust(1)
         resnum = str(resnum).rjust(4)
         x = str("%8.3f" % (float(coords[0]))).rjust(8)
         y = str("%8.3f" % (float(coords[1]))).rjust(8)
@@ -371,6 +377,7 @@ def write_coords_to_pdb(
     filename,
     batched=True,
     write_to_frames=False,
+    chain_id_mapping=None,
     **all_atom_feats,
 ) -> None:
     if not (batched or write_to_frames):
@@ -406,6 +413,7 @@ def write_coords_to_pdb(
                 aatype=feats_i.get("aatype", None),
                 residue_index=feats_i.get("residue_index", None),
                 chain_index=feats_i.get("chain_index", None),
+                chain_id_mapping=chain_id_mapping,
             )
         else:
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}

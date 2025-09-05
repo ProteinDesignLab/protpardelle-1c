@@ -125,6 +125,7 @@ def save_samples(
             aatype=dummy_aatype[idx],
             residue_index=trimmed_residue_index[idx],
             chain_index=trimmed_chain_index[idx],
+            chain_id_mapping=samp_aux["all_chain_id_mappings"][idx],
         )
         all_samp_save_names.append(str(samp_save_name.resolve()))
 
@@ -157,6 +158,7 @@ def save_samples(
                 aatype=designed_seq,
                 residue_index=trimmed_residue_index[scaffold_idx],
                 chain_index=trimmed_chain_index[scaffold_idx],
+                chain_id_mapping=samp_aux["all_chain_id_mappings"][scaffold_idx],
                 b_factors=all_atom_plddts[idx],
             )
 
@@ -337,6 +339,7 @@ def generate(
     trimmed_coords = []
     trimmed_residue_index = []
     trimmed_chain_index = []
+    all_chain_id_mappings = []
     seq_mask = []
     atom_mask = []
     motif_idx = []
@@ -422,6 +425,7 @@ def generate(
         trimmed_coords.extend(trimmed_coords_bi)
         trimmed_residue_index.extend(trimmed_residue_index_bi)
         trimmed_chain_index.extend(trimmed_chain_index_bi)
+        all_chain_id_mappings.append(samp_aux_bi["chain_id_mapping"])
         seq_mask.extend(seq_mask_bi)
         if samp_aux_bi["motif_idx"] is not None:
             motif_idx.extend(samp_aux_bi["motif_idx"])
@@ -446,6 +450,7 @@ def generate(
         "motif_atom_mask": motif_atom_mask,
         "s": sequences,
         "runtime": runtime,
+        "all_chain_id_mappings": all_chain_id_mappings,
     }
 
     sampled_sequences = None

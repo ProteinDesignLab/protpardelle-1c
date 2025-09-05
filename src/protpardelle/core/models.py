@@ -1148,7 +1148,7 @@ class Protpardelle(nn.Module):
             if isinstance(pd.pdb_file_path, list):
                 pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
                 for pd_fp in pd.pdb_file_path:
-                    pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp)
+                    pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp, include_pos_feats=True)
                     pd_motif_aatype.append(
                         make_fixed_size_1d(
                             pd_feats["aatype"].flatten().clone().detach(),
@@ -1172,7 +1172,7 @@ class Protpardelle(nn.Module):
                 )
                 pd_coords = torch.stack(pd_coords).to(self.device)
             else:
-                pd_feats, pd_hetero_obj = load_feats_from_pdb(pd.pdb_file_path)
+                pd_feats, pd_hetero_obj = load_feats_from_pdb(pd.pdb_file_path, include_pos_feats=True)
                 pd_motif_aatype = pd_feats["aatype"].clone().detach()
                 pd_motif_idx = torch.arange(pd_motif_aatype.shape[0])
                 pd_motif_aatype = (
@@ -1339,13 +1339,17 @@ class Protpardelle(nn.Module):
 
         xt_traj, x0_traj, st_traj, s0_traj = [], [], [], []
 
+        residue_index_orig = residue_index.clone()
+        chain_id_mapping = None
         if partial_diffusion is not None and pd.enabled:
             sigma = sigma_float = noise_schedule(timesteps[pd_step])
             timesteps = timesteps[pd_step:]
 
             # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
             residue_index = torch.tile(pd_feats["residue_index"][None], (batch_size, 1)).to(residue_index)
+            residue_index_orig = torch.tile(pd_feats["residue_index_orig"][None], (batch_size, 1)).to(residue_index)
             chain_index = torch.tile(pd_feats["chain_index"][None], (batch_size, 1)).to(chain_index)
+            chain_id_mapping = pd_feats["chain_id_mapping"]
 
         # Sampling trajectory
         pbar = tqdm(total=len(timesteps[1:]), desc="Sampling backbones")
@@ -2060,8 +2064,9 @@ class Protpardelle(nn.Module):
                 "motif_all_atom": motif_all_atom,
                 "motif_atom_mask": motif_atom_mask,
                 "motif_aa3": motif_aa3,
-                "residue_index": residue_index,
+                "residue_index": residue_index_orig,
                 "chain_index": chain_index,
+                "chain_id_mapping": chain_id_mapping,
             }
         else:
             return xt_traj, x0_traj, st_traj, s0_traj, seq_mask
