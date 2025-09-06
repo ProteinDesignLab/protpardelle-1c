@@ -187,7 +187,7 @@ def draw_samples(
         seq_mask, residue_index, chain_index = model.make_seq_mask_for_sampling(
             length_ranges_per_chain=length_ranges_per_chain, num_samples=num_samples
         )
-    chain_id_mapping = None
+    chain_id_mapping = [None] * num_samples
     if sampling_kwargs["partial_diffusion"]["enabled"]:
         pd_feats, pd_hetero_obj = load_feats_from_pdb(sampling_kwargs["partial_diffusion"]["pdb_file_path"], include_pos_feats=True)
         # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
@@ -307,12 +307,6 @@ def draw_samples(
         aux = {**aux, **stage2_aux}
 
         shutil.rmtree(tmp_dir)
-
-        # account for possible override from partial diffusion input structure
-        seq_mask = stage2_aux["seq_mask"]
-        residue_index = residue_index_orig
-        chain_index = stage2_aux["chain_index"]
-        stage2_aux["chain_id_mapping"] = chain_id_mapping
 
     aux["runtime"] = time.time() - start
     seq_lens = seq_mask.sum(-1).long()
