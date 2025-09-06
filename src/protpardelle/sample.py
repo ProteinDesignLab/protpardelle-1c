@@ -32,7 +32,7 @@ from protpardelle.core.models import Protpardelle, load_model
 from protpardelle.data.atom import atom37_coords_from_bb
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
-from protpardelle.data.pdb_io import write_coords_to_pdb
+from protpardelle.data.pdb_io import load_feats_from_pdb, write_coords_to_pdb
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
@@ -175,7 +175,7 @@ def draw_samples(
     adj_cond: TensorType["b n n", int] | None = None,
     motif_placements_full: list[str] | None = None,
     num_samples: int | None = None,
-    length_ranges_per_chain: list[tuple[int, int]] = [(50, 512)],
+    length_ranges_per_chain: list[tuple[int, int]] | None = None,
     return_aux: bool = False,
     return_sampling_runtime: bool = False,
     return_coords_and_aux: bool = False,
@@ -183,10 +183,18 @@ def draw_samples(
 ):
 
     device = model.device
-    if seq_mask is None:
+    if seq_mask is None and length_ranges_per_chain is not None:
         seq_mask, residue_index, chain_index = model.make_seq_mask_for_sampling(
             length_ranges_per_chain=length_ranges_per_chain, num_samples=num_samples
         )
+    if sampling_kwargs["partial_diffusion"]["enabled"]:
+        pd_feats, pd_hetero_obj = load_feats_from_pdb(sampling_kwargs["partial_diffusion"]["pdb_file_path"], include_pos_feats=True)
+        # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
+        residue_index = torch.tile(pd_feats["residue_index"][None], (num_samples, 1)).to(device)
+        residue_index_orig = torch.tile(pd_feats["residue_index_orig"][None], (num_samples, 1)).to(device)
+        chain_index = torch.tile(pd_feats["chain_index"][None], (num_samples, 1)).to(device)
+        chain_id_mapping = [pd_feats["chain_id_mapping"]] * num_samples
+        seq_mask = torch.ones_like(residue_index).to(device)
 
     start = time.time()
 
@@ -210,8 +218,12 @@ def draw_samples(
         **sampling_kwargs,
     )
     # account for possible override from partial diffusion input structure
+    seq_mask = aux["seq_mask"]
     residue_index = aux["residue_index"]
+    if sampling_kwargs["partial_diffusion"]["enabled"]:
+        residue_index = residue_index_orig
     chain_index = aux["chain_index"]
+    aux["chain_id_mapping"] = chain_id_mapping
 
     # Stage 2 sampling is allatom partial diffusion given sequence from stage1 for more explicit sidechain-driven backbone change
     stage2_enabled = stage2_cfg.pop("enabled")
@@ -254,6 +266,19 @@ def draw_samples(
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
             tmp_dir / f"stage1_{i}.pdb" for i in range(len(samp_coords))
         ]
+
+        residue_index, residue_index_orig, chain_index, chain_id_mapping = [], [], [], []
+        for pd_fp in sampling_kwargs["partial_diffusion"]["pdb_file_path"]:
+            pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp, include_pos_feats=True)
+            residue_index.append(pd_feats["residue_index"][None])
+            residue_index_orig.append(pd_feats["residue_index_orig"][None])
+            chain_index.append(pd_feats["chain_index"][None])
+            chain_id_mapping.append(pd_feats["chain_id_mapping"])
+        residue_index = torch.cat(residue_index, dim=0).to(device)
+        residue_index_orig = torch.cat(residue_index_orig, dim=0).to(device)
+        chain_index = torch.cat(chain_index, dim=0).to(device)
+        seq_mask = torch.ones_like(residue_index).to(device)
+
         stage2_aux = model.sample(
             gt_aatype=samp_seq.to(device),
             seq_mask=seq_mask,
@@ -281,6 +306,12 @@ def draw_samples(
         aux = {**aux, **stage2_aux}
 
         shutil.rmtree(tmp_dir)
+
+        # account for possible override from partial diffusion input structure
+        seq_mask = stage2_aux["seq_mask"]
+        residue_index = residue_index_orig
+        chain_index = stage2_aux["chain_index"]
+        stage2_aux["chain_id_mapping"] = chain_id_mapping
 
     aux["runtime"] = time.time() - start
     seq_lens = seq_mask.sum(-1).long()
@@ -425,7 +456,7 @@ def generate(
         trimmed_coords.extend(trimmed_coords_bi)
         trimmed_residue_index.extend(trimmed_residue_index_bi)
         trimmed_chain_index.extend(trimmed_chain_index_bi)
-        all_chain_id_mappings.extend([samp_aux_bi["chain_id_mapping"]] * len(trimmed_coords_bi))
+        all_chain_id_mappings.extend(samp_aux_bi["chain_id_mapping"])
         seq_mask.extend(seq_mask_bi)
         if samp_aux_bi["motif_idx"] is not None:
             motif_idx.extend(samp_aux_bi["motif_idx"])

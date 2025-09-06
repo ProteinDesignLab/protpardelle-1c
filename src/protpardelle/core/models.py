@@ -1145,48 +1145,34 @@ class Protpardelle(nn.Module):
         elif partial_diffusion is not None and pd.enabled:
             pd_step = n_steps - pd.n_steps
             pd_timestep = timesteps[pd_step]
-            if isinstance(pd.pdb_file_path, list):
-                pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
-                for pd_fp in pd.pdb_file_path:
-                    pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp, include_pos_feats=True)
-                    pd_motif_aatype.append(
-                        make_fixed_size_1d(
-                            pd_feats["aatype"].flatten().clone().detach(),
-                            fixed_size=seq_mask.shape[-1],
-                        )[0]
-                    )
-                    pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
-                    pd_feats["atom_positions"] = pd_feats[
-                        "atom_positions"
-                    ] - torch.mean(
-                        pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
-                    )
-                    pd_coords.append(
-                        make_fixed_size_1d(
-                            pd_feats["atom_positions"],
-                            fixed_size=seq_mask.shape[-1],
-                        )[0]
-                    )
-                pd_motif_aatype = (
-                    torch.stack(pd_motif_aatype).long().to(seq_mask.device)
+            if not isinstance(pd.pdb_file_path, list):
+                pd.pdb_file_path = [pd.pdb_file_path] * batch_size
+
+            pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
+            for pd_fp in pd.pdb_file_path:
+                pd_feats, _ = load_feats_from_pdb(pd_fp, include_pos_feats=True)
+                pd_motif_aatype.append(
+                    make_fixed_size_1d(
+                        pd_feats["aatype"].flatten().clone().detach(),
+                        fixed_size=seq_mask.shape[-1],
+                    )[0]
                 )
-                pd_coords = torch.stack(pd_coords).to(self.device)
-            else:
-                pd_feats, pd_hetero_obj = load_feats_from_pdb(pd.pdb_file_path, include_pos_feats=True)
-                pd_motif_aatype = pd_feats["aatype"].clone().detach()
-                pd_motif_idx = torch.arange(pd_motif_aatype.shape[0])
-                pd_motif_aatype = (
-                    torch.stack([pd_motif_aatype for _ in range(batch_size)])
-                    .long()
-                    .to(seq_mask.device)
-                )
-                pd_motif_idx = [pd_motif_idx for _ in range(batch_size)]
-                pd_feats["atom_positions"] = pd_feats["atom_positions"] - torch.mean(
+                pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
+                pd_feats["atom_positions"] = pd_feats[
+                    "atom_positions"
+                ] - torch.mean(
                     pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
                 )
-                pd_coords = torch.tile(
-                    pd_feats["atom_positions"], (batch_size, 1, 1, 1)
-                ).to(self.device)
+                pd_coords.append(
+                    make_fixed_size_1d(
+                        pd_feats["atom_positions"],
+                        fixed_size=seq_mask.shape[-1],
+                    )[0]
+                )
+            pd_motif_aatype = (
+                torch.stack(pd_motif_aatype).long().to(seq_mask.device)
+            )
+            pd_coords = torch.stack(pd_coords).to(self.device)
 
             pd_noise_level = torch.full(
                 (seq_mask.shape[0],), noise_schedule(pd_timestep), device=self.device
@@ -1211,7 +1197,7 @@ class Protpardelle(nn.Module):
                     dummy_fill_mode=dummy_fill_mode,
                 )
             print(
-                f"Using {pd.pdb_file_path} for partial diffusion, going back to step {pd_step}"
+                f"Partial diffusion, going back to step {pd_step}, T={(pd_step / n_steps):.2f}"
             )
         else:
             xt = torch.randn(*coords_shape).to(self.device)
@@ -1344,12 +1330,6 @@ class Protpardelle(nn.Module):
         if partial_diffusion is not None and pd.enabled:
             sigma = sigma_float = noise_schedule(timesteps[pd_step])
             timesteps = timesteps[pd_step:]
-
-            # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
-            residue_index = torch.tile(pd_feats["residue_index"][None], (batch_size, 1)).to(residue_index)
-            residue_index_orig = torch.tile(pd_feats["residue_index_orig"][None], (batch_size, 1)).to(residue_index)
-            chain_index = torch.tile(pd_feats["chain_index"][None], (batch_size, 1)).to(chain_index)
-            chain_id_mapping = pd_feats["chain_id_mapping"]
 
         # Sampling trajectory
         pbar = tqdm(total=len(timesteps[1:]), desc="Sampling backbones")
@@ -2066,7 +2046,6 @@ class Protpardelle(nn.Module):
                 "motif_aa3": motif_aa3,
                 "residue_index": residue_index_orig,
                 "chain_index": chain_index,
-                "chain_id_mapping": chain_id_mapping,
             }
         else:
             return xt_traj, x0_traj, st_traj, s0_traj, seq_mask

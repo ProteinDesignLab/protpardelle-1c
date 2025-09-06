@@ -285,7 +285,8 @@ def bb_coords_to_pdb_str(
     - chain_index: 0-indexed chain index for each residue, starting from A
     - aatype: aatype for each residue (if not specified, default to GLY)
     """
-    id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
+    if chain_id_mapping is not None:
+        id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
 
     def _bb_pdb_line(atom, atomnum, resnum, chain_idx, coords, elem, res="GLY"):
         atm = "ATOM".ljust(6)
