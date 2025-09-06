@@ -1180,6 +1180,7 @@ class Protpardelle(nn.Module):
             if "repack" in pd and pd.repack:
                 for pi, pd_aa in enumerate(pd.seq):
                     pd_motif_aatype[:, pi] = residue_constants.restype_order[pd_aa]
+                pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
                 bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
                 bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
                 xt = diffusion.noise_coords(
