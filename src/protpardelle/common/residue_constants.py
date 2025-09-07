@@ -686,13 +686,14 @@ restype_1to3 = {
 # many more, and less common, three letter names as keys and maps many of these
 # to the same one letter name (including 'X' and 'U' which we don't use here).
 restype_3to1 = {v: k for k, v in restype_1to3.items()}
+restype_3to1["MSE"] = restype_3to1["MET"]
 
 # Define a restype name for all unknown residues.
 unk_restype = "UNK"
 
 resnames = [restype_1to3[r] for r in restypes] + [unk_restype]
 resname_to_idx = {resname: i for i, resname in enumerate(resnames)}
-
+resname_to_idx["MSE"] = resname_to_idx["MET"]
 
 # The mapping here uses hhblits convention, so that B is mapped to D, J and O
 # are mapped to X, U is mapped to C, and Z is mapped to E. Other than that the
