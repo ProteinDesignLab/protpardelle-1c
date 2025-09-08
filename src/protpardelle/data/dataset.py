@@ -55,77 +55,98 @@ FEATURES_FLOAT = (
 FEATURES_LONG = ("aatype", "residue_index", "chain_index", "orig_size", "sse", "adj")
 
 
-def make_fixed_size_1d(data, fixed_size=128):
-    """
-    Pads or crops a 1D tensor (L x ...) to fixed_size x ...
+def make_fixed_size_1d(
+    data: torch.Tensor, fixed_size: int = 128
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pads or crops a 1D tensor (L, ...) to (fixed_size, ...).
 
     Args:
         data (torch.Tensor): Input tensor of shape (L, ...).
         fixed_size (int): Desired length.
 
     Returns:
-        new_data (torch.Tensor): Tensor of shape (fixed_size, ...).
-        mask (torch.Tensor): Binary mask of shape (fixed_size) indicating valid data.
+        tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            new_data (torch.Tensor): Tensor of shape (fixed_size, ...).
+            mask (torch.Tensor): Binary mask of shape (fixed_size) indicating valid data.
     """
+
     data_len = data.shape[0]
+    device = data.device
+
     if data_len >= fixed_size:
         extra_len = data_len - fixed_size
         start_idx = np.random.choice(np.arange(extra_len + 1))
         new_data = data[start_idx : (start_idx + fixed_size)]
-        mask = torch.ones(fixed_size)
+        mask = torch.ones(fixed_size, device=device)
     else:
         pad_size = fixed_size - data_len
         extra_shape = data.shape[1:]
         new_data = torch.cat(
             [data, torch.zeros(pad_size, *extra_shape).to(data.device)], 0
         )
-        mask = torch.cat([torch.ones(data_len), torch.zeros(pad_size)], 0)
+        mask = torch.cat(
+            [torch.ones(data_len, device=device), torch.zeros(pad_size, device=device)],
+            dim=0,
+        )
+
     return new_data, mask
 
 
-def make_fixed_size_2d(data, fixed_size=128):
-    """
-    Pads or crops a 2D tensor (H x W x ...) to fixed_size x fixed_size, ...
+def make_fixed_size_2d(
+    data: torch.Tensor, fixed_size: int = 128
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pads or crops a 2D tensor (H, W, ...) to (fixed_size, fixed_size, ...).
 
     Args:
         data (torch.Tensor): Input tensor of shape (H, W, ...).
-        fixed_size (int): Desired height and width.
+        fixed_size (int, optional): Desired height and width. Defaults to 128.
 
     Returns:
-        new_data (torch.Tensor): Tensor of shape (fixed_size, fixed_size, ...).
-        mask (torch.Tensor): Binary mask of shape (fixed_size, fixed_size) indicating valid data.
+        tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            new_data (torch.Tensor): Tensor of shape (fixed_size, fixed_size, ...).
+            mask (torch.Tensor): Binary mask of shape (fixed_size, fixed_size) indicating valid data.
     """
-    H, W = data.shape[:2]
-    extra_shape = data.shape[2:]
+
+    H, W, *extra_shapes = data.shape
+    device = data.device
 
     # Crop if larger than fixed_size
     if H >= fixed_size:
         h_start = np.random.randint(0, H - fixed_size + 1)
         h_end = h_start + fixed_size
+        h_len = fixed_size
     else:
-        h_start, h_end = 0, H
+        h_start = 0
+        h_end = H
+        h_len = H
 
     if W >= fixed_size:
         w_start = np.random.randint(0, W - fixed_size + 1)
         w_end = w_start + fixed_size
+        w_len = fixed_size
     else:
-        w_start, w_end = 0, W
+        w_start = 0
+        w_end = W
+        w_len = W
 
     cropped = data[h_start:h_end, w_start:w_end]
 
-    # Pad if smaller than fixed_size
-    pad_h = fixed_size - (h_end - h_start)
-    pad_w = fixed_size - (w_end - w_start)
-
-    pad_dims = (0, 0) * len(extra_shape) + (
+    # Build pad tuple from the LAST dimension backwards; prepend (0,0) for each trailing extra dim.
+    # Final pairs correspond to (W, then H): (left_w, right_w, top_h, bottom_h) = (0, pad_w, 0, pad_h)
+    pad_h = fixed_size - h_len
+    pad_w = fixed_size - w_len
+    pad_dims = (0, 0) * len(extra_shapes) + (
         0,
         pad_w,
         0,
         pad_h,
-    )  # (W_right, W_left, H_bottom, H_top)
-    new_data = F.pad(cropped, pad_dims)
+    )
 
-    return new_data
+    new_data = F.pad(cropped, pad_dims)
+    valid = torch.ones((h_len, w_len), device=device)
+    mask = F.pad(valid, pad_dims)
+
+    return new_data, mask
 
 
 def apply_random_se3(
@@ -182,7 +203,7 @@ def dummy_fill(
     if mode == "CA":
         dummy_fill_value = coords_in[..., 1:2, :]  # CA
     elif mode == "CB":
-        dummy_fill_value = atom.fill_in_cbeta_for_atom37(coords_in)[
+        dummy_fill_value = atom.fill_in_cbeta_for_atom37_coords(coords_in)[
             ..., 3:4, :
         ]  # idealized CB
     else:
@@ -633,7 +654,7 @@ class PDBDataset(Dataset):
                     v, fixed_size=self.fixed_size
                 )
             elif k in FEATURES_2D:
-                fixed_size_example[k] = make_fixed_size_2d(
+                fixed_size_example[k], _ = make_fixed_size_2d(
                     v, fixed_size=self.fixed_size
                 )
             else:

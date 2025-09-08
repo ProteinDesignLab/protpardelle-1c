@@ -136,7 +136,7 @@ def motif_loss(x0_in, motif_idx, motif_coords, atom_mask) -> torch.Tensor:
         batch_size,
     ).to(x0_in)
     for bi in range(batch_size):
-        loss = (x0_in[bi, motif_idx[bi], :, :] - motif_coords[bi]).pow(2).sum(-1)
+        loss = (x0_in[bi, motif_idx[bi], :, :] - motif_coords[bi]).square().sum(-1)
         losses[bi] = (loss * atom_mask[bi, motif_idx[bi]]).sum()
     return losses
 

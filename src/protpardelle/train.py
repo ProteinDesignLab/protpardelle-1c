@@ -91,7 +91,7 @@ def masked_mse_loss(
     """
 
     data_dims = tuple(range(1, len(x.shape)))
-    mse = (x - y).pow(2) * mask
+    mse = (x - y).square() * mask
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
     mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=tol)

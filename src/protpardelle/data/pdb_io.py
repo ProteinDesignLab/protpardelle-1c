@@ -14,9 +14,12 @@ from torchtyping import TensorType
 from protpardelle.common import residue_constants
 from protpardelle.common.protein import Hetero, Protein, to_pdb
 from protpardelle.data.atom import (
-    atom37_coords_to_atom14,
+    atom14_mask_from_aatype,
+    atom37_coords_to_atom14_coords,
+    atom37_coords_to_atom73_coords,
     atom37_mask_from_aatype,
-    atom37_to_atom73,
+    atom73_mask_from_aatype,
+    b_factors_37_to_b_factors_14,
 )
 
 
@@ -193,17 +196,19 @@ def load_feats_from_pdb(
         feats[k] = torch.from_numpy(v).float()
     feats["aatype"] = feats["aatype"].long()
     if load_atom73:
-        feats["atom73_coords"], feats["atom73_mask"] = atom37_to_atom73(
-            feats["atom_positions"], feats["aatype"], return_mask=True
+        feats["atom73_coords"] = atom37_coords_to_atom73_coords(
+            feats["atom_positions"], feats["aatype"]
         )
+        feats["atom73_mask"] = atom73_mask_from_aatype(feats["atom73_coords"])
     if atom14:
-        feats["atom_positions"], feats["b_factors"], feats["atom_mask"] = (
-            atom37_coords_to_atom14(
-                feats["atom_positions"],
-                feats["b_factors"],
-                feats["aatype"],
-            )
+        feats["atom_positions"] = atom37_coords_to_atom14_coords(
+            feats["atom_positions"], feats["aatype"]
         )
+        feats["b_factors"] = b_factors_37_to_b_factors_14(
+            feats["b_factors"],
+            feats["aatype"],
+        )
+        feats["atom_mask"] = atom14_mask_from_aatype(feats["aatype"])
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index
     if include_pos_feats:

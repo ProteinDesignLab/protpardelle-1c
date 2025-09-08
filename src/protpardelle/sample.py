@@ -6,9 +6,10 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 import itertools
 import logging
 import math
-import os
 import shutil
+import subprocess
 import time
+import uuid
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
@@ -24,12 +25,13 @@ import wandb
 from Bio import SeqIO
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
+from torch.types import Device
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.core.models import Protpardelle, load_model
-from protpardelle.data.atom import atom37_coords_from_bb
+from protpardelle.data.atom import bb_coords_to_atom37_coords
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
 from protpardelle.data.pdb_io import load_feats_from_pdb, write_coords_to_pdb
@@ -52,7 +54,27 @@ from protpardelle.utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+class ProtpardelleSampler:
+    def __init__(
+        self,
+        model: Protpardelle,
+        device: Device,
+        num_mpnn_seqs: int = 8,
+    ):
+        self.model = model
+        self.device = device
+        self.num_mpnn_seqs = num_mpnn_seqs
+        if self.num_mpnn_seqs > 0:
+            self.mpnn_model = protein_mpnn.get_mpnn_model(
+                PROTEINMPNN_WEIGHTS,
+                device=self.device,
+            )
+        else:
+            self.mpnn_model = None
 
 
 def save_samples(
@@ -110,7 +132,7 @@ def save_samples(
                 dummy_aatype[idx][mi] = samp_aux["motif_aatype"][idx][ii]
 
         if sampled_coords[idx].shape[-2] == 4:
-            coords_to_save = atom37_coords_from_bb(sampled_coords[idx])
+            coords_to_save = bb_coords_to_atom37_coords(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
         samp_save_name = save_dir / f"sample_{save_name}_{idx}.pdb"
@@ -254,14 +276,6 @@ def draw_samples(
         sampling_kwargs["jump_steps"] = False
         sampling_kwargs["uniform_steps"] = True
 
-        # Here, an alternative strategy is to set stage2 as partial diffusion conditioned on backbone
-        # uncomment the subsequent lines to achieve this
-        # sampling_kwargs['conditional_cfg']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['strategy'] = 'backbone'
-        # sampling_kwargs['conditional_cfg']['reconstruction_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['replacement_guidance']['enabled'] = False
-
         sampling_kwargs["partial_diffusion"]["enabled"] = True
         sampling_kwargs["partial_diffusion"]["n_steps"] = rewind_steps
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
@@ -328,13 +342,12 @@ def draw_samples(
 
     if return_aux:
         return aux
-    else:
-        if return_sampling_runtime:
-            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux["runtime"]
-        elif return_coords_and_aux:
-            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux
-        else:
-            return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask
+    if return_sampling_runtime:
+        return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux["runtime"]
+    if return_coords_and_aux:
+        return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux
+
+    return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask
 
 
 def generate(
@@ -380,9 +393,9 @@ def generate(
     if all_lengths is not None:
         max_length = np.array(all_lengths).sum(1).max()
         for curr_len in all_lengths:
-            curr_length_ranges_per_chain = []
-            for curr_chain_len in curr_len:
-                curr_length_ranges_per_chain.append([curr_chain_len, curr_chain_len])
+            curr_length_ranges_per_chain = [
+                [curr_chain_len, curr_chain_len] for curr_chain_len in curr_len
+            ]
             seq_mask_in, residue_index_in, chain_index_in = (
                 model.make_seq_mask_for_sampling(
                     length_ranges_per_chain=curr_length_ranges_per_chain, num_samples=1
@@ -503,7 +516,7 @@ def generate(
             motif_atom_mask=motif_atom_mask,
         )
 
-    return (trimmed_coords, trimmed_residue_index, trimmed_chain_index, seq_mask, samp_aux, sc_aux)
+    return trimmed_coords, trimmed_residue_index, trimmed_chain_index, seq_mask, samp_aux, sc_aux
 
 
 def sample(
@@ -901,14 +914,8 @@ def sample(
                     elif allatom:
                         per_structure_df_best = per_structure_metrics[
                             (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
-                            & (
-                                per_structure_metrics["allatom_motif_sample_rmsd"]
-                                < 2.0
-                            )
-                            & (
-                                per_structure_metrics["allatom_scaffold_scrmsd"]
-                                < 2.0
-                            )
+                            & (per_structure_metrics["allatom_motif_sample_rmsd"] < 2.0)
+                            & (per_structure_metrics["allatom_scaffold_scrmsd"] < 2.0)
                         ]
                         if not per_structure_df_best.empty:
                             per_structure_df_best = per_structure_df_best.loc[
@@ -922,8 +929,7 @@ def sample(
                         per_structure_df_best = per_structure_metrics[
                             (per_structure_metrics["ca_motif_sample_rmsd"] < 1.0)
                             & (
-                                per_structure_metrics["allatom_motif_pred_rmsd"]
-                                < 1.0
+                                per_structure_metrics["allatom_motif_pred_rmsd"] < 1.0
                             )  # More strict
                             & (per_structure_metrics["ca_scaffold_scrmsd"] < 2.0)
                         ]
@@ -961,8 +967,37 @@ def sample(
 
                     # Foldseek clustering command from La-Proteina
                     foldseek_dir = per_motif_save_dir / "foldseek"
-                    foldseek_cmd = f"{FOLDSEEK_BIN} easy-cluster {self_consistent_dir} {foldseek_dir}/res {foldseek_dir} --alignment-type 1 --cov-mode 0 --min-seq-id 0 --tmscore-threshold 0.5 --single-step-clustering > /dev/null 2>&1"
-                    os.system(foldseek_cmd)
+                    foldseek_dir.mkdir(parents=True, exist_ok=True)
+
+                    cmd = [
+                        FOLDSEEK_BIN,
+                        "easy-cluster",
+                        str(self_consistent_dir),
+                        str(foldseek_dir / "res"),
+                        str(foldseek_dir),
+                        "--alignment-type",
+                        "1",
+                        "--cov-mode",
+                        "0",
+                        "--min-seq-id",
+                        "0",
+                        "--tmscore-threshold",
+                        "0.5",
+                        "--single-step-clustering",
+                    ]
+
+                    # Quiet run (portable equivalent of > /dev/null 2>&1)
+                    try:
+                        subprocess.run(
+                            cmd,
+                            check=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except subprocess.CalledProcessError as e:
+                        raise RuntimeError(
+                            f"Foldseek easy-cluster failed with exit code {e.returncode}"
+                        ) from e
 
                     # parse Foldseek output for unique successes
                     cluster_fp = foldseek_dir / "res_rep_seq.fasta"
@@ -1043,7 +1078,7 @@ def sample(
                         "ca_scaffold_scrmsd"
                     ].mean()
 
-                if use_wandb and num_mpnn_seqs > 0:
+                if use_wandb:
                     wandb.log(log_dict)
 
         time_elapsed = time.time() - start_time

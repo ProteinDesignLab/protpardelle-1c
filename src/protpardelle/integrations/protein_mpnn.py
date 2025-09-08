@@ -44,10 +44,10 @@ from einops.layers.torch import Rearrange
 from torch.types import Device
 
 from protpardelle.common import residue_constants
-from protpardelle.data.atom import fill_in_cbeta_for_atom37
+from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
 from protpardelle.env import PROJECT_ROOT_DIR
 from protpardelle.integrations import protein_mpnn
-from protpardelle.utils import StrPath, get_default_device
+from protpardelle.utils import StrPath, get_default_device, seed_everything
 
 
 def get_mpnn_model(
@@ -266,11 +266,6 @@ def run_proteinmpnn(
         if not os.path.exists(base_folder + "seqs"):
             os.makedirs(base_folder + "seqs")
 
-    # Timing
-    start_time = time.time()
-    total_residues = 0
-    protein_list = []
-    total_step = 0
     # Validation epoch
     new_mpnn_seqs = []
     with torch.no_grad():
@@ -568,13 +563,7 @@ def run_proteinmpnn(
                                         seq,
                                     )
                                 )  # write generated sequence
-                # if args.save_score:
-                #     np.savez(score_file, score=np.array(score_list, np.float32), global_score=np.array(global_score_list, np.float32))
-                # if args.save_probs:
-                #     all_probs_concat = np.concatenate(all_probs_list)
-                #     all_log_probs_concat = np.concatenate(all_log_probs_list)
-                #     S_sample_concat = np.concatenate(S_sample_list)
-                #     np.savez(probs_file, probs=np.array(all_probs_concat, np.float32), log_probs=np.array(all_log_probs_concat, np.float32), S=np.array(S_sample_concat, np.int32), mask=mask_for_loss.cpu().data.numpy(), chain_order=chain_list_list)
+
                 t1 = time.time()
                 dt = round(float(t1 - t0), 4)
                 num_seqs = len(temperatures) * NUM_BATCHES * BATCH_COPIES
@@ -1154,12 +1143,8 @@ def tied_featurize(
     X[isnan] = 0.0
 
     # Conversion
-    pssm_coef_all = torch.from_numpy(pssm_coef_all).to(
-        dtype=torch.float, device=device
-    )
-    pssm_bias_all = torch.from_numpy(pssm_bias_all).to(
-        dtype=torch.float, device=device
-    )
+    pssm_coef_all = torch.from_numpy(pssm_coef_all).to(dtype=torch.float, device=device)
+    pssm_bias_all = torch.from_numpy(pssm_bias_all).to(dtype=torch.float, device=device)
     pssm_log_odds_all = torch.from_numpy(pssm_log_odds_all).to(
         dtype=torch.float, device=device
     )
@@ -1176,9 +1161,7 @@ def tied_featurize(
     dihedral_mask = np.concatenate(
         [phi_mask[:, :, None], psi_mask[:, :, None], omega_mask[:, :, None]], -1
     )  # [B,L,3]
-    dihedral_mask = torch.from_numpy(dihedral_mask).to(
-        dtype=torch.float, device=device
-    )
+    dihedral_mask = torch.from_numpy(dihedral_mask).to(dtype=torch.float, device=device)
     residue_idx = torch.from_numpy(residue_idx).to(dtype=torch.long, device=device)
     S = torch.from_numpy(S).to(dtype=torch.long, device=device)
     X = torch.from_numpy(X).to(dtype=torch.float, device=device)
@@ -2555,7 +2538,7 @@ def get_buried_positions_mask(coords, seq_mask=None, threshold=6.0):
     cb_idx = residue_constants.atom_order["CB"]  # typically 3
     if seq_mask is None:
         seq_mask = torch.ones_like(coords)[..., 0, 0]
-    coords = fill_in_cbeta_for_atom37(coords)
+    coords = fill_in_cbeta_for_atom37_coords(coords)
 
     # get 8 closest neighbors by CB
     neighbor_coords = coords[:, :, cb_idx]
@@ -2568,7 +2551,9 @@ def get_buried_positions_mask(coords, seq_mask=None, threshold=6.0):
     # compute avg CB distance
     cb_coords = coords[:, :, cb_idx]
     neighbor_cb = protein_mpnn.gather_nodes(cb_coords, edge_index)
-    avg_cb_dist = (neighbor_cb - cb_coords[..., None, :]).pow(2).sum(-1).sqrt().mean(-1)
+    avg_cb_dist = (
+        (neighbor_cb - cb_coords[..., None, :]).square().sum(-1).sqrt().mean(-1)
+    )
 
     buried_positions_mask = (avg_cb_dist < threshold).float() * seq_mask
     return buried_positions_mask
