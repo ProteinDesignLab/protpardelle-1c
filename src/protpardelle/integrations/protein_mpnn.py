@@ -44,7 +44,7 @@ from einops.layers.torch import Rearrange
 from torch.types import Device
 
 from protpardelle.common import residue_constants
-from protpardelle.data.atom import fill_in_cbeta_for_atom37
+from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
 from protpardelle.env import PROJECT_ROOT_DIR
 from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import StrPath, get_default_device, seed_everything
@@ -2538,7 +2538,7 @@ def get_buried_positions_mask(coords, seq_mask=None, threshold=6.0):
     cb_idx = residue_constants.atom_order["CB"]  # typically 3
     if seq_mask is None:
         seq_mask = torch.ones_like(coords)[..., 0, 0]
-    coords = fill_in_cbeta_for_atom37(coords)
+    coords = fill_in_cbeta_for_atom37_coords(coords)
 
     # get 8 closest neighbors by CB
     neighbor_coords = coords[:, :, cb_idx]
@@ -2551,7 +2551,9 @@ def get_buried_positions_mask(coords, seq_mask=None, threshold=6.0):
     # compute avg CB distance
     cb_coords = coords[:, :, cb_idx]
     neighbor_cb = protein_mpnn.gather_nodes(cb_coords, edge_index)
-    avg_cb_dist = (neighbor_cb - cb_coords[..., None, :]).square().sum(-1).sqrt().mean(-1)
+    avg_cb_dist = (
+        (neighbor_cb - cb_coords[..., None, :]).square().sum(-1).sqrt().mean(-1)
+    )
 
     buried_positions_mask = (avg_cb_dist < threshold).float() * seq_mask
     return buried_positions_mask

@@ -29,7 +29,7 @@ from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.core.models import Protpardelle, load_model
-from protpardelle.data.atom import atom37_coords_from_bb
+from protpardelle.data.atom import bb_coords_to_atom37_coords
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
 from protpardelle.data.pdb_io import write_coords_to_pdb
@@ -129,7 +129,7 @@ def save_samples(
                 dummy_aatype[idx][mi] = samp_aux["motif_aatype"][idx][ii]
 
         if sampled_coords[idx].shape[-2] == 4:
-            coords_to_save = atom37_coords_from_bb(sampled_coords[idx])
+            coords_to_save = bb_coords_to_atom37_coords(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
         samp_save_name = save_dir / f"{save_name}_{idx}.pdb"
