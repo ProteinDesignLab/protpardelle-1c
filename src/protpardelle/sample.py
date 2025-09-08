@@ -13,6 +13,8 @@ import uuid
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
+import shutil
+import uuid
 
 import hydra
 import numpy as np
@@ -32,7 +34,7 @@ from protpardelle.core.models import Protpardelle, load_model
 from protpardelle.data.atom import bb_coords_to_atom37_coords
 from protpardelle.data.dataset import make_fixed_size_1d
 from protpardelle.data.motif import contig_to_motif_placement
-from protpardelle.data.pdb_io import write_coords_to_pdb
+from protpardelle.data.pdb_io import load_feats_from_pdb, write_coords_to_pdb
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
@@ -85,6 +87,7 @@ def save_samples(
 ):
     (
         sampled_coords,
+        trimmed_residue_index,
         trimmed_chain_index,
         seq_mask,
         samp_aux,
@@ -132,7 +135,7 @@ def save_samples(
             coords_to_save = bb_coords_to_atom37_coords(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
-        samp_save_name = save_dir / f"{save_name}_{idx}.pdb"
+        samp_save_name = save_dir / f"sample_{save_name}_{idx}.pdb"
 
         if bb_only:
             coords_to_save = coords_to_save[:, (0, 1, 2, 4), :]
@@ -142,7 +145,9 @@ def save_samples(
             samp_save_name,
             batched=False,
             aatype=dummy_aatype[idx],
+            residue_index=trimmed_residue_index[idx],
             chain_index=trimmed_chain_index[idx],
+            chain_id_mapping=samp_aux["all_chain_id_mappings"][idx],
         )
         all_samp_save_names.append(str(samp_save_name.resolve()))
 
@@ -173,7 +178,9 @@ def save_samples(
                 pred_save_name,
                 batched=False,
                 aatype=designed_seq,
+                residue_index=trimmed_residue_index[scaffold_idx],
                 chain_index=trimmed_chain_index[scaffold_idx],
+                chain_id_mapping=samp_aux["all_chain_id_mappings"][scaffold_idx],
                 b_factors=all_atom_plddts[idx],
             )
 
@@ -190,7 +197,7 @@ def draw_samples(
     adj_cond: TensorType["b n n", int] | None = None,
     motif_placements_full: list[str] | None = None,
     num_samples: int | None = None,
-    length_ranges_per_chain: list[tuple[int, int]] = [(50, 512)],
+    length_ranges_per_chain: list[tuple[int, int]] | None = None,
     return_aux: bool = False,
     return_sampling_runtime: bool = False,
     return_coords_and_aux: bool = False,
@@ -198,10 +205,19 @@ def draw_samples(
 ):
 
     device = model.device
-    if seq_mask is None:
+    if seq_mask is None and length_ranges_per_chain is not None:
         seq_mask, residue_index, chain_index = model.make_seq_mask_for_sampling(
             length_ranges_per_chain=length_ranges_per_chain, num_samples=num_samples
         )
+    chain_id_mapping = [None] * num_samples
+    if sampling_kwargs["partial_diffusion"]["enabled"]:
+        pd_feats, pd_hetero_obj = load_feats_from_pdb(sampling_kwargs["partial_diffusion"]["pdb_file_path"], include_pos_feats=True)
+        # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
+        residue_index = torch.tile(pd_feats["residue_index"][None], (num_samples, 1)).to(device)
+        residue_index_orig = torch.tile(pd_feats["residue_index_orig"][None], (num_samples, 1)).to(device)
+        chain_index = torch.tile(pd_feats["chain_index"][None], (num_samples, 1)).to(device)
+        chain_id_mapping = [pd_feats["chain_id_mapping"]] * num_samples
+        seq_mask = torch.ones_like(residue_index).to(device)
 
     start = time.time()
 
@@ -224,6 +240,13 @@ def draw_samples(
         dummy_fill_mode=model.config.data.dummy_fill_mode,
         **sampling_kwargs,
     )
+    # account for possible override from partial diffusion input structure
+    seq_mask = aux["seq_mask"]
+    residue_index = aux["residue_index"]
+    if sampling_kwargs["partial_diffusion"]["enabled"]:
+        residue_index = residue_index_orig
+    chain_index = aux["chain_index"]
+    aux["chain_id_mapping"] = chain_id_mapping
 
     # Stage 2 sampling is allatom partial diffusion given sequence from stage1 for more explicit sidechain-driven backbone change
     stage2_enabled = stage2_cfg.pop("enabled")
@@ -258,6 +281,19 @@ def draw_samples(
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
             tmp_dir / f"stage1_{i}.pdb" for i in range(len(samp_coords))
         ]
+
+        residue_index, residue_index_orig, chain_index, chain_id_mapping = [], [], [], []
+        for pd_fp in sampling_kwargs["partial_diffusion"]["pdb_file_path"]:
+            pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp, include_pos_feats=True)
+            residue_index.append(pd_feats["residue_index"][None])
+            residue_index_orig.append(pd_feats["residue_index_orig"][None])
+            chain_index.append(pd_feats["chain_index"][None])
+            chain_id_mapping.append(pd_feats["chain_id_mapping"])
+        residue_index = torch.cat(residue_index, dim=0).to(device)
+        residue_index_orig = torch.cat(residue_index_orig, dim=0).to(device)
+        chain_index = torch.cat(chain_index, dim=0).to(device)
+        seq_mask = torch.ones_like(residue_index).to(device)
+
         stage2_aux = model.sample(
             gt_aatype=samp_seq.to(device),
             seq_mask=seq_mask,
@@ -301,16 +337,17 @@ def draw_samples(
         cropped_samp_coords = [
             s[: seq_lens[i], model.bb_idxs] for i, s in enumerate(aux[xt_traj_key][-1])
         ]
+    cropped_residue_index = [r[: seq_lens[i]] for i, r in enumerate(residue_index)]
     cropped_chain_index = [c[: seq_lens[i]] for i, c in enumerate(chain_index)]
 
     if return_aux:
         return aux
     if return_sampling_runtime:
-        return cropped_samp_coords, cropped_chain_index, seq_mask, aux["runtime"]
+        return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux["runtime"]
     if return_coords_and_aux:
-        return cropped_samp_coords, cropped_chain_index, seq_mask, aux
+        return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask, aux
 
-    return cropped_samp_coords, cropped_chain_index, seq_mask
+    return cropped_samp_coords, cropped_residue_index, cropped_chain_index, seq_mask
 
 
 def generate(
@@ -339,7 +376,9 @@ def generate(
         mpnn_model = None
 
     trimmed_coords = []
+    trimmed_residue_index = []
     trimmed_chain_index = []
+    all_chain_id_mappings = []
     seq_mask = []
     atom_mask = []
     motif_idx = []
@@ -396,7 +435,7 @@ def generate(
 
         curr_sampling_config = deepcopy(sampling_config["sampling"])
 
-        trimmed_coords_bi, trimmed_chain_index_bi, seq_mask_bi, samp_aux_bi = (
+        trimmed_coords_bi, trimmed_residue_index_bi, trimmed_chain_index_bi, seq_mask_bi, samp_aux_bi = (
             draw_samples(
                 model,
                 num_samples=bs,
@@ -423,7 +462,9 @@ def generate(
             )
         )
         trimmed_coords.extend(trimmed_coords_bi)
+        trimmed_residue_index.extend(trimmed_residue_index_bi)
         trimmed_chain_index.extend(trimmed_chain_index_bi)
+        all_chain_id_mappings.extend(samp_aux_bi["chain_id_mapping"])
         seq_mask.extend(seq_mask_bi)
         if samp_aux_bi["motif_idx"] is not None:
             motif_idx.extend(samp_aux_bi["motif_idx"])
@@ -448,6 +489,7 @@ def generate(
         "motif_atom_mask": motif_atom_mask,
         "s": sequences,
         "runtime": runtime,
+        "all_chain_id_mappings": all_chain_id_mappings,
     }
 
     sampled_sequences = None
@@ -474,13 +516,14 @@ def generate(
             motif_atom_mask=motif_atom_mask,
         )
 
-    return trimmed_coords, trimmed_chain_index, seq_mask, samp_aux, sc_aux
+    return trimmed_coords, trimmed_residue_index, trimmed_chain_index, seq_mask, samp_aux, sc_aux
 
 
 def sample(
     sampling_yaml_path: Path,
     project_name: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("motifs/nanobody"),
+    motif_pdb: Path | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
@@ -489,13 +532,14 @@ def sample(
     use_wandb: bool = False,
     array_id: int | None = None,
     num_arrays: int | None = None,
-):
+) -> list[Path]:
     """Sampling with Protpardelle-1c.
 
     Args:
         sampling_yaml_path (Path): Path to sampling config, see examples/sampling/*.yaml for examples
         project_name (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
         motif_dir (Path, optional): Folder containing motifs to scaffold. Defaults to Path("motifs/nanobody").
+        motif_pdb (Path, optional): Overrides motif_dir, use by specifying the motifs inside sampling_yaml_path to null
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
@@ -534,6 +578,7 @@ def sample(
     scaffold_lengths = []
     hotspots = []
     ssadj_fps = []
+    all_save_dirs = []
 
     for ri, (motif_cfg, motif_contig, length_range, hs, ssadj) in enumerate(
         zip(
@@ -545,8 +590,15 @@ def sample(
         )
     ):
         if motif_cfg is None:
-            motif_cfg = f"{ri:03}_unconditional"
-        motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+            if motif_pdb is not None:
+                motif_fps.append(motif_pdb)
+            else:
+                motif_fps.append(motif_dir / f"{ri:03}_unconditional")
+        else:
+            if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
+                motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+            else:
+                motif_fps.append(motif_dir / motif_cfg)
         motif_contigs.append(motif_contig)
         scaffold_lengths.append(length_range)
         hotspots.append(hs)
@@ -636,6 +688,7 @@ def sample(
                 per_config_save_dir / motif_fp.stem
             )  # one config, one motif
             per_motif_save_dir.mkdir(exist_ok=True)
+            all_save_dirs.append(per_motif_save_dir)
 
             config_path = str(
                 PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
@@ -650,6 +703,7 @@ def sample(
                 "start"
             ] = cc_start
             if partial_diffusion:
+                shutil.copy(motif_fp, per_motif_save_dir)
                 sampling_config["sampling"]["partial_diffusion"][
                     "pdb_file_path"
                 ] = motif_fp
@@ -1039,6 +1093,8 @@ def sample(
         df_samp_info["pdb_path"] = all_samp_save_names
         df_samp_info["fix_pos"] = all_fix_pos
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
+    
+    return all_save_dirs
 
 
 @app.command()

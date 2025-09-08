@@ -95,7 +95,7 @@ def _chain_end(atom_index, end_resname, chain_name, residue_index) -> str:
     )
 
 
-def to_pdb(prot: Protein) -> str:
+def to_pdb(prot: Protein, chain_id_mapping=None) -> str:
     """Converts a Protein instance to a PDB string.
 
     Args:
@@ -122,13 +122,20 @@ def to_pdb(prot: Protein) -> str:
         raise ValueError("Invalid aatypes.")
 
     # Construct a mapping from chain integer indices to chain ID strings.
-    chain_ids = {}
-    for i in np.unique(chain_index):  # np.unique gives sorted output.
-        if i >= PDB_MAX_CHAINS:
+    if chain_id_mapping is not None:
+        chain_ids = {v: k for k, v in chain_id_mapping.items()}
+        if len(chain_ids) > PDB_MAX_CHAINS:
             raise ValueError(
                 f"The PDB format supports at most {PDB_MAX_CHAINS} chains."
             )
-        chain_ids[i] = PDB_CHAIN_IDS[i]
+    else:
+        chain_ids = {}
+        for i in np.unique(chain_index):  # np.unique gives sorted output.
+            if i > PDB_MAX_CHAINS:
+                raise ValueError(
+                    f"The PDB format supports at most {PDB_MAX_CHAINS} chains."
+                )
+            chain_ids[i] = PDB_CHAIN_IDS[i]
 
     pdb_lines.append("MODEL     1")
     atom_index = 1

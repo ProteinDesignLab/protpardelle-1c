@@ -18,14 +18,14 @@ else
     source "$ENV_DIR"/protpardelle/bin/activate
 fi
 
-run_name=$1
+run_yaml=$1
 motif_dir=$2
 num_samples=$3
 num_mpnn_seqs=$4
 use_wandb=$5
 
 python -m protpardelle.sample \
-    --project-name "${run_name}" \
+    "${run_yaml}" \
     --motif-dir "${motif_dir}" \
     --num-samples "${num_samples}" \
     --num-mpnn-seqs "${num_mpnn_seqs}" \
