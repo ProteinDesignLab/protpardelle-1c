@@ -3,6 +3,7 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu
 """
 
+import copy
 from collections.abc import Sequence
 from typing import Literal
 
@@ -91,25 +92,87 @@ def lddt(
     return score
 
 
+def circular_relpos(
+    index: torch.Tensor,
+    cyc_mask: torch.Tensor | None = None,
+    ring_size: int | torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute shortest signed circular relative positions on a ring.
+
+    Force d_ij to be in [-floor(L/2), ..., +ceil(L/2)-1]. If L is even,
+    ties at +L/2 are mapped to -L/2 for a unique convention.
+
+    Args:
+        index (torch.Tensor): Absolute positions. (B, N)
+        cyc_mask (torch.Tensor | None, optional): Sequence mask for cyclic peptides.
+            Defaults to None. (B, N)
+        ring_size (int | torch.Tensor | None, optional): Ring size. Defaults to None. (B,)
+
+    Returns:
+        torch.Tensor: Circular relative positions. (B, N, N)
+    """
+
+    B, N = index.shape
+    device = index.device
+
+    if ring_size is None:
+        L = (
+            cyc_mask.sum(dim=-1)
+            if cyc_mask is not None
+            else torch.full((B,), N, device=device)
+        )
+    elif isinstance(ring_size, int):
+        L = torch.full((B,), ring_size, device=device)
+    elif isinstance(ring_size, torch.Tensor):
+        assert ring_size.shape == (B,)
+        L = ring_size.to(device)
+    else:
+        raise ValueError("ring_size must be None, int, or torch.Tensor of shape (B,)")
+    L = L.view(B, 1, 1)  # (B, 1, 1) for broadcasting
+
+    # Pairwise raw differences of absolute positions
+    d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)  # (B, N, N)
+
+    # Wrap to shortest signed distance on the ring of size L (per batch)
+    half = L // 2
+    d_ij = ((d_ij + half) % L) - half
+
+    # For even L: map +L/2 -> -L/2 to make the range symmetric and unique
+    even = L % 2 == 0
+    d_ij = torch.where(even & (d_ij == half), d_ij - L, d_ij)
+
+    return d_ij
+
+
 class RelativePositionalEncoding(nn.Module):
-    def __init__(self, attn_dim=8, max_rel_idx=32, relchain=False):
+    def __init__(
+        self,
+        attn_dim: int = 8,
+        max_rel_idx: int = 32,
+        relchain: bool = False,
+        cyclic: bool = False,
+    ) -> None:
         super().__init__()
         self.max_rel_idx = max_rel_idx
         self.n_rel_pos = 2 * self.max_rel_idx + 1
         self.linear = nn.Linear(self.n_rel_pos, attn_dim)
         self.relchain = relchain
+        self.cyclic = cyclic
 
-    def forward(self, index):
+    def forward(self, index: torch.Tensor) -> torch.Tensor:
         if self.relchain:
-            d_ij = torch.clamp(
-                torch.abs(index.unsqueeze(-1) - index.unsqueeze(-2)), min=0, max=1
-            )
+            d_ij = (index.unsqueeze(-1) != index.unsqueeze(-2)).float()
+        elif self.cyclic:
+            d_ij = circular_relpos(index)
         else:
             d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
-        v_bins = torch.arange(self.n_rel_pos).to(d_ij.device) - self.max_rel_idx
-        idxs = (d_ij.unsqueeze(-1) - v_bins[None, None]).abs().argmin(-1)
-        p_ij = F.one_hot(idxs, num_classes=self.n_rel_pos)
-        embeddings = self.linear(p_ij.float())
+        device = d_ij.device
+
+        v_bins = torch.arange(self.n_rel_pos, device=device) - self.max_rel_idx
+        idxs = torch.abs(d_ij.unsqueeze(-1) - v_bins[None, None]).argmin(-1)
+        p_ij = F.one_hot(idxs, num_classes=self.n_rel_pos).float()
+        embeddings = self.linear(p_ij)
+
         return embeddings
 
 
@@ -152,21 +215,21 @@ def apply_rotary_emb(
 class RotaryEmbedding(nn.Module):
     def __init__(
         self,
-        dim,
+        dim: int,
         use_residx: bool,
         custom_freqs: torch.Tensor | None = None,
         freqs_for: Literal["lang", "pixel", "constant"] = "lang",
-        theta=10000,
-        max_freq=10,
-        num_freqs=1,
-        learned_freq=False,
-        use_xpos=False,
-        xpos_scale_base=512,
-        interpolate_factor=1.0,
-        theta_rescale_factor=1.0,
-        seq_before_head_dim=False,
-        cache_if_possible=True,
-    ):
+        theta: float = 10000.0,
+        max_freq: float = 10.0,
+        num_freqs: int = 1,
+        learned_freq: bool = False,
+        use_xpos: bool = False,
+        xpos_scale_base: int = 512,
+        interpolate_factor: float = 1.0,
+        theta_rescale_factor: float = 1.0,
+        seq_before_head_dim: bool = False,
+        cache_if_possible: bool = True,
+    ) -> None:
         super().__init__()
         # proposed by reddit user bloc97, to rescale rotary embeddings to longer sequence length without fine-tuning
         # has some connection to NTK literature
@@ -180,7 +243,7 @@ class RotaryEmbedding(nn.Module):
         )
         if use_residx:
             assert (
-                cache_if_possible is False
+                not cache_if_possible
             ), "Caching is not supported with residue index since each sequence will have different positions."
 
         self.freqs_for = freqs_for
@@ -192,9 +255,13 @@ class RotaryEmbedding(nn.Module):
                 theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)
             )
         elif freqs_for == "pixel":
-            freqs = torch.linspace(1.0, max_freq / 2, dim // 2) * pi
+            freqs = torch.linspace(1.0, max_freq / 2, dim // 2) * np.pi
         elif freqs_for == "constant":
-            freqs = torch.ones(num_freqs).float()
+            freqs = torch.ones(num_freqs)
+        else:
+            raise ValueError(
+                f"freqs_for must be one of 'lang', 'pixel', 'constant', or you can pass in custom freqs directly. Got {freqs_for}"
+            )
 
         self.cache_if_possible = cache_if_possible
         self.dim = dim
@@ -206,39 +273,30 @@ class RotaryEmbedding(nn.Module):
         self.learned_freq = learned_freq
 
         # dummy for device
-
         self.tmp_store("dummy", torch.tensor(0))
 
         # default sequence dimension
-
         self.seq_before_head_dim = seq_before_head_dim
         self.default_seq_dim = -3 if seq_before_head_dim else -2
 
         # interpolation factors
-
         assert interpolate_factor >= 1.0
         self.interpolate_factor = interpolate_factor
 
         # xpos
-
-        self.use_xpos = use_xpos
-        if not use_xpos:
+        if use_xpos:
+            scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
+            self.scale_base = xpos_scale_base
+            self.tmp_store("scale", scale)
+        else:
             self.tmp_store("scale", None)
-            return
-
-        scale = (torch.arange(0, dim, 2) + 0.4 * dim) / (1.4 * dim)
-        self.scale_base = xpos_scale_base
-        self.tmp_store("scale", scale)
-
-        # add apply_rotary_emb as static method
-
-        self.apply_rotary_emb = staticmethod(apply_rotary_emb)
+        self.use_xpos = use_xpos
 
     @property
     def device(self) -> torch.device:
         return self.dummy.device
 
-    def tmp_store(self, key, value):
+    def tmp_store(self, key: str, value: torch.Tensor | None) -> None:
         self.register_buffer(key, value, persistent=False)
 
     def get_seq_pos(
@@ -437,13 +495,15 @@ class RotaryEmbedding(nn.Module):
 
 
 class Noise_Embedding(nn.Module):
-    def __init__(self, num_channels, max_positions=10000, endpoint=False):
+    def __init__(
+        self, num_channels: int, max_positions: int = 10000, endpoint: bool = False
+    ) -> None:
         super().__init__()
         self.num_channels = num_channels
         self.max_positions = max_positions
         self.endpoint = endpoint
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         freqs = torch.arange(
             start=0, end=self.num_channels // 2, dtype=torch.float, device=x.device
         )
@@ -562,19 +622,19 @@ class TimeCondResnetBlock(nn.Module):
 class TimeCondAttention(nn.Module):
     def __init__(
         self,
-        dim,
-        dim_context=None,
-        heads=4,
-        dim_head=32,
-        norm=False,
-        norm_context=False,
-        time_cond_dim=None,
-        motif_cond_dim=None,
-        attn_bias_dim=None,
-        rotary_embedding_module=None,
-        attn_dropout=0.0,
-        out_dropout=0.0,
-        dit=False,
+        dim: int,
+        dim_context: int | None = None,
+        heads: int = 4,
+        dim_head: int = 32,
+        norm: bool = False,
+        norm_context: bool = False,
+        time_cond_dim: int | None = None,
+        motif_cond_dim: int | None = None,
+        attn_bias_dim: int | None = None,
+        rotary_embedding_module: RotaryEmbedding | None = None,
+        attn_dropout: float = 0.0,
+        out_dropout: float = 0.0,
+        dit: bool = False,
     ):
         super().__init__()
         hidden_dim = dim_head * heads
@@ -634,8 +694,9 @@ class TimeCondAttention(nn.Module):
         self.to_out = nn.Linear(hidden_dim, dim, bias=False)
         nn.init.zeros_(self.to_out.weight)
 
-        self.use_rope = False
-        if rotary_embedding_module is not None:
+        if rotary_embedding_module is None:
+            self.use_rope = False
+        else:
             self.use_rope = True
             self.rope = rotary_embedding_module
 
@@ -819,27 +880,15 @@ class TimeCondFeedForward(nn.Module):
 class TimeCondTransformer(nn.Module):
     def __init__(
         self,
-        dim,
-        depth,
-        heads,
-        dim_head,
-        time_cond_dim,
-        motif_cond_dim=None,
-        attn_bias_dim=None,
-        mlp_inner_dim_mult=4,
-        position_embedding_type: str = "rotary",
-        position_embedding_max: int = 32,
-        attn_dropout: float = 0.0,
-        out_dropout: float = 0.0,
-        ff_dropout: float = 0.1,
-        dit=False,
-    ):
-        super().__init__()
-
-        self.rope = None
-        self.pos_emb_type = position_embedding_type
-
-        assert self.pos_emb_type in [
+        dim: int,
+        depth: int,
+        heads: int,
+        dim_head: int,
+        time_cond_dim: int,
+        motif_cond_dim: int | None = None,
+        attn_bias_dim: int | None = None,
+        mlp_inner_dim_mult: int = 4,
+        position_embedding_type: Literal[
             "rotary",
             "rotary_relchain",
             "absolute",
@@ -847,7 +896,29 @@ class TimeCondTransformer(nn.Module):
             "relative",
             "relative_relchain",
             "none",
-        ], f"Unknown position embedding type {self.pos_emb_type}"
+        ] = "rotary",
+        position_embedding_max: int = 32,
+        attn_dropout: float = 0.0,
+        out_dropout: float = 0.0,
+        ff_dropout: float = 0.1,
+        dit: bool = False,
+        cyclic: bool = False,
+    ) -> None:
+        super().__init__()
+
+        self.rope = None
+        self.pos_emb_type = position_embedding_type
+
+        if self.pos_emb_type not in {
+            "rotary",
+            "rotary_relchain",
+            "absolute",
+            "absolute_residx",
+            "relative",
+            "relative_relchain",
+            "none",
+        }:
+            raise ValueError(f"Unknown position embedding type {self.pos_emb_type}")
 
         if "rotary" in position_embedding_type:
             self.rope = RotaryEmbedding(
@@ -856,7 +927,7 @@ class TimeCondTransformer(nn.Module):
         if "relative" in position_embedding_type:
             self.relpos = nn.Sequential(
                 RelativePositionalEncoding(
-                    attn_dim=heads, max_rel_idx=position_embedding_max
+                    attn_dim=heads, max_rel_idx=position_embedding_max, cyclic=cyclic
                 ),
                 Rearrange("b i j d -> b d i j"),
             )
@@ -868,35 +939,34 @@ class TimeCondTransformer(nn.Module):
                 Rearrange("b i j d -> b d i j"),
             )
 
-        self.layers = nn.ModuleList([])
-        for _ in range(depth):
-            self.layers.append(
-                nn.ModuleList(
-                    [
-                        TimeCondAttention(
-                            dim,
-                            heads=heads,
-                            dim_head=dim_head,
-                            norm=True,
-                            time_cond_dim=time_cond_dim,
-                            motif_cond_dim=motif_cond_dim,
-                            attn_bias_dim=attn_bias_dim,
-                            rotary_embedding_module=self.rope,
-                            attn_dropout=attn_dropout,
-                            out_dropout=out_dropout,
-                            dit=dit,
-                        ),
-                        TimeCondFeedForward(
-                            dim,
-                            mlp_inner_dim_mult,
-                            time_cond_dim=time_cond_dim,
-                            motif_cond_dim=motif_cond_dim,
-                            dropout=ff_dropout,
-                            dit=dit,
-                        ),
-                    ]
-                )
-            )
+        time_cond_attention = TimeCondAttention(
+            dim,
+            heads=heads,
+            dim_head=dim_head,
+            norm=True,
+            time_cond_dim=time_cond_dim,
+            motif_cond_dim=motif_cond_dim,
+            attn_bias_dim=attn_bias_dim,
+            rotary_embedding_module=self.rope,
+            attn_dropout=attn_dropout,
+            out_dropout=out_dropout,
+            dit=dit,
+        )
+        time_cond_feed_forward = TimeCondFeedForward(
+            dim,
+            mlp_inner_dim_mult,
+            time_cond_dim=time_cond_dim,
+            motif_cond_dim=motif_cond_dim,
+            dropout=ff_dropout,
+            dit=dit,
+        )
+        layer = nn.ModuleList(
+            [
+                time_cond_attention,
+                time_cond_feed_forward,
+            ]
+        )
+        self.layers = nn.ModuleList([copy.deepcopy(layer) for _ in range(depth)])
 
     def forward(
         self,
@@ -922,7 +992,7 @@ class TimeCondTransformer(nn.Module):
             attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
         if "relative" in self.pos_emb_type:
             assert residue_index is not None
-            if "pos_emb" in locals():
+            if "pos_emb" in locals():  # TODO: avoid this
                 pos_emb += self.relpos(residue_index)
             else:
                 pos_emb = self.relpos(residue_index)
@@ -931,7 +1001,7 @@ class TimeCondTransformer(nn.Module):
             x = x * seq_mask.unsqueeze(-1)
 
         # Begin transformer layers
-        for i, (attn, ff) in enumerate(self.layers):
+        for attn, ff in self.layers:
             x = x + attn(
                 x,
                 residx=residue_index,
@@ -960,23 +1030,24 @@ class TimeCondUViT(nn.Module):
         depth: int = 6,
         heads: int = 8,
         dim_head: int = 32,
-        n_filt_per_layer: list[int] = [],
+        n_filt_per_layer: list[int] = [],  # TODO: tuple
         n_blocks_per_layer: int = 2,
         n_atoms: int = 37,
         channels_per_atom: int = 6,
-        attn_bias_dim: int = None,
-        time_cond_dim: int = None,
-        motif_cond_dim: int = None,
+        attn_bias_dim: int | None = None,
+        time_cond_dim: int | None = None,
+        motif_cond_dim: int | None = None,
         conv_skip_connection: bool = False,
         position_embedding_type: str = "rotary",
         position_embedding_max: int = 32,
-        noise_residual: bool = False,
+        noise_residual: bool = False,  # Not used
         ssadj_cond: bool = False,
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
         dit: bool = False,
-    ):
+        cyclic: bool = False,
+    ) -> None:
         super().__init__()
 
         # Initialize configuration params
@@ -992,7 +1063,7 @@ class TimeCondUViT(nn.Module):
         self.conv_skip_connection = conv_skip_connection and n_conv_layers == 1
         transformer_seq_len = seq_len // (2**n_conv_layers)
         assert transformer_seq_len % patch_size == 0
-        num_patches = transformer_seq_len // patch_size
+
         dim_a = post_conv_atom_dim = max(1, n_atoms // (2 ** (n_conv_layers - 1)))
         if n_conv_layers == 0:
             patch_dim = patch_size * n_atoms * channels_per_atom
@@ -1056,6 +1127,7 @@ class TimeCondUViT(nn.Module):
             out_dropout=out_dropout,
             ff_dropout=ff_dropout,
             dit=dit,
+            cyclic=cyclic,
         )
         self.from_patch = nn.Sequential(
             LayerNorm(dim),
@@ -1071,7 +1143,7 @@ class TimeCondUViT(nn.Module):
             skip_in = nf
             block_out = nf
             layer = []
-            for j in range(n_blocks_per_layer):
+            for _ in range(n_blocks_per_layer):
                 layer.append(
                     TimeCondResnetBlock(block_in + skip_in, block_out, time_cond_dim)
                 )
@@ -1096,8 +1168,7 @@ class TimeCondUViT(nn.Module):
         seq_mask=None,
         residue_index=None,
         chain_index=None,
-        return_emb=False,
-    ):
+    ) -> torch.Tensor:
 
         if self.n_conv_layers > 0:  # pad up to even dims
             coords = F.pad(coords, (0, 0, 0, 0, 0, 1, 0, 0))
@@ -1123,7 +1194,7 @@ class TimeCondUViT(nn.Module):
         if pair_bias is not None:
             attn_bias = self.adj_to_embedding(pair_bias)
 
-        emb = self.transformer(
+        x = self.transformer(
             x,
             time=time_cond,
             motif=motif_cond,
@@ -1133,7 +1204,7 @@ class TimeCondUViT(nn.Module):
             chain_index=chain_index,
         )
 
-        x = self.from_patch(emb)
+        x = self.from_patch(x)
 
         for i, layer in enumerate(self.up_conv):
             for block in layer:
@@ -1148,10 +1219,7 @@ class TimeCondUViT(nn.Module):
 
         x = rearrange(x, "b c n a -> b n a c")
 
-        if return_emb:
-            return x, emb
-        else:
-            return x
+        return x
 
 
 ########################################

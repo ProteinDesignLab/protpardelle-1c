@@ -308,8 +308,7 @@ class CoordinateDenoiser(nn.Module):
         struct_crop_cond: TensorType["b n a x", float] | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
-        return_emb: bool = False,
-    ):
+    ) -> torch.Tensor:
 
         noise_level = noise_level.clamp(min=1e-6)
 
@@ -387,14 +386,13 @@ class CoordinateDenoiser(nn.Module):
             )  # expand along atom dimension to match emb shape
             emb = torch.cat([emb, sse_cond], dim=-1)
 
-        emb, hidden = self.net(
+        emb = self.net(
             emb,
             noise_cond,
             motif_cond=None,
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
-            return_emb=return_emb,
             pair_bias=adj_cond,
         )
 
@@ -414,7 +412,7 @@ class CoordinateDenoiser(nn.Module):
             seq_mask, denoised_coords
         )
 
-        return denoised_coords, hidden
+        return denoised_coords
 
 
 def parse_fixed_pos_str(
@@ -640,7 +638,7 @@ class Protpardelle(nn.Module):
 
         # Coordinate denoiser
         if run_struct_model:
-            denoised_coords, _ = self.struct_model(
+            denoised_coords = self.struct_model(
                 noisy_coords,
                 noise_level,
                 seq_mask,
@@ -651,7 +649,6 @@ class Protpardelle(nn.Module):
                 struct_crop_cond=struct_crop_cond,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
-                return_emb=True,
             )
         else:
             denoised_coords = noisy_coords
