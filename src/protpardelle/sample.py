@@ -55,7 +55,6 @@ from protpardelle.utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
@@ -144,7 +143,6 @@ def save_samples(
         write_coords_to_pdb(
             coords_to_save,
             samp_save_name,
-            batched=False,
             aatype=dummy_aatype[idx],
             residue_index=trimmed_residue_index[idx],
             chain_index=trimmed_chain_index[idx],
@@ -177,7 +175,6 @@ def save_samples(
             write_coords_to_pdb(
                 pred_coords[idx],
                 pred_save_name,
-                batched=False,
                 aatype=designed_seq,
                 residue_index=trimmed_residue_index[scaffold_idx],
                 chain_index=trimmed_chain_index[scaffold_idx],
@@ -271,7 +268,6 @@ def draw_samples(
             write_coords_to_pdb(
                 samp_coords[i][:length_bi],
                 str(tmp_dir / f"stage1_{i}.pdb"),
-                batched=False,
                 aatype=samp_seq[i][:length_bi],
                 chain_index=chain_index[i][:length_bi],
             )

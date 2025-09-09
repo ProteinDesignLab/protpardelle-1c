@@ -90,11 +90,11 @@ def atom14_coords_to_atom37_coords(
     Not batched.
 
     Args:
-        atom14_coords (torch.Tensor): Atom 14 coordinates. (L, 14, 3)
+        atom14_coords (torch.Tensor): Atom14 coordinates. (L, 14, 3)
         aatype (torch.Tensor): Amino acid type. (L,)
 
     Returns:
-        torch.Tensor: Atom 37 coordinates. (L, 37, 3)
+        torch.Tensor: Atom37 coordinates. (L, 37, 3)
     """
 
     device = atom14_coords.device
@@ -122,11 +122,11 @@ def atom14_coords_to_atom37_coords_batched(
     """Convert atom14 coordinates to atom37 coordinates.
 
     Args:
-        atom14_coords (torch.Tensor): Atom 14 coordinates. (B, L, 14, 3)
+        atom14_coords (torch.Tensor): Atom14 coordinates. (B, L, 14, 3)
         aatype (torch.Tensor): Amino acid type. (B, L)
 
     Returns:
-        torch.Tensor: Atom 37 coordinates. (B, L, 37, 3)
+        torch.Tensor: Atom37 coordinates. (B, L, 37, 3)
     """
 
     device = atom14_coords.device
