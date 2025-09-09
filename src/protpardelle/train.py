@@ -6,7 +6,6 @@ Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
 import argparse
 import logging
 import random
-import shlex
 import subprocess
 from contextlib import nullcontext
 
@@ -538,6 +537,61 @@ class ProtpardelleTrainer:
         return log_dict
 
 
+def _initialize_training_parameters(trainer: ProtpardelleTrainer) -> tuple[int, int]:
+    """Initialize training parameters.
+
+    Args:
+        trainer (ProtpardelleTrainer): The protpardelle trainer instance.
+
+    Returns:
+        tuple[int, int]: The starting epoch and total steps.
+    """
+
+    start_epoch = 0
+    total_steps = 0
+
+    # Set seeds if no rng provided
+    seed = trainer.config.train.seed
+    if seed is not None:
+        seed_everything(
+            seed, freeze_cuda=True
+        )  # use deterministic pytorch for training
+
+    return start_epoch, total_steps
+
+
+def _load_checkpoint_or_not(trainer: ProtpardelleTrainer) -> tuple[int, int]:
+    """Load checkpoint if it exists, otherwise initialize training parameters.
+
+    Args:
+        trainer (ProtpardelleTrainer): The protpardelle trainer instance.
+
+    Returns:
+        tuple[int, int]: The starting epoch and total steps.
+    """
+
+    checkpoint_path = trainer.config.train.ckpt_path
+    if checkpoint_path is None:
+        return _initialize_training_parameters(trainer)
+
+    checkpoint_path = norm_path(checkpoint_path)
+    try:
+        start_epoch, total_steps = trainer.load_checkpoint(checkpoint_path)
+        logger.info(
+            "Resumed from checkpoint: %s (epoch %d, total_steps %d)",
+            checkpoint_path,
+            start_epoch,
+            total_steps,
+        )
+        return start_epoch, total_steps
+    except FileNotFoundError:
+        logger.warning(
+            "Checkpoint file not found: %s; starting from scratch", checkpoint_path
+        )
+
+    return _initialize_training_parameters(trainer)
+
+
 @record
 def train(
     config_path: StrPath,
@@ -575,19 +629,7 @@ def train(
 
     trainer = ProtpardelleTrainer(config, device)
 
-    checkpoint_path = norm_path(trainer.config.train.ckpt_path)
-    if checkpoint_path.is_file():
-        start_epoch, total_steps = trainer.load_checkpoint(checkpoint_path)
-    else:
-        start_epoch = 0
-        total_steps = 0
-
-        # Set seeds if no rng provided
-        seed = trainer.config.train.seed
-        if seed is not None:
-            seed_everything(
-                seed, freeze_cuda=True
-            )  # use deterministic pytorch for training
+    start_epoch, total_steps = _load_checkpoint_or_not(trainer)
 
     # Set output directories for wandb
     output_dir = norm_path(output_dir)
@@ -612,9 +654,11 @@ def train(
     run_name = wandb.run.name
     run_dir = wandb.run.dir
     run_id = wandb.run.id
-    assert run_name is not None  # cannot be None if wandb runs properly
-    assert run_dir is not None  # cannot be None if wandb runs properly
-    assert run_id is not None  # cannot be None if wandb runs properly
+
+    # Assert variables cannot be None if wandb runs properly
+    assert run_name is not None
+    assert run_dir is not None
+    assert run_id is not None
 
     logger.info(
         "Beginning: run_name=%s, run_id=%s, device=%s",
@@ -659,7 +703,7 @@ def train(
                     trainer.module.train()
 
     wandb.finish()
-    subprocess.run(shlex.split(f"cp -r {run_dir} {log_dir}"), check=False)
+    subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
     logger.info(
         "Training finished. (run name '%s', run id '%s')",
         run_name,
