@@ -198,6 +198,17 @@ def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
         torch.backends.cudnn.benchmark = False
 
 
+def tensor_to_ndarray(x: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Convert a PyTorch tensor to a NumPy ndarray."""
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    raise TypeError(
+        f"Expected input to be a torch.Tensor or np.ndarray, but got {type(x)}"
+    )
+
+
 def unsqueeze_trailing_dims(
     x: torch.Tensor, target: torch.Tensor | None = None, add_ndims: int = 1
 ) -> torch.Tensor:

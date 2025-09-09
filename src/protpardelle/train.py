@@ -369,13 +369,13 @@ class ProtpardelleTrainer:
         """
 
         seq_mask = input_dict["seq_mask"]
-        coords = input_dict["coords_in"]
+        atom_coords = input_dict["coords_in"]
         aatype = input_dict["aatype"]
         atom_mask = input_dict["atom_mask"]
         chain_index = input_dict["chain_index"]
         residue_index = input_dict["residue_index"]
 
-        batch_size = coords.shape[0]
+        batch_size = atom_coords.shape[0]
 
         # Crop conditioning
         if self.config.train.crop_conditional:
@@ -383,16 +383,16 @@ class ProtpardelleTrainer:
                 raise NotImplementedError(
                     "Crop conditioning with all atom loss not implemented"
                 )
-            coords, crop_cond_mask, hotspot_mask = (
+            atom_coords, crop_cond_mask, hotspot_mask = (
                 make_crop_cond_mask_and_recenter_coords(
                     atom_mask,
-                    coords,
+                    atom_coords,
                     aatype=aatype,
                     chain_index=chain_index,
                     **vars(self.config.train.crop_cond),
                 )
             )
-            struct_crop_cond = coords * crop_cond_mask.unsqueeze(-1)
+            struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
             if "hotspots" not in self.config.model.conditioning_style:
                 hotspot_mask = None  # type: ignore
         else:
@@ -411,7 +411,7 @@ class ProtpardelleTrainer:
         timestep = torch.rand(batch_size, device=self.device)
         noise_level = self.module.training_noise_schedule(timestep)
         noised_coords = diffusion.noise_coords(
-            coords,
+            atom_coords,
             noise_level,
             atom_mask,
             dummy_fill_mode=self.config.data.dummy_fill_mode,
@@ -466,20 +466,20 @@ class ProtpardelleTrainer:
             "codesign",
         ]:
             if self.config.model.task == "backbone":
-                struct_loss_mask = torch.ones_like(coords) * bb_atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(atom_coords) * bb_atom_mask.unsqueeze(-1)
             else:
                 if self.config.model.compute_loss_on_all_atoms:
                     # Compute loss on all 37 atoms
                     struct_loss_mask = torch.ones_like(
-                        coords
-                    ) * unsqueeze_trailing_dims(seq_mask, coords)
+                        atom_coords
+                    ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
                 else:
-                    struct_loss_mask = torch.ones_like(coords) * atom_mask.unsqueeze(-1)
+                    struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(-1)
             loss_weight = (noise_level**2 + self.module.sigma_data**2) / (
                 (noise_level * self.module.sigma_data) ** 2
             )
             struct_loss = masked_mse_loss(
-                coords, denoised_coords, struct_loss_mask, loss_weight
+                atom_coords, denoised_coords, struct_loss_mask, loss_weight
             ).mean()
             loss = loss + struct_loss
             log_dict["struct_loss"] = struct_loss.detach().cpu().item()

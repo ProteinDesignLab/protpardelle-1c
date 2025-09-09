@@ -40,10 +40,8 @@ def get_backbone_mask(atom_mask):
 
 
 def batch_from_pdbs(list_of_pdbs):
-    all_feats = []
-    for pdb in list_of_pdbs:
-        all_feats.append(load_feats_from_pdb(pdb)[0])
-    max_len = max([f["aatype"].shape[0] for f in all_feats])
+    all_feats = [load_feats_from_pdb(pdb)[0] for pdb in list_of_pdbs]
+    max_len = max(f["aatype"].shape[0] for f in all_feats)
     dict_of_lists = {"seq_mask": []}
     for feats in all_feats:
         for k, v in feats.items():

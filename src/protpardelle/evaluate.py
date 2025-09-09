@@ -59,7 +59,7 @@ def design_sequence(
             fixed_pos_mask = torch.zeros_like(input_aatype)
 
         protpardelle.data.pdb_io.write_coords_to_pdb(
-            coords, pdb_fn, batched=False, aatype=input_aatype, chain_index=chain_index
+            coords, pdb_fn, aatype=input_aatype, chain_index=chain_index
         )
 
         # make fixed pos jsonl
