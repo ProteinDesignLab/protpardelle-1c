@@ -254,7 +254,6 @@ class CoordinateDenoiser(nn.Module):
             n_xyz += 1
         if config.model.crop_conditional and "ssadj" in config.model.conditioning_style:
             n_xyz += 3  # one-hot encoding [helix, strand, loop]
-        nc_in = n_xyz * n_atoms  # xyz + selfcond xyz + maybe cropcond xyz
 
         # Neural networks
         n_noise_channel = nc * m_cfg.noise_cond_mult

@@ -3,6 +3,7 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
+import copy
 import itertools
 import logging
 import math
@@ -11,7 +12,6 @@ import subprocess
 import time
 import uuid
 from collections import defaultdict
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -434,7 +434,7 @@ def generate(
             sse_cond = torch.cat([sse_cond.clone() for _ in range(bs)], dim=0)
             adj_cond = torch.cat([adj_cond.clone() for _ in range(bs)], dim=0)
 
-        curr_sampling_config = deepcopy(sampling_config["sampling"])
+        curr_sampling_config = copy.deepcopy(sampling_config["sampling"])
 
         (
             trimmed_coords_bi,

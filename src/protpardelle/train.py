@@ -49,7 +49,7 @@ app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def masked_cross_entropy_loss(
-    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor
+    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor, tol: float = 1e-7
 ) -> torch.Tensor:
     """Compute the masked cross-entropy loss.
 
@@ -64,7 +64,7 @@ def masked_cross_entropy_loss(
 
     cel = -target * logprobs
     cel = cel * loss_mask.unsqueeze(-1)
-    cel = cel.sum((-1, -2)) / loss_mask.sum(-1).clamp(min=1e-6)
+    cel = cel.sum((-1, -2)) / loss_mask.sum(-1).clamp(min=tol)
 
     return cel
 
