@@ -29,7 +29,7 @@ from protpardelle.core import diffusion, modules
 from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
-from protpardelle.data.sequence import batched_seq_to_aatype_and_mask
+from protpardelle.data.sequence import seq_to_aatype_batched
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.evaluate import design_sequence
 from protpardelle.integrations import protein_mpnn
@@ -1114,7 +1114,7 @@ class Protpardelle(nn.Module):
                     )[0]
                     for i, c in enumerate(batched_coords)
                 ]
-            designed_aatypes, _ = batched_seq_to_aatype_and_mask(
+            designed_aatypes = seq_to_aatype_batched(
                 designed_seqs, max_len=seq_mask.shape[-1]
             )
             return designed_aatypes
@@ -1158,9 +1158,7 @@ class Protpardelle(nn.Module):
                     )[0]
                 )
                 pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
-                pd_feats["atom_positions"] = pd_feats[
-                    "atom_positions"
-                ] - torch.mean(
+                pd_feats["atom_positions"] = pd_feats["atom_positions"] - torch.mean(
                     pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
                 )
                 pd_coords.append(
@@ -1169,9 +1167,7 @@ class Protpardelle(nn.Module):
                         fixed_size=seq_mask.shape[-1],
                     )[0]
                 )
-            pd_motif_aatype = (
-                torch.stack(pd_motif_aatype).long().to(seq_mask.device)
-            )
+            pd_motif_aatype = torch.stack(pd_motif_aatype).long().to(seq_mask.device)
             pd_coords = torch.stack(pd_coords).to(self.device)
 
             pd_noise_level = torch.full(
