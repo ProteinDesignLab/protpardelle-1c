@@ -5,6 +5,8 @@ Typically these are initialized with config rather than arguments.
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
+from __future__ import annotations
+
 import argparse
 import copy
 import logging
@@ -12,7 +14,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -782,8 +784,6 @@ class Protpardelle(nn.Module):
         use_fullmpnn_for_final: bool = False,
         noise_schedule: Callable | None = None,
         tqdm_pbar: Callable | None = None,
-        return_last: bool = True,
-        return_aux: bool = False,
         jump_steps: bool = True,  # used to be called "use_superposition"
         uniform_steps: bool = False,  # alternative to superposition
         motif_file_path: str | None = None,
@@ -799,7 +799,7 @@ class Protpardelle(nn.Module):
         motif_idx_stage1: list[list[int]] | None = None,
         stage2: bool = False,
         tip_atom_conditioning: bool = False,
-    ):
+    ) -> dict[str, Any]:
         """Sampling function for backbone or all-atom diffusion.
 
         seq_mask: mask defining the number and lengths of proteins to be sampled.
@@ -1281,10 +1281,6 @@ class Protpardelle(nn.Module):
             else:
                 motif_idx = motif_idx_stage1
 
-            to_motif_size = lambda x: x * torch.ones(batch_size, motif_size).to(
-                self.device
-            )
-
         if (
             cc.crop_conditional_guidance.enabled
             and cc.crop_conditional_guidance.start == 0.0
@@ -1599,37 +1595,35 @@ class Protpardelle(nn.Module):
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()
-                        if cc.enabled:
-                            # Replacement guidance
-                            if (
-                                cc.replacement_guidance.enabled
-                                and i >= (cc.replacement_guidance.start * n_steps)
-                                and i < (cc.replacement_guidance.end * n_steps)
-                            ):
-                                for bi, _ in enumerate(motif_idx):
-                                    for raw_mi, mi in enumerate(motif_idx[bi]):
-                                        replacement_idx = torch.nonzero(
-                                            atom_mask[bi, mi]
-                                        ).flatten()
-                                        if tip_atom_conditioning:
-                                            aatype_int = motif_aatype[bi][raw_mi]
-                                            motif_aatype_str = (
-                                                residue_constants.restype_1to3[
-                                                    residue_constants.order_restype[
-                                                        aatype_int.item()
-                                                    ]
+                        if cc.enabled and (
+                            cc.replacement_guidance.enabled
+                            and i >= (cc.replacement_guidance.start * n_steps)
+                            and i < (cc.replacement_guidance.end * n_steps)
+                        ):
+                            for bi, _ in enumerate(motif_idx):
+                                for raw_mi, mi in enumerate(motif_idx[bi]):
+                                    replacement_idx = torch.nonzero(
+                                        atom_mask[bi, mi]
+                                    ).flatten()
+                                    if tip_atom_conditioning:
+                                        aatype_int = motif_aatype[bi][raw_mi]
+                                        motif_aatype_str = (
+                                            residue_constants.restype_1to3[
+                                                residue_constants.order_restype[
+                                                    aatype_int.item()
                                                 ]
-                                            )
-                                            tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
-                                                motif_aatype_str
                                             ]
-                                            replacement_idx = [
-                                                residue_constants.atom_order.get(atype)
-                                                for atype in tip_atomtypes
-                                            ]
-                                        xt_rep[bi, mi, replacement_idx] = (
-                                            motif_all_atom[bi, raw_mi, replacement_idx]
                                         )
+                                        tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                            motif_aatype_str
+                                        ]
+                                        replacement_idx = [
+                                            residue_constants.atom_order.get(atype)
+                                            for atype in tip_atomtypes
+                                        ]
+                                    xt_rep[bi, mi, replacement_idx] = motif_all_atom[
+                                        bi, raw_mi, replacement_idx
+                                    ]
 
                         x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
                             noisy_coords=xt_rep,
@@ -1782,37 +1776,35 @@ class Protpardelle(nn.Module):
                             atom_mask = bb_atom_mask
 
                         xt_rep = xt_hat.clone()
-                        if cc.enabled:
-                            # Replacement guidance
-                            if (
-                                cc.replacement_guidance.enabled
-                                and i >= (cc.replacement_guidance.start * n_steps)
-                                and i < (cc.replacement_guidance.end * n_steps)
-                            ):
-                                for bi, _ in enumerate(motif_idx):
-                                    for raw_mi, mi in enumerate(motif_idx[bi]):
-                                        replacement_idx = torch.nonzero(
-                                            atom_mask[bi, mi]
-                                        ).flatten()
-                                        if tip_atom_conditioning:
-                                            aatype_int = motif_aatype[bi][raw_mi]
-                                            motif_aatype_str = (
-                                                residue_constants.restype_1to3[
-                                                    residue_constants.order_restype[
-                                                        aatype_int.item()
-                                                    ]
+                        if cc.enabled and (
+                            cc.replacement_guidance.enabled
+                            and i >= (cc.replacement_guidance.start * n_steps)
+                            and i < (cc.replacement_guidance.end * n_steps)
+                        ):
+                            for bi, _ in enumerate(motif_idx):
+                                for raw_mi, mi in enumerate(motif_idx[bi]):
+                                    replacement_idx = torch.nonzero(
+                                        atom_mask[bi, mi]
+                                    ).flatten()
+                                    if tip_atom_conditioning:
+                                        aatype_int = motif_aatype[bi][raw_mi]
+                                        motif_aatype_str = (
+                                            residue_constants.restype_1to3[
+                                                residue_constants.order_restype[
+                                                    aatype_int.item()
                                                 ]
-                                            )
-                                            tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
-                                                motif_aatype_str
                                             ]
-                                            replacement_idx = [
-                                                residue_constants.atom_order.get(atype)
-                                                for atype in tip_atomtypes
-                                            ]
-                                        xt_rep[bi, mi, replacement_idx] = (
-                                            motif_all_atom[bi, raw_mi, replacement_idx]
                                         )
+                                        tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                                            motif_aatype_str
+                                        ]
+                                        replacement_idx = [
+                                            residue_constants.atom_order.get(atype)
+                                            for atype in tip_atomtypes
+                                        ]
+                                    xt_rep[bi, mi, replacement_idx] = motif_all_atom[
+                                        bi, raw_mi, replacement_idx
+                                    ]
 
                         x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
                             noisy_coords=xt_rep,
@@ -2023,29 +2015,24 @@ class Protpardelle(nn.Module):
             pbar.update(1)
         pbar.close()
 
-        if return_last:
-            return xt, s_hat, seq_mask
-        elif return_aux:
-            atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
-            return {
-                "x": xt,
-                "s": s_hat,
-                "seq_mask": seq_mask,
-                "atom_mask": atom_mask,
-                "xt_traj": xt_traj,
-                "x0_traj": x0_traj,
-                "st_traj": st_traj,
-                "s0_traj": s0_traj,
-                "motif_idx": motif_idx,
-                "motif_aatype": motif_aatype,
-                "motif_all_atom": motif_all_atom,
-                "motif_atom_mask": motif_atom_mask,
-                "motif_aa3": motif_aa3,
-                "residue_index": residue_index_orig,
-                "chain_index": chain_index,
-            }
-        else:
-            return xt_traj, x0_traj, st_traj, s0_traj, seq_mask
+        atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
+        return {
+            "x": xt,
+            "s": s_hat,
+            "seq_mask": seq_mask,
+            "atom_mask": atom_mask,
+            "xt_traj": xt_traj,
+            "x0_traj": x0_traj,
+            "st_traj": st_traj,
+            "s0_traj": s0_traj,
+            "motif_idx": motif_idx,
+            "motif_aatype": motif_aatype,
+            "motif_all_atom": motif_all_atom,
+            "motif_atom_mask": motif_atom_mask,
+            "motif_aa3": motif_aa3,
+            "residue_index": residue_index_orig,
+            "chain_index": chain_index,
+        }
 
 
 def load_model(
