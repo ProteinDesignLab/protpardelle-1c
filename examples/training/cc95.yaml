@@ -1,7 +1,7 @@
 # cc83 but finetune with greater hotspot dropout and lower minimum hotspots
 train:
-  seed: 0
-  ckpt_path: ""
+  seed: null
+  ckpt_path: null
   batch_size: 32
   max_epochs: 10000
   eval_freq: 8000000 # seconds

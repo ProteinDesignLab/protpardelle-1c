@@ -1,7 +1,7 @@
 # cc58 but allatom, do not apply mask after noise coords, relative
 train:
-  seed: 0
-  ckpt_path: ""
+  seed: null
+  ckpt_path: null
   batch_size: 32
   max_epochs: 10000
   eval_freq: 8000000 # seconds
