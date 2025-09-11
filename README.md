@@ -185,6 +185,7 @@ python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --m
 
 - MotifBench samples and results are at [Zenodo](https://zenodo.org/records/16651614). These were produced with the `03_motifbench` config.
 - RFdiffusion/La-Proteina motif scaffolding samples and results are at [Zenodo](https://zenodo.org/records/16887802). These were produced with the `07_rfdiffusion` and `08_rfdiffusion_allatom` configs.
+- BindCraft samples and results are at [Zenodo](https://zenodo.org/records/17096818). These were produced with the `04_bindcraft` config.
 
 ## Sampling Configs
 
