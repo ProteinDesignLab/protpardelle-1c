@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import logging
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -39,13 +38,13 @@ from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
     get_default_device,
+    get_logger,
     load_config,
     norm_path,
     unsqueeze_trailing_dims,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def fill_motif_seq(

@@ -4,7 +4,6 @@ Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
 """
 
 import argparse
-import logging
 import random
 import subprocess
 from contextlib import nullcontext
@@ -35,6 +34,7 @@ from protpardelle.data.dataset import (
 from protpardelle.utils import (
     StrPath,
     get_default_device,
+    get_logger,
     load_config,
     namespace_to_dict,
     norm_path,
@@ -42,14 +42,16 @@ from protpardelle.utils import (
     unsqueeze_trailing_dims,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def masked_cross_entropy_loss(
-    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor, tol: float = 1e-7
+    logprobs: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor,
+    tol: float = 1e-7,
 ) -> torch.Tensor:
     """Compute the masked cross-entropy loss.
 
@@ -466,7 +468,9 @@ class ProtpardelleTrainer:
             "codesign",
         ]:
             if self.config.model.task == "backbone":
-                struct_loss_mask = torch.ones_like(atom_coords) * bb_atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * bb_atom_mask.unsqueeze(-1)
             else:
                 if self.config.model.compute_loss_on_all_atoms:
                     # Compute loss on all 37 atoms
@@ -474,7 +478,9 @@ class ProtpardelleTrainer:
                         atom_coords
                     ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
                 else:
-                    struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(-1)
+                    struct_loss_mask = torch.ones_like(
+                        atom_coords
+                    ) * atom_mask.unsqueeze(-1)
             loss_weight = (noise_level**2 + self.module.sigma_data**2) / (
                 (noise_level * self.module.sigma_data) ** 2
             )

@@ -4,6 +4,7 @@ Authors: Alex Chu, Zhaoyang Li, Tianyu Lu
 """
 
 import argparse
+import logging
 import os
 import random
 from collections.abc import Callable
@@ -121,6 +122,32 @@ def get_default_device() -> torch.device:
         return torch.device("mps")
 
     return torch.device("cpu")
+
+
+def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+    """Get a logger with the specified name and level.
+
+    Args:
+        name (str): The name of the logger.
+        level (int, optional): The logging level. Defaults to logging.INFO (20).
+
+    Returns:
+        logging.Logger: The configured logger.
+    """
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    if not logger.hasHandlers():
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+    return logger
 
 
 def load_config(config_path: StrPath) -> argparse.Namespace:

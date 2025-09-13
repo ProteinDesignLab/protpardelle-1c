@@ -3,7 +3,6 @@
 Authors: Alex Chu, Tianyu Lu
 """
 
-import logging
 from collections import defaultdict
 from pathlib import Path
 
@@ -24,10 +23,9 @@ from protpardelle.env import (
     PROTPARDELLE_MODEL_PARAMS,
     PROTPARDELLE_OUTPUT_DIR,
 )
-from protpardelle.utils import seed_everything, unsqueeze_trailing_dims
+from protpardelle.utils import get_logger, seed_everything, unsqueeze_trailing_dims
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 

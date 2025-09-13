@@ -5,7 +5,6 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import copy
 import itertools
-import logging
 import math
 import shutil
 import subprocess
@@ -48,12 +47,12 @@ from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
     get_default_device,
+    get_logger,
     norm_path,
     seed_everything,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
