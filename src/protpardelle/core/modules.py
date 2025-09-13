@@ -17,31 +17,32 @@ from torch import broadcast_tensors, einsum
 from torch.amp import autocast
 from torchtyping import TensorType
 
-from protpardelle import utils
 from protpardelle.common import residue_constants
-from protpardelle.integrations import protein_mpnn
+from protpardelle.integrations.protein_mpnn import ProteinMPNN
+from protpardelle.utils import get_logger, unsqueeze_trailing_dims
 
-########################################
-# Adapted from https://github.com/ermongroup/ddim
-
-
-def downsample(x):
-    return F.avg_pool2d(x, 2, 2, ceil_mode=True)
-
-
-def upsample_coords(x, shape):
-    new_l, new_w = shape
-    return F.interpolate(x, size=(new_l, new_w), mode="nearest")
+logger = get_logger(__name__)
 
 
 ########################################
 # Adapted from https://github.com/aqlaboratory/openfold
 
 
-def permute_final_dims(tensor: torch.Tensor, inds: Sequence[int]):
-    zero_index = -1 * len(inds)
-    first_inds = list(range(len(tensor.shape[:zero_index])))
-    return tensor.contiguous().permute(first_inds + [zero_index + i for i in inds])
+def permute_final_dims(x: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
+    """Permute the final dimensions of a tensor.
+
+    Args:
+        x (torch.Tensor): The input tensor.
+        indices (Sequence[int]): The indices to permute the final dimensions.
+
+    Returns:
+        torch.Tensor: The permuted tensor.
+    """
+
+    zero_index = -1 * len(indices)
+    first_inds = list(range(len(x.shape[:zero_index])))
+
+    return x.contiguous().permute(first_inds + [zero_index + i for i in indices])
 
 
 def lddt(
@@ -52,6 +53,20 @@ def lddt(
     eps: float = 1e-10,
     per_residue: bool = True,
 ) -> torch.Tensor:
+    """Compute the LDDT score.
+
+    Args:
+        all_atom_pred_pos (torch.Tensor): Predicted atom positions.
+        all_atom_positions (torch.Tensor): True atom positions.
+        all_atom_mask (torch.Tensor): Mask for valid atoms.
+        cutoff (float, optional): Distance cutoff for considering pairs. Defaults to 15.0.
+        eps (float, optional): Small value to avoid division by zero. Defaults to 1e-10.
+        per_residue (bool, optional): Whether to compute the score per residue. Defaults to True.
+
+    Returns:
+        torch.Tensor: The computed LDDT score.
+    """
+
     n = all_atom_mask.shape[-2]
     dmat_true = torch.sqrt(
         eps
@@ -160,7 +175,20 @@ class RelativePositionalEncoding(nn.Module):
         self.cyclic = cyclic
 
     def forward(self, index: torch.Tensor) -> torch.Tensor:
+        """Compute relative positional encodings.
+
+        Args:
+            index (torch.Tensor): Absolute positions. (B, N)
+
+        Returns:
+            torch.Tensor: Relative positional encodings. (B, N, N, C)
+        """
+
         if self.relchain:
+            if self.cyclic:
+                logger.warning(
+                    "Cyclic relative positions are only supported for residues; will be ignored here."
+                )
             d_ij = (index.unsqueeze(-1) != index.unsqueeze(-2)).float()
         elif self.cyclic:
             d_ij = circular_relpos(index)
@@ -176,7 +204,16 @@ class RelativePositionalEncoding(nn.Module):
         return embeddings
 
 
-def rotate_half(x):
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate half the hidden dims of the input.
+
+    Args:
+        x (torch.Tensor): Input tensor where r=2. (..., D*R)
+
+    Returns:
+        torch.Tensor: Rotated tensor where r=2. (..., D*R)
+    """
+
     x = rearrange(x, "... (d r) -> ... d r", r=2)
     x1, x2 = x.unbind(dim=-1)
     x = torch.stack((-x2, x1), dim=-1)
@@ -187,10 +224,10 @@ def rotate_half(x):
 def apply_rotary_emb(
     freqs: TensorType["b n d"],
     t: TensorType["b h n d"],
-    start_index=0,
-    scale=1.0,
-    seq_dim=-2,
-):
+    start_index: int = 0,
+    scale: float = 1.0,
+    seq_dim: int = -2,
+) -> torch.Tensor:
     if t.ndim == 3:
         seq_len = t.shape[seq_dim]
         freqs = freqs[:, -seq_len:].to(t)
@@ -494,21 +531,43 @@ class RotaryEmbedding(nn.Module):
 # Adapted from https://github.com/NVlabs/edm
 
 
-class Noise_Embedding(nn.Module):
+class NoiseEmbedding(nn.Module):
+    """Noise embedding layer."""
+
     def __init__(
         self, num_channels: int, max_positions: int = 10000, endpoint: bool = False
     ) -> None:
+        """Noise embedding layer.
+
+        Args:
+            num_channels (int): Number of channels in the input.
+            max_positions (int, optional): Maximum number of positions. Defaults to 10000.
+            endpoint (bool, optional): Whether to include endpoint. Defaults to False.
+        """
+
         super().__init__()
+
         self.num_channels = num_channels
         self.max_positions = max_positions
         self.endpoint = endpoint
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass for noise embedding.
+
+        Args:
+            x (torch.Tensor): Input tensor. (B, N)
+
+        Returns:
+            torch.Tensor: Output tensor. (B, N, C)
+        """
+
+        device = x.device
         freqs = torch.arange(
-            start=0, end=self.num_channels // 2, dtype=torch.float, device=x.device
+            start=0, end=self.num_channels // 2, dtype=torch.float, device=device
         )
-        freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
+        freqs = freqs / (self.num_channels // 2 - self.endpoint)
         freqs = (1 / self.max_positions) ** freqs
+
         if len(x.shape) == 1:
             x = x.outer(freqs.to(x.dtype))
         else:
@@ -516,6 +575,7 @@ class Noise_Embedding(nn.Module):
             d = freqs.shape[0]
             x = x.flatten().outer(freqs.to(x.dtype)).view(b, l, d)
         x = torch.cat([x.cos(), x.sin()], dim=-1)
+
         return x
 
 
@@ -562,7 +622,7 @@ class NoiseConditioningBlock(nn.Module):
     def __init__(self, n_in_channel, n_out_channel):
         super().__init__()
         self.block = nn.Sequential(
-            Noise_Embedding(n_in_channel),
+            NoiseEmbedding(n_in_channel),
             nn.Linear(n_in_channel, n_out_channel),
             nn.SiLU(),
             nn.Linear(n_out_channel, n_out_channel),
@@ -604,9 +664,9 @@ class TimeCondResnetBlock(nn.Module):
         if time is not None:
             h = self.mid_norm(h)
             scale, shift = self.cond_proj(time).chunk(2, dim=-1)
-            h = (
-                h * (utils.unsqueeze_trailing_dims(scale, h) + 1)
-            ) + utils.unsqueeze_trailing_dims(shift, h)
+            h = (h * (unsqueeze_trailing_dims(scale, h) + 1)) + unsqueeze_trailing_dims(
+                shift, h
+            )
 
         if self.dropout is not None:
             h = self.dropout(h)
@@ -1174,13 +1234,13 @@ class TimeCondUViT(nn.Module):
             coords = F.pad(coords, (0, 0, 0, 0, 0, 1, 0, 0))
 
         x = rearr_coords = rearrange(coords, "b n a c -> b c n a")
-        hiddens = []
+        hidden_states = []
         for i, layer in enumerate(self.down_conv):
             for block in layer:
                 x = block(x, time=time_cond)
-                hiddens.append(x)
+                hidden_states.append(x)
             if i != self.n_conv_layers - 1:
-                x = downsample(x)
+                x = F.avg_pool2d(x, kernel_size=2, stride=2, ceil_mode=True)
 
         if self.conv_skip_connection:
             x = torch.cat([x, rearr_coords], 1)
@@ -1188,7 +1248,7 @@ class TimeCondUViT(nn.Module):
         x = self.to_patch_embedding(x)
 
         if seq_mask is not None and x.shape[1] == seq_mask.shape[1]:
-            x = x * utils.unsqueeze_trailing_dims(seq_mask, x)
+            x = x * unsqueeze_trailing_dims(seq_mask, x)
 
         attn_bias = None
         if pair_bias is not None:
@@ -1208,10 +1268,10 @@ class TimeCondUViT(nn.Module):
 
         for i, layer in enumerate(self.up_conv):
             for block in layer:
-                x = torch.cat([x, hiddens.pop()], 1)
+                x = torch.cat([x, hidden_states.pop()], 1)
                 x = block(x, time=time_cond)
             if i != self.n_conv_layers - 1:
-                x = upsample_coords(x, hiddens[-1].shape[2:])
+                x = F.interpolate(x, size=hidden_states[-1].shape[2:], mode="nearest")
 
         if self.n_conv_layers > 0:
             x = self.conv_out(x)
@@ -1278,7 +1338,7 @@ class NoiseConditionalProteinMPNN(nn.Module):
         ]
         self.ca_idxs_if_atom37 = [residue_constants.atom_order[a] for a in ["CA"]]
 
-        self.mpnn = protein_mpnn.ProteinMPNN(
+        self.mpnn = ProteinMPNN(
             num_letters=vocab_size,
             node_features=n_channel,
             edge_features=n_channel,
