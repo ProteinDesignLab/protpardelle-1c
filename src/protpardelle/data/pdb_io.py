@@ -13,7 +13,13 @@ from Bio.PDB import MMCIFParser, PDBParser
 from einops import rearrange
 
 from protpardelle.common import residue_constants
-from protpardelle.common.protein import Hetero, Protein, to_pdb
+from protpardelle.common.protein import (
+    PDB_CHAIN_IDS,
+    PDB_MAX_CHAINS,
+    Hetero,
+    Protein,
+    to_pdb,
+)
 from protpardelle.data.atom import atom37_mask_from_aatype
 from protpardelle.utils import StrPath, norm_path, tensor_to_ndarray
 
@@ -309,13 +315,20 @@ def _bb_pdb_line(
     resnum: int,
     coords: torch.Tensor,
     elem: str,
-    id_chain_mapping: dict[int, str] | None = None,
+    chain_id_mapping: dict[str, int] | None = None,
 ) -> str:
     """Format a single ATOM line for a PDB file."""
-    if id_chain_mapping is not None:
-        chain = id_chain_mapping.get(chain_idx, "A")
+
+    if chain_id_mapping is None:
+        if chain_idx < PDB_MAX_CHAINS:
+            chain = PDB_CHAIN_IDS[chain_idx]
+        else:
+            raise ValueError(
+                f"chain_idx {chain_idx} exceeds max PDB chains {PDB_MAX_CHAINS}."
+            )
     else:
-        chain = chr(ord("A") + chain_idx)
+        id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
+        chain = id_chain_mapping.get(chain_idx, "A")
 
     x, y, z = float(coords[0]), float(coords[1]), float(coords[2])
     occupancy = 1.0
@@ -349,11 +362,6 @@ def bb_coords_to_pdb_str(
     Returns:
         str: PDB string representation of the backbone coordinates.
     """
-
-    if chain_id_mapping is None:
-        id_chain_mapping = None
-    else:
-        id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
 
     L = bb_coords.shape[0]
     num_atoms = len(atoms)
@@ -395,7 +403,7 @@ def bb_coords_to_pdb_str(
                 resnum=resnum,
                 coords=bb_coords[i + j],
                 elem=atom[0],
-                id_chain_mapping=id_chain_mapping,
+                chain_id_mapping=chain_id_mapping,
             )
             pdb_str_list.append(pdb_line)
 
