@@ -193,10 +193,10 @@ class ProtpardelleTrainer:
         """
 
         checkpoint = {
-            "model_state_dict": self.module.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "scheduler_state_dict": self.scheduler.state_dict(),
-            "scaler_state_dict": self.scaler.state_dict(),
+            "model": self.module.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict(),
             "epoch": epoch,
             "total_steps": total_steps,
             "pytorch_version": torch.__version__,
@@ -213,18 +213,7 @@ class ProtpardelleTrainer:
         checkpoint_dir = norm_path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        torch.save(
-            {
-                "model_state_dict": self.module.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "scaler_state_dict": self.scaler.state_dict(),
-                "epoch": epoch,
-                "total_steps": total_steps,
-                "pytorch_version": torch.__version__,
-            },
-            checkpoint_dir / f"epoch{epoch}_training_state.pth",
-        )
+        torch.save(checkpoint, checkpoint_dir / f"epoch{epoch}_training_state.pth")
 
     def load_checkpoint(
         self,
@@ -471,16 +460,15 @@ class ProtpardelleTrainer:
                 struct_loss_mask = torch.ones_like(
                     atom_coords
                 ) * bb_atom_mask.unsqueeze(-1)
+            elif self.config.model.compute_loss_on_all_atoms:
+                # Compute loss on all 37 atoms
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
             else:
-                if self.config.model.compute_loss_on_all_atoms:
-                    # Compute loss on all 37 atoms
-                    struct_loss_mask = torch.ones_like(
-                        atom_coords
-                    ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
-                else:
-                    struct_loss_mask = torch.ones_like(
-                        atom_coords
-                    ) * atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(
+                    -1
+                )
             loss_weight = (noise_level**2 + self.module.sigma_data**2) / (
                 (noise_level * self.module.sigma_data) ** 2
             )
