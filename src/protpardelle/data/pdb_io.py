@@ -251,11 +251,11 @@ def feats_to_pdb_str(
 
     Args:
         atom_coords (torch.Tensor): Atom coordinates. (L, 37, 3)
-        aatype (torch.Tensor | None, optional): Amino acid types. Defaults to None.
-        atom_mask (torch.Tensor | None, optional): Atom mask. Defaults to None.
-        residue_index (torch.Tensor | None, optional): Residue index. Defaults to None.
-        chain_index (torch.Tensor | None, optional): Chain index. Defaults to None.
-        b_factors (torch.Tensor | None, optional): B-factors. Defaults to None.
+        aatype (torch.Tensor | None, optional): Amino acid types. Defaults to None. (L,)
+        atom_mask (torch.Tensor | None, optional): Atom mask. Defaults to None. (L, 37)
+        residue_index (torch.Tensor | None, optional): Residue index. Defaults to None. (L,)
+        chain_index (torch.Tensor | None, optional): Chain index. Defaults to None. (L,)
+        b_factors (torch.Tensor | None, optional): B-factors. Defaults to None. (L, 37)
         chain_id_mapping (dict[str, int] | None, optional): Chain ID mapping. Defaults to None.
         atom_lines_only (bool, optional): If True, only include atom lines. Defaults to True.
 
