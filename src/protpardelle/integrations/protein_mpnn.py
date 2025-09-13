@@ -46,7 +46,6 @@ from torch.types import Device
 from protpardelle.common import residue_constants
 from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
 from protpardelle.env import PROJECT_ROOT_DIR
-from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import StrPath, get_default_device, seed_everything
 
 
@@ -82,8 +81,6 @@ def get_mpnn_model(
     model.eval()
 
     if verbose:
-        print(40 * "-")
-        print("Model loaded...")
         print("Number of edges:", checkpoint["num_edges"])
         print(f"Training noise level: {noise_level_print}A")
 

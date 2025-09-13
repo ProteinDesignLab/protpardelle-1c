@@ -19,8 +19,8 @@ import protpardelle.data.pdb_io
 from protpardelle.common import residue_constants
 from protpardelle.data.align import kabsch_align, tm_score
 from protpardelle.env import PROTEINMPNN_WEIGHTS
-from protpardelle.integrations import protein_mpnn
 from protpardelle.integrations.esmfold import predict_structures
+from protpardelle.integrations.protein_mpnn import get_mpnn_model, run_proteinmpnn
 
 
 def design_sequence(
@@ -35,7 +35,7 @@ def design_sequence(
 ):
     # Returns list of strs; seqs like 'MKRLLDS', not aatypes
     if model is None:
-        model = protein_mpnn.get_mpnn_model(PROTEINMPNN_WEIGHTS)
+        model = get_mpnn_model(PROTEINMPNN_WEIGHTS)
     if isinstance(coords, str):
         using_tmp_dir = False
         pdb_fn = coords
@@ -66,7 +66,7 @@ def design_sequence(
         fixed_pos_jsonl = make_fixed_pos_jsonl(chain_index, fixed_pos_mask, pdb_fn)
 
     with torch.no_grad():
-        designed_seqs = protein_mpnn.run_proteinmpnn(
+        designed_seqs = run_proteinmpnn(
             model=model,
             pdb_path=pdb_fn,
             num_seq_per_target=num_seqs,

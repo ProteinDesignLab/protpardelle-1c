@@ -33,7 +33,7 @@ from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import seq_to_aatype_batched
 from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.evaluate import design_sequence
-from protpardelle.integrations import protein_mpnn
+from protpardelle.integrations.protein_mpnn import get_mpnn_model
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
@@ -1116,7 +1116,7 @@ class Protpardelle(nn.Module):
 
         # Initialize masks/features
         if use_fullmpnn or use_fullmpnn_for_final:
-            fullmpnn_model = protein_mpnn.get_mpnn_model(
+            fullmpnn_model = get_mpnn_model(
                 PROTEINMPNN_WEIGHTS, device=self.device
             )
 
@@ -1135,7 +1135,7 @@ class Protpardelle(nn.Module):
 
         coords_shape = seq_mask.shape + (self.n_atoms, 3)
         if xt_start is not None:
-            print(f"Using supplied xt to start diffusion")
+            print("Using supplied xt to start diffusion")
             xt = xt_start
         elif partial_diffusion is not None and pd.enabled:
             pd_step = n_steps - pd.n_steps

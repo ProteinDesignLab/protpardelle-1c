@@ -42,7 +42,7 @@ from protpardelle.env import (
     PROTPARDELLE_OUTPUT_DIR,
 )
 from protpardelle.evaluate import compute_self_consistency
-from protpardelle.integrations import protein_mpnn
+from protpardelle.integrations.protein_mpnn import get_mpnn_model
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
@@ -68,7 +68,7 @@ class ProtpardelleSampler:
         self.device = device
         self.num_mpnn_seqs = num_mpnn_seqs
         if self.num_mpnn_seqs > 0:
-            self.mpnn_model = protein_mpnn.get_mpnn_model(
+            self.mpnn_model = get_mpnn_model(
                 PROTEINMPNN_WEIGHTS,
                 device=self.device,
             )
@@ -368,7 +368,7 @@ def generate(
 ):
     device = get_default_device()
     if num_mpnn_seqs > 0:
-        mpnn_model = protein_mpnn.get_mpnn_model(
+        mpnn_model = get_mpnn_model(
             PROTEINMPNN_WEIGHTS,
             device=device,
         )
