@@ -3,118 +3,17 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
-import json
-import shutil
-import uuid
 from collections import defaultdict
-from pathlib import Path
 from typing import Literal
 
 import numpy as np
 import torch
-from torchtyping import TensorType
 
 import protpardelle.core.modules as modules
-import protpardelle.data.pdb_io
 from protpardelle.common import residue_constants
 from protpardelle.data.align import kabsch_align, tm_score
-from protpardelle.env import PROTEINMPNN_WEIGHTS
 from protpardelle.integrations.esmfold import predict_structures
-from protpardelle.integrations.protein_mpnn import get_mpnn_model, run_proteinmpnn
-
-
-def design_sequence(
-    coords,
-    model=None,
-    num_seqs=1,
-    disallow_aas=["C"],
-    tmp_prefix: str = "",
-    chain_index: TensorType["n"] | None = None,
-    input_aatype: TensorType["n"] | None = None,
-    fixed_pos_mask: TensorType["n"] | None = None,
-):
-    # Returns list of strs; seqs like 'MKRLLDS', not aatypes
-    if model is None:
-        model = get_mpnn_model(PROTEINMPNN_WEIGHTS)
-    if isinstance(coords, str):
-        using_tmp_dir = False
-        pdb_fn = coords
-        fixed_pos_jsonl = None
-    else:
-        # Create a temporary directory for storing pdb file + fixed positions jsonl for ProteinMPNN design
-        unique_id = uuid.uuid4().hex  # unique ID for temp processing dir
-        tmp_dir = f"tmp-{unique_id}"
-        using_tmp_dir = True
-        Path(tmp_dir).mkdir(parents=True, exist_ok=True)
-
-        pdb_fn = f"{tmp_dir}/{tmp_prefix}_tmp.pdb"
-
-        if input_aatype is None:
-            # default to all glycine sequence
-            gly_idx = residue_constants.restype_order["G"]
-            input_aatype = (torch.ones(coords.shape[0]) * gly_idx).long()
-
-        if fixed_pos_mask is None:
-            # design on all positions
-            fixed_pos_mask = torch.zeros_like(input_aatype)
-
-        protpardelle.data.pdb_io.write_coords_to_pdb(
-            coords, pdb_fn, aatype=input_aatype, chain_index=chain_index
-        )
-
-        # make fixed pos jsonl
-        fixed_pos_jsonl = make_fixed_pos_jsonl(chain_index, fixed_pos_mask, pdb_fn)
-
-    with torch.no_grad():
-        designed_seqs = run_proteinmpnn(
-            model=model,
-            pdb_path=pdb_fn,
-            num_seq_per_target=num_seqs,
-            omit_AAs=disallow_aas,
-            fixed_positions_jsonl=fixed_pos_jsonl,
-        )
-
-    if using_tmp_dir:
-        shutil.rmtree(tmp_dir)
-    return designed_seqs
-
-
-def make_fixed_pos_jsonl(
-    chain_index: TensorType["n"], fixed_pos_mask: TensorType["n"], pdb_fn: str
-) -> str:
-    """
-    Create a temporary jsonl file for fixed positions.
-    Maps pdb filename to fixed positions (assuming chain index starts from chain A).
-    ProteinMPNN expects 1-indexed indices into the sequence (not PDB residue indices).
-
-    e.g.
-        {"5TTA": {"A": [1, 2, 3, 7, 8, 9, 22, 25, 33], "B": []}, "3LIS": {"A": [], "B": []}}
-
-    Args:
-    - chain_index: (n,) tensor of 0-indexed chain indices for each residue
-    - fixed_pos_mask: (n,) tensor of 0/1 for positions to fix, 1 for positions to fix, 0 for positions to redesign
-    - pdb_fn: input pdb file
-    """
-    if fixed_pos_mask.sum() == 0:
-        # skip if no fixed positions
-        return ""
-
-    fixed_pos_dict_i = {}
-    for i in chain_index.long().unique():
-        chain_mask = chain_index == i
-        chain_fixed_pos_indices = (
-            torch.nonzero(fixed_pos_mask[chain_mask], as_tuple=True)[0] + 1
-        )  # 1-indexed indices
-        chain_letter = chr(ord("A") + i.item())
-        fixed_pos_dict_i[chain_letter] = chain_fixed_pos_indices.tolist()
-
-    pdb_name = Path(pdb_fn).stem
-    fixed_pos_dict = {pdb_name: fixed_pos_dict_i}
-    fixed_pos_jsonl = pdb_fn.replace(".pdb", "-fixed_pos.jsonl")
-    with open(fixed_pos_jsonl, "w") as f:
-        json.dump(fixed_pos_dict, f)
-
-    return fixed_pos_jsonl
+from protpardelle.integrations.protein_mpnn import design_sequence
 
 
 def compute_structure_metric(

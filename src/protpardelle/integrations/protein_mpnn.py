@@ -32,9 +32,12 @@ import copy
 import itertools
 import json
 import os
+import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
@@ -42,16 +45,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange
 from torch.types import Device
+from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
-from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
-from protpardelle.env import PROJECT_ROOT_DIR
+from protpardelle.common.protein import PDB_CHAIN_IDS, PDB_MAX_CHAINS
+from protpardelle.data.pdb_io import write_coords_to_pdb
+from protpardelle.env import PROJECT_ROOT_DIR, PROTEINMPNN_WEIGHTS
 from protpardelle.utils import StrPath, get_default_device, seed_everything
 
 
 def get_mpnn_model(
     mpnn_weights_dir: StrPath,
-    model_name: str = "v_48_020",
+    model_name: Literal["v_48_002", "v_48_010", "v_48_020", "v_48_030"] = "v_48_020",
     ca_only: bool = False,
     backbone_noise: float = 0.0,
     verbose: bool = False,
@@ -135,7 +140,6 @@ def run_proteinmpnn(
     temperatures = sampling_temps
     omit_AAs_list = omit_AAs
     alphabet = "ACDEFGHIKLMNPQRSTVWYX"
-    alphabet_dict = dict(zip(alphabet, range(21)))
     omit_AAs_np = np.array([AA in omit_AAs_list for AA in alphabet]).astype(np.float32)
     device = get_default_device()
     if os.path.isfile(chain_id_jsonl):
@@ -266,14 +270,13 @@ def run_proteinmpnn(
     # Validation epoch
     new_mpnn_seqs = []
     with torch.no_grad():
-        test_sum, test_weights = 0.0, 0.0
-        for ix, protein in enumerate(dataset_valid):
+        for protein in dataset_valid:
             score_list = []
             global_score_list = []
             all_probs_list = []
             all_log_probs_list = []
             S_sample_list = []
-            batch_clones = [copy.deepcopy(protein) for i in range(BATCH_COPIES)]
+            batch_clones = [copy.deepcopy(protein) for _ in range(BATCH_COPIES)]
             (
                 X,
                 S,
@@ -310,222 +313,131 @@ def run_proteinmpnn(
                 pssm_log_odds_all > pssm_threshold
             ).float()  # 1.0 for true, 0.0 for false
             name_ = batch_clones[0]["name"]
-            if False:
-                pass
-            else:
-                randn_1 = torch.randn(chain_M.shape, device=X.device)
-                log_probs = model(
-                    X,
-                    S,
-                    mask,
-                    chain_M * chain_M_pos,
-                    residue_idx,
-                    chain_encoding_all,
-                    randn_1,
-                )
-                mask_for_loss = mask * chain_M * chain_M_pos
-                scores = _scores(
-                    S, log_probs, mask_for_loss
-                )  # score only the redesigned part
-                native_score = scores.cpu().data.numpy()
-                global_scores = _scores(
-                    S, log_probs, mask
-                )  # score the whole structure-sequence
-                global_native_score = global_scores.cpu().data.numpy()
-                # Generate some sequences
-                if write_output_files:
-                    ali_file = base_folder + "/seqs/" + batch_clones[0]["name"] + ".fa"
-                    score_file = (
-                        base_folder + "/scores/" + batch_clones[0]["name"] + ".npz"
-                    )
-                    probs_file = (
-                        base_folder + "/probs/" + batch_clones[0]["name"] + ".npz"
-                    )
-                    f = open(ali_file, "w")
-                if print_all:
-                    print(f"Generating sequences for: {name_}")
-                t0 = time.time()
-                for temp in temperatures:
-                    for j in range(NUM_BATCHES):
-                        randn_2 = torch.randn(chain_M.shape, device=X.device)
-                        if tied_positions_dict == None:
-                            sample_dict = model.sample(
-                                X,
-                                randn_2,
-                                S,
-                                chain_M,
-                                chain_encoding_all,
-                                residue_idx,
-                                mask=mask,
-                                temperature=temp,
-                                omit_AAs_np=omit_AAs_np,
-                                bias_AAs_np=bias_AAs_np,
-                                chain_M_pos=chain_M_pos,
-                                omit_AA_mask=omit_AA_mask,
-                                pssm_coef=pssm_coef,
-                                pssm_bias=pssm_bias,
-                                pssm_multi=pssm_multi,
-                                pssm_log_odds_flag=bool(pssm_log_odds_flag),
-                                pssm_log_odds_mask=pssm_log_odds_mask,
-                                pssm_bias_flag=bool(pssm_bias_flag),
-                                bias_by_res=bias_by_res_all,
-                            )
-                            S_sample = sample_dict["S"]
-                        else:
-                            sample_dict = model.tied_sample(
-                                X,
-                                randn_2,
-                                S,
-                                chain_M,
-                                chain_encoding_all,
-                                residue_idx,
-                                mask=mask,
-                                temperature=temp,
-                                omit_AAs_np=omit_AAs_np,
-                                bias_AAs_np=bias_AAs_np,
-                                chain_M_pos=chain_M_pos,
-                                omit_AA_mask=omit_AA_mask,
-                                pssm_coef=pssm_coef,
-                                pssm_bias=pssm_bias,
-                                pssm_multi=pssm_multi,
-                                pssm_log_odds_flag=bool(pssm_log_odds_flag),
-                                pssm_log_odds_mask=pssm_log_odds_mask,
-                                pssm_bias_flag=bool(pssm_bias_flag),
-                                tied_pos=tied_pos_list_of_lists_list[0],
-                                tied_beta=tied_beta,
-                                bias_by_res=bias_by_res_all,
-                            )
-                            # Compute scores
-                            S_sample = sample_dict["S"]
-                        log_probs = model(
+            randn_1 = torch.randn(chain_M.shape, device=X.device)
+            log_probs = model(
+                X,
+                S,
+                mask,
+                chain_M * chain_M_pos,
+                residue_idx,
+                chain_encoding_all,
+                randn_1,
+            )
+            mask_for_loss = mask * chain_M * chain_M_pos
+            scores = _scores(
+                S, log_probs, mask_for_loss
+            )  # score only the redesigned part
+            native_score = scores.cpu().data.numpy()
+            global_scores = _scores(
+                S, log_probs, mask
+            )  # score the whole structure-sequence
+            global_native_score = global_scores.cpu().data.numpy()
+            # Generate some sequences
+            if write_output_files:
+                ali_file = base_folder + "/seqs/" + batch_clones[0]["name"] + ".fa"
+                f = open(ali_file, "w")
+            if print_all:
+                print(f"Generating sequences for: {name_}")
+            t0 = time.time()
+            for temp in temperatures:
+                for j in range(NUM_BATCHES):
+                    randn_2 = torch.randn(chain_M.shape, device=X.device)
+                    if tied_positions_dict is None:
+                        sample_dict = model.sample(
                             X,
-                            S_sample,
-                            mask,
-                            chain_M * chain_M_pos,
-                            residue_idx,
-                            chain_encoding_all,
                             randn_2,
-                            use_input_decoding_order=True,
-                            decoding_order=sample_dict["decoding_order"],
+                            S,
+                            chain_M,
+                            chain_encoding_all,
+                            residue_idx,
+                            mask=mask,
+                            temperature=temp,
+                            omit_AAs_np=omit_AAs_np,
+                            bias_AAs_np=bias_AAs_np,
+                            chain_M_pos=chain_M_pos,
+                            omit_AA_mask=omit_AA_mask,
+                            pssm_coef=pssm_coef,
+                            pssm_bias=pssm_bias,
+                            pssm_multi=pssm_multi,
+                            pssm_log_odds_flag=bool(pssm_log_odds_flag),
+                            pssm_log_odds_mask=pssm_log_odds_mask,
+                            pssm_bias_flag=bool(pssm_bias_flag),
+                            bias_by_res=bias_by_res_all,
                         )
-                        mask_for_loss = mask * chain_M * chain_M_pos
-                        scores = _scores(S_sample, log_probs, mask_for_loss)
-                        scores = scores.cpu().data.numpy()
+                    else:
+                        sample_dict = model.tied_sample(
+                            X,
+                            randn_2,
+                            S,
+                            chain_M,
+                            chain_encoding_all,
+                            residue_idx,
+                            mask=mask,
+                            temperature=temp,
+                            omit_AAs_np=omit_AAs_np,
+                            bias_AAs_np=bias_AAs_np,
+                            chain_M_pos=chain_M_pos,
+                            omit_AA_mask=omit_AA_mask,
+                            pssm_coef=pssm_coef,
+                            pssm_bias=pssm_bias,
+                            pssm_multi=pssm_multi,
+                            pssm_log_odds_flag=bool(pssm_log_odds_flag),
+                            pssm_log_odds_mask=pssm_log_odds_mask,
+                            pssm_bias_flag=bool(pssm_bias_flag),
+                            tied_pos=tied_pos_list_of_lists_list[0],
+                            tied_beta=tied_beta,
+                            bias_by_res=bias_by_res_all,
+                        )
+                    S_sample = sample_dict["S"]
+                    log_probs = model(
+                        X,
+                        S_sample,
+                        mask,
+                        chain_M * chain_M_pos,
+                        residue_idx,
+                        chain_encoding_all,
+                        randn_2,
+                        use_input_decoding_order=True,
+                        decoding_order=sample_dict["decoding_order"],
+                    )
+                    mask_for_loss = mask * chain_M * chain_M_pos
+                    scores = _scores(S_sample, log_probs, mask_for_loss)
+                    scores = scores.cpu().data.numpy()
 
-                        global_scores = _scores(
-                            S_sample, log_probs, mask
-                        )  # score the whole structure-sequence
-                        global_scores = global_scores.cpu().data.numpy()
+                    global_scores = _scores(
+                        S_sample, log_probs, mask
+                    )  # score the whole structure-sequence
+                    global_scores = global_scores.cpu().data.numpy()
 
-                        all_probs_list.append(sample_dict["probs"].cpu().data.numpy())
-                        all_log_probs_list.append(log_probs.cpu().data.numpy())
-                        S_sample_list.append(S_sample.cpu().data.numpy())
-                        for b_ix in range(BATCH_COPIES):
-                            masked_chain_length_list = masked_chain_length_list_list[
-                                b_ix
-                            ]
-                            masked_list = masked_list_list[b_ix]
-                            seq_recovery_rate = torch.sum(
-                                torch.sum(
-                                    F.one_hot(S[b_ix], 21)
-                                    * F.one_hot(S_sample[b_ix], 21),
-                                    axis=-1,
-                                )
-                                * mask_for_loss[b_ix]
-                            ) / torch.sum(mask_for_loss[b_ix])
-                            seq = _S_to_seq(S_sample[b_ix], chain_M[b_ix])
-                            new_mpnn_seqs.append(seq)
-                            score = scores[b_ix]
-                            score_list.append(score)
-                            global_score = global_scores[b_ix]
-                            global_score_list.append(global_score)
-                            native_seq = _S_to_seq(S[b_ix], chain_M[b_ix])
-                            if b_ix == 0 and j == 0 and temp == temperatures[0]:
-                                start = 0
-                                end = 0
-                                list_of_AAs = []
-                                for mask_l in masked_chain_length_list:
-                                    end += mask_l
-                                    list_of_AAs.append(native_seq[start:end])
-                                    start = end
-                                native_seq = "".join(
-                                    list(np.array(list_of_AAs)[np.argsort(masked_list)])
-                                )
-                                l0 = 0
-                                for mc_length in list(
-                                    np.array(masked_chain_length_list)[
-                                        np.argsort(masked_list)
-                                    ]
-                                )[:-1]:
-                                    l0 += mc_length
-                                    native_seq = native_seq[:l0] + "/" + native_seq[l0:]
-                                    l0 += 1
-                                sorted_masked_chain_letters = np.argsort(
-                                    masked_list_list[0]
-                                )
-                                print_masked_chains = [
-                                    masked_list_list[0][i]
-                                    for i in sorted_masked_chain_letters
-                                ]
-                                sorted_visible_chain_letters = np.argsort(
-                                    visible_list_list[0]
-                                )
-                                print_visible_chains = [
-                                    visible_list_list[0][i]
-                                    for i in sorted_visible_chain_letters
-                                ]
-                                native_score_print = np.format_float_positional(
-                                    np.float32(native_score.mean()),
-                                    unique=False,
-                                    precision=4,
-                                )
-                                global_native_score_print = np.format_float_positional(
-                                    np.float32(global_native_score.mean()),
-                                    unique=False,
-                                    precision=4,
-                                )
-                                try:
-                                    commit_str = subprocess.check_output(
-                                        [
-                                            "git",
-                                            "-C",
-                                            str(PROJECT_ROOT_DIR),
-                                            "rev-parse",
-                                            "HEAD",
-                                        ],
-                                        stderr=subprocess.DEVNULL,
-                                        text=True,
-                                    ).strip()
-                                except subprocess.CalledProcessError:
-                                    commit_str = "unknown"
-                                if ca_only:
-                                    print_model_name = "CA_model_name"
-                                else:
-                                    print_model_name = "model_name"
-                                if write_output_files:
-                                    f.write(
-                                        ">{}, score={}, global_score={}, fixed_chains={}, designed_chains={}, {}={}, git_hash={}, seed={}\n{}\n".format(
-                                            name_,
-                                            native_score_print,
-                                            global_native_score_print,
-                                            print_visible_chains,
-                                            print_masked_chains,
-                                            print_model_name,
-                                            model_name,
-                                            commit_str,
-                                            seed,
-                                            native_seq,
-                                        )
-                                    )  # write the native sequence
+                    all_probs_list.append(sample_dict["probs"].cpu().data.numpy())
+                    all_log_probs_list.append(log_probs.cpu().data.numpy())
+                    S_sample_list.append(S_sample.cpu().data.numpy())
+                    for b_ix in range(BATCH_COPIES):
+                        masked_chain_length_list = masked_chain_length_list_list[b_ix]
+                        masked_list = masked_list_list[b_ix]
+                        seq_recovery_rate = torch.sum(
+                            torch.sum(
+                                F.one_hot(S[b_ix], 21) * F.one_hot(S_sample[b_ix], 21),
+                                axis=-1,
+                            )
+                            * mask_for_loss[b_ix]
+                        ) / torch.sum(mask_for_loss[b_ix])
+                        seq = _S_to_seq(S_sample[b_ix], chain_M[b_ix])
+                        new_mpnn_seqs.append(seq)
+                        score = scores[b_ix]
+                        score_list.append(score)
+                        global_score = global_scores[b_ix]
+                        global_score_list.append(global_score)
+                        native_seq = _S_to_seq(S[b_ix], chain_M[b_ix])
+                        if b_ix == 0 and j == 0 and temp == temperatures[0]:
                             start = 0
                             end = 0
                             list_of_AAs = []
                             for mask_l in masked_chain_length_list:
                                 end += mask_l
-                                list_of_AAs.append(seq[start:end])
+                                list_of_AAs.append(native_seq[start:end])
                                 start = end
-
-                            seq = "".join(
+                            native_seq = "".join(
                                 list(np.array(list_of_AAs)[np.argsort(masked_list)])
                             )
                             l0 = 0
@@ -535,44 +447,199 @@ def run_proteinmpnn(
                                 ]
                             )[:-1]:
                                 l0 += mc_length
-                                seq = seq[:l0] + "/" + seq[l0:]
+                                native_seq = native_seq[:l0] + "/" + native_seq[l0:]
                                 l0 += 1
-                            score_print = np.format_float_positional(
-                                np.float32(score), unique=False, precision=4
+                            sorted_masked_chain_letters = np.argsort(
+                                masked_list_list[0]
                             )
-                            global_score_print = np.format_float_positional(
-                                np.float32(global_score), unique=False, precision=4
+                            print_masked_chains = [
+                                masked_list_list[0][i]
+                                for i in sorted_masked_chain_letters
+                            ]
+                            sorted_visible_chain_letters = np.argsort(
+                                visible_list_list[0]
                             )
-                            seq_rec_print = np.format_float_positional(
-                                np.float32(seq_recovery_rate.detach().cpu().numpy()),
+                            print_visible_chains = [
+                                visible_list_list[0][i]
+                                for i in sorted_visible_chain_letters
+                            ]
+                            native_score_print = np.format_float_positional(
+                                np.float32(native_score.mean()),
                                 unique=False,
                                 precision=4,
                             )
-                            sample_number = j * BATCH_COPIES + b_ix + 1
+                            global_native_score_print = np.format_float_positional(
+                                np.float32(global_native_score.mean()),
+                                unique=False,
+                                precision=4,
+                            )
+                            try:
+                                commit_str = subprocess.check_output(
+                                    [
+                                        "git",
+                                        "-C",
+                                        str(PROJECT_ROOT_DIR),
+                                        "rev-parse",
+                                        "HEAD",
+                                    ],
+                                    stderr=subprocess.DEVNULL,
+                                    text=True,
+                                ).strip()
+                            except subprocess.CalledProcessError:
+                                commit_str = "unknown"
+                            print_model_name = (
+                                "CA_model_name" if ca_only else "model_name"
+                            )
                             if write_output_files:
                                 f.write(
-                                    ">T={}, sample={}, score={}, global_score={}, seq_recovery={}\n{}\n".format(
-                                        temp,
-                                        sample_number,
-                                        score_print,
-                                        global_score_print,
-                                        seq_rec_print,
-                                        seq,
-                                    )
-                                )  # write generated sequence
+                                    f">{name_}, score={native_score_print}, global_score={global_native_score_print}, fixed_chains={print_visible_chains}, designed_chains={print_masked_chains}, {print_model_name}={model_name}, git_hash={commit_str}, seed={seed}\n{native_seq}\n"
+                                )
+                        start = 0
+                        end = 0
+                        list_of_AAs = []
+                        for mask_l in masked_chain_length_list:
+                            end += mask_l
+                            list_of_AAs.append(seq[start:end])
+                            start = end
 
-                t1 = time.time()
-                dt = round(float(t1 - t0), 4)
-                num_seqs = len(temperatures) * NUM_BATCHES * BATCH_COPIES
-                total_length = X.shape[1]
-                if print_all:
-                    print(
-                        f"{num_seqs} sequences of length {total_length} generated in {dt} seconds"
-                    )
-                if write_output_files:
-                    f.close()
+                        seq = "".join(
+                            list(np.array(list_of_AAs)[np.argsort(masked_list)])
+                        )
+                        l0 = 0
+                        for mc_length in list(
+                            np.array(masked_chain_length_list)[np.argsort(masked_list)]
+                        )[:-1]:
+                            l0 += mc_length
+                            seq = seq[:l0] + "/" + seq[l0:]
+                            l0 += 1
+                        score_print = np.format_float_positional(
+                            np.float32(score), unique=False, precision=4
+                        )
+                        global_score_print = np.format_float_positional(
+                            np.float32(global_score), unique=False, precision=4
+                        )
+                        seq_rec_print = np.format_float_positional(
+                            np.float32(seq_recovery_rate.detach().cpu().numpy()),
+                            unique=False,
+                            precision=4,
+                        )
+                        sample_number = j * BATCH_COPIES + b_ix + 1
+                        if write_output_files:
+                            f.write(
+                                f">T={temp}, sample={sample_number}, score={score_print}, global_score={global_score_print}, seq_recovery={seq_rec_print}\n{seq}\n"
+                            )
+
+            t1 = time.time()
+            dt = round(float(t1 - t0), 4)
+            num_seqs = len(temperatures) * NUM_BATCHES * BATCH_COPIES
+            total_length = X.shape[1]
+            if print_all:
+                print(
+                    f"{num_seqs} sequences of length {total_length} generated in {dt} seconds"
+                )
+            if write_output_files:
+                f.close()
 
     return new_mpnn_seqs
+
+
+def make_fixed_pos_jsonl(
+    chain_index: TensorType["n"], fixed_pos_mask: TensorType["n"], pdb_fn: str
+) -> str:
+    """Create a temporary jsonl file for fixed positions.
+
+    Maps pdb filename to fixed positions (assuming chain index starts from chain A).
+    ProteinMPNN expects 1-indexed indices into the sequence (not PDB residue indices).
+
+    e.g.
+        {"5TTA": {"A": [1, 2, 3, 7, 8, 9, 22, 25, 33], "B": []}, "3LIS": {"A": [], "B": []}}
+
+    Args:
+    - chain_index: (n,) tensor of 0-indexed chain indices for each residue
+    - fixed_pos_mask: (n,) tensor of 0/1 for positions to fix, 1 for positions to fix, 0 for positions to redesign
+    - pdb_fn: input pdb file
+    """
+
+    if fixed_pos_mask.sum() == 0:
+        # skip if no fixed positions
+        return ""
+
+    fixed_pos_dict_i = {}
+    for i in chain_index.long().unique():
+        chain_mask = chain_index == i
+        chain_fixed_pos_indices = (
+            torch.nonzero(fixed_pos_mask[chain_mask], as_tuple=True)[0] + 1
+        )  # 1-indexed indices
+        chain_letter = chr(ord("A") + i.item())
+        fixed_pos_dict_i[chain_letter] = chain_fixed_pos_indices.tolist()
+
+    pdb_name = Path(pdb_fn).stem
+    fixed_pos_dict = {pdb_name: fixed_pos_dict_i}
+    fixed_pos_jsonl = pdb_fn.replace(".pdb", "-fixed_pos.jsonl")
+    with open(fixed_pos_jsonl, "w") as f:
+        json.dump(fixed_pos_dict, f)
+
+    return fixed_pos_jsonl
+
+
+def design_sequence(
+    coords,
+    model=None,
+    num_seqs=1,
+    disallow_aas=["C"],
+    tmp_prefix: str = "",
+    chain_index: TensorType["n"] | None = None,
+    input_aatype: TensorType["n"] | None = None,
+    fixed_pos_mask: TensorType["n"] | None = None,
+):
+    # Returns list of strs; seqs like 'MKRLLDS', not aatypes
+    if model is None:
+        model = get_mpnn_model(PROTEINMPNN_WEIGHTS)
+    if isinstance(coords, str):
+        using_tmp_dir = False
+        pdb_fn = coords
+        fixed_pos_jsonl = None
+    else:
+        # Create a temporary directory for storing pdb file + fixed positions jsonl for ProteinMPNN design
+        unique_id = uuid.uuid4().hex  # unique ID for temp processing dir
+        tmp_dir = f"tmp-{unique_id}"
+        using_tmp_dir = True
+        Path(tmp_dir).mkdir(parents=True, exist_ok=True)
+
+        pdb_fn = f"{tmp_dir}/{tmp_prefix}_tmp.pdb"
+
+        if input_aatype is None:
+            # default to all glycine sequence
+            gly_idx = residue_constants.restype_order["G"]
+            input_aatype = (torch.ones(coords.shape[0]) * gly_idx).long()
+
+        if fixed_pos_mask is None:
+            # design on all positions
+            fixed_pos_mask = torch.zeros_like(input_aatype)
+
+        write_coords_to_pdb(
+            coords, pdb_fn, aatype=input_aatype, chain_index=chain_index
+        )
+
+        # make fixed pos jsonl
+        fixed_pos_jsonl = make_fixed_pos_jsonl(chain_index, fixed_pos_mask, pdb_fn)
+
+    with torch.no_grad():
+        designed_seqs = run_proteinmpnn(
+            model=model,
+            pdb_path=pdb_fn,
+            num_seq_per_target=num_seqs,
+            omit_AAs=disallow_aas,
+            fixed_positions_jsonl=fixed_pos_jsonl,
+        )
+
+    if using_tmp_dir:
+        shutil.rmtree(tmp_dir)
+    return designed_seqs
+
+
+########################################
+# Adapted from https://github.com/dauparas/ProteinMPNN/blob/main/protein_mpnn_utils.py
 
 
 def parse_fasta(filename, limit=-1, omit=[]):
@@ -621,7 +688,6 @@ def parse_PDB_biounits(x, atoms=["N", "CA", "C"], chain=None):
     """
 
     alpha_1 = list("ARNDCQEGHILKMFPSTWYV-")
-    states = len(alpha_1)
     alpha_3 = [
         "ALA",
         "ARG",
@@ -646,18 +712,8 @@ def parse_PDB_biounits(x, atoms=["N", "CA", "C"], chain=None):
         "GAP",
     ]
 
-    aa_1_N = {a: n for n, a in enumerate(alpha_1)}
     aa_3_N = {a: n for n, a in enumerate(alpha_3)}
-    aa_N_1 = {n: a for n, a in enumerate(alpha_1)}
-    aa_1_3 = {a: b for a, b in zip(alpha_1, alpha_3)}
-    aa_3_1 = {b: a for a, b in zip(alpha_1, alpha_3)}
-
-    def AA_to_N(x):
-        # ["ARND"] -> [[0,1,2,3]]
-        x = np.array(x)
-        if x.ndim == 0:
-            x = x[None]
-        return [[aa_1_N.get(a, states - 1) for a in y] for y in x]
+    aa_N_1 = dict(enumerate(alpha_1))
 
     def N_to_AA(x):
         # [[0,1,2,3]] -> ["ARND"]
@@ -686,7 +742,6 @@ def parse_PDB_biounits(x, atoms=["N", "CA", "C"], chain=None):
                     resa, resn = resn[-1], int(resn[:-1]) - 1
                 else:
                     resa, resn = "", int(resn) - 1
-                #         resn = int(resn)
                 if resn < min_resn:
                     min_resn = resn
                 if resn > max_resn:
@@ -795,17 +850,8 @@ def parse_PDB(path_to_pdb, input_chain_list=None, ca_only=False):
         my_dict = {}
         s = 0
         concat_seq = ""
-        concat_N = []
-        concat_CA = []
-        concat_C = []
-        concat_O = []
-        concat_mask = []
-        coords_dict = {}
         for letter in chain_alphabet:
-            if ca_only:
-                sidechain_atoms = ["CA"]
-            else:
-                sidechain_atoms = ["N", "CA", "C", "O"]
+            sidechain_atoms = ["CA"] if ca_only else ["N", "CA", "C", "O"]
             xyz, seq = parse_PDB_biounits(biounit, atoms=sidechain_atoms, chain=letter)
             if type(xyz) != str:
                 concat_seq += seq[0]
@@ -892,7 +938,6 @@ def tied_featurize(
         visible_chains.sort()  # sort visible_chains
         all_chains = masked_chains + visible_chains
     for i, b in enumerate(batch):
-        mask_dict = {}
         a = 0
         x_chain_list = []
         chain_mask_list = []
@@ -912,7 +957,7 @@ def tied_featurize(
         bias_by_res_list = []
         l0 = 0
         l1 = 0
-        for step, letter in enumerate(all_chains):
+        for letter in all_chains:
             if letter in visible_chains:
                 letter_list.append(letter)
                 visible_list.append(letter)
@@ -1019,11 +1064,10 @@ def tied_featurize(
                 pssm_coef = np.zeros(chain_length)
                 pssm_bias = np.zeros([chain_length, 21])
                 pssm_log_odds = 10000.0 * np.ones([chain_length, 21])
-                if pssm_dict:
-                    if pssm_dict[b["name"]][letter]:
-                        pssm_coef = pssm_dict[b["name"]][letter]["pssm_coef"]
-                        pssm_bias = pssm_dict[b["name"]][letter]["pssm_bias"]
-                        pssm_log_odds = pssm_dict[b["name"]][letter]["pssm_log_odds"]
+                if pssm_dict and pssm_dict[b["name"]][letter]:
+                    pssm_coef = pssm_dict[b["name"]][letter]["pssm_coef"]
+                    pssm_bias = pssm_dict[b["name"]][letter]["pssm_bias"]
+                    pssm_log_odds = pssm_dict[b["name"]][letter]["pssm_log_odds"]
                 pssm_coef_list.append(pssm_coef)
                 pssm_bias_list.append(pssm_bias)
                 pssm_log_odds_list.append(pssm_log_odds)
@@ -1038,9 +1082,6 @@ def tied_featurize(
         if tied_positions_dict != None:
             tied_pos_list = tied_positions_dict[b["name"]]
             if tied_pos_list:
-                set_chains_tied = set(
-                    list(itertools.chain(*[list(item) for item in tied_pos_list]))
-                )
                 for tied_item in tied_pos_list:
                     one_list = []
                     for k, v in tied_item.items():
@@ -1242,10 +1283,6 @@ class StructureDataset:
                 seq = entry["seq"]
                 name = entry["name"]
 
-                # Convert raw coords to np arrays
-                # for key, val in entry['coords'].items():
-                #    entry['coords'][key] = np.asarray(val)
-
                 # Check if in alphabet
                 bad_chars = set([s for s in seq]).difference(alphabet_set)
                 if len(bad_chars) == 0:
@@ -1286,7 +1323,6 @@ class StructureDatasetPDB:
     def __init__(
         self,
         pdb_dict_list,
-        verbose=True,
         truncate=None,
         max_length=100,
         alphabet="ACDEFGHIKLMNPQRSTVWYX-",
@@ -1296,10 +1332,8 @@ class StructureDatasetPDB:
 
         self.data = []
 
-        start = time.time()
-        for i, entry in enumerate(pdb_dict_list):
+        for entry in pdb_dict_list:
             seq = entry["seq"]
-            name = entry["name"]
 
             bad_chars = set([s for s in seq]).difference(alphabet_set)
             if len(bad_chars) == 0:
@@ -1314,56 +1348,11 @@ class StructureDatasetPDB:
             if truncate is not None and len(self.data) == truncate:
                 return
 
-            if verbose and (i + 1) % 1000 == 0:
-                elapsed = time.time() - start
-
-            # print('Discarded', discard_count)
-
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         return self.data[idx]
-
-
-class StructureLoader:
-    def __init__(
-        self,
-        dataset,
-        batch_size=100,
-        shuffle=True,
-        collate_fn=lambda x: x,
-        drop_last=False,
-    ):
-        self.dataset = dataset
-        self.size = len(dataset)
-        self.lengths = [len(dataset[i]["seq"]) for i in range(self.size)]
-        self.batch_size = batch_size
-        sorted_ix = np.argsort(self.lengths)
-
-        # Cluster into batches of similar sizes
-        clusters, batch = [], []
-        batch_max = 0
-        for ix in sorted_ix:
-            size = self.lengths[ix]
-            if size * (len(batch) + 1) <= self.batch_size:
-                batch.append(ix)
-                batch_max = size
-            else:
-                clusters.append(batch)
-                batch, batch_max = [], 0
-        if len(batch) > 0:
-            clusters.append(batch)
-        self.clusters = clusters
-
-    def __len__(self):
-        return len(self.clusters)
-
-    def __iter__(self):
-        np.random.shuffle(self.clusters)
-        for b_idx in self.clusters:
-            batch = [self.dataset[i] for i in b_idx]
-            yield batch
 
 
 # The following gather functions
@@ -1404,11 +1393,10 @@ class EncLayer(nn.Module):
         num_hidden,
         num_in,
         dropout=0.1,
-        num_heads=None,
         scale=30,
         time_cond_dim=None,
     ):
-        super(EncLayer, self).__init__()
+        super().__init__()
         self.num_hidden = num_hidden
         self.num_in = num_in
         self.scale = scale
@@ -1431,12 +1419,12 @@ class EncLayer(nn.Module):
                 nn.Linear(time_cond_dim, num_hidden * 2),
             )
 
-        self.W1 = nn.Linear(num_hidden + num_in, num_hidden, bias=True)
-        self.W2 = nn.Linear(num_hidden, num_hidden, bias=True)
-        self.W3 = nn.Linear(num_hidden, num_hidden, bias=True)
-        self.W11 = nn.Linear(num_hidden + num_in, num_hidden, bias=True)
-        self.W12 = nn.Linear(num_hidden, num_hidden, bias=True)
-        self.W13 = nn.Linear(num_hidden, num_hidden, bias=True)
+        self.W1 = nn.Linear(num_hidden + num_in, num_hidden)
+        self.W2 = nn.Linear(num_hidden, num_hidden)
+        self.W3 = nn.Linear(num_hidden, num_hidden)
+        self.W11 = nn.Linear(num_hidden + num_in, num_hidden)
+        self.W12 = nn.Linear(num_hidden, num_hidden)
+        self.W13 = nn.Linear(num_hidden, num_hidden)
         self.act = nn.GELU()
         self.dense = PositionWiseFeedForward(num_hidden, num_hidden * 4)
 
@@ -1484,11 +1472,10 @@ class DecLayer(nn.Module):
         num_hidden,
         num_in,
         dropout=0.1,
-        num_heads=None,
         scale=30,
         time_cond_dim=None,
     ):
-        super(DecLayer, self).__init__()
+        super().__init__()
         self.num_hidden = num_hidden
         self.num_in = num_in
         self.scale = scale
@@ -1504,9 +1491,9 @@ class DecLayer(nn.Module):
                 nn.Linear(time_cond_dim, num_hidden * 2),
             )
 
-        self.W1 = nn.Linear(num_hidden + num_in, num_hidden, bias=True)
-        self.W2 = nn.Linear(num_hidden, num_hidden, bias=True)
-        self.W3 = nn.Linear(num_hidden, num_hidden, bias=True)
+        self.W1 = nn.Linear(num_hidden + num_in, num_hidden)
+        self.W2 = nn.Linear(num_hidden, num_hidden)
+        self.W3 = nn.Linear(num_hidden, num_hidden)
         self.act = nn.GELU()
         self.dense = PositionWiseFeedForward(num_hidden, num_hidden * 4)
 
@@ -1541,9 +1528,9 @@ class DecLayer(nn.Module):
 
 class PositionWiseFeedForward(nn.Module):
     def __init__(self, num_hidden, num_ff):
-        super(PositionWiseFeedForward, self).__init__()
-        self.W_in = nn.Linear(num_hidden, num_ff, bias=True)
-        self.W_out = nn.Linear(num_ff, num_hidden, bias=True)
+        super().__init__()
+        self.W_in = nn.Linear(num_hidden, num_ff)
+        self.W_out = nn.Linear(num_ff, num_hidden)
         self.act = nn.GELU()
 
     def forward(self, h_V):
@@ -1554,7 +1541,7 @@ class PositionWiseFeedForward(nn.Module):
 
 class PositionalEncodings(nn.Module):
     def __init__(self, num_embeddings, max_relative_feature=32):
-        super(PositionalEncodings, self).__init__()
+        super().__init__()
         self.num_embeddings = num_embeddings
         self.max_relative_feature = max_relative_feature
         self.linear = nn.Linear(2 * max_relative_feature + 1 + 1, num_embeddings)
@@ -1568,7 +1555,7 @@ class PositionalEncodings(nn.Module):
         return E
 
 
-class CA_ProteinFeatures(nn.Module):
+class CAProteinFeatures(nn.Module):
     def __init__(
         self,
         edge_features,
@@ -1577,10 +1564,9 @@ class CA_ProteinFeatures(nn.Module):
         num_rbf=16,
         top_k=30,
         augment_eps=0.0,
-        num_chain_embeddings=16,
     ):
         """Extract protein features"""
-        super(CA_ProteinFeatures, self).__init__()
+        super().__init__()
         self.edge_features = edge_features
         self.node_features = node_features
         self.top_k = top_k
@@ -1629,7 +1615,7 @@ class CA_ProteinFeatures(nn.Module):
     def _orientations_coarse(self, X, E_idx, eps=1e-6):
         dX = X[:, 1:, :] - X[:, :-1, :]
         dX_norm = torch.norm(dX, dim=-1)
-        dX_mask = (3.6 < dX_norm) & (dX_norm < 4.0)  # exclude CA-CA jumps
+        dX_mask = (dX_norm > 3.6) & (dX_norm < 4.0)
         dX = dX * dX_mask[:, :, None]
         U = F.normalize(dX, dim=-1)
         u_2 = U[:, :-2, :]
@@ -1758,20 +1744,6 @@ class CA_ProteinFeatures(nn.Module):
         return E, E_idx
 
 
-def get_closest_neighbors(X, mask, top_k, eps=1e-6):
-    # X is ca coords (b, n, 3), mask is seq mask
-    mask_2D = torch.unsqueeze(mask, 1) * torch.unsqueeze(mask, 2)
-    dX = torch.unsqueeze(X, 1) - torch.unsqueeze(X, 2)
-    D = mask_2D * torch.sqrt(torch.sum(dX**2, 3) + eps)
-    D_max, _ = torch.max(D, -1, keepdim=True)
-    D_adjust = D + (1.0 - mask_2D) * D_max
-    sampled_top_k = top_k
-    D_neighbors, E_idx = torch.topk(
-        D_adjust, np.minimum(top_k, X.shape[1]), dim=-1, largest=False
-    )
-    return D_neighbors, E_idx
-
-
 class ProteinFeatures(nn.Module):
     def __init__(
         self,
@@ -1781,10 +1753,9 @@ class ProteinFeatures(nn.Module):
         num_rbf=16,
         top_k=30,
         augment_eps=0.0,
-        num_chain_embeddings=16,
     ):
         """Extract protein features"""
-        super(ProteinFeatures, self).__init__()
+        super().__init__()
         self.edge_features = edge_features
         self.node_features = node_features
         self.top_k = top_k
@@ -1793,20 +1764,21 @@ class ProteinFeatures(nn.Module):
         self.num_positional_embeddings = num_positional_embeddings
 
         self.embeddings = PositionalEncodings(num_positional_embeddings)
-        node_in, edge_in = 6, num_positional_embeddings + num_rbf * 25
+        edge_in = num_positional_embeddings + num_rbf * 25
         self.edge_embedding = nn.Linear(edge_in, edge_features, bias=False)
         self.norm_edges = nn.LayerNorm(edge_features)
 
     def _dist(self, X, mask, eps=1e-6):
-        # mask_2D = torch.unsqueeze(mask,1) * torch.unsqueeze(mask,2)
-        # dX = torch.unsqueeze(X,1) - torch.unsqueeze(X,2)
-        # D = mask_2D * torch.sqrt(torch.sum(dX**2, 3) + eps)
-        # D_max, _ = torch.max(D, -1, keepdim=True)
-        # D_adjust = D + (1. - mask_2D) * D_max
-        # sampled_top_k = self.top_k
-        # D_neighbors, E_idx = torch.topk(D_adjust, np.minimum(self.top_k, X.shape[1]), dim=-1, largest=False)
-        # return D_neighbors, E_idx
-        return get_closest_neighbors(X, mask, self.top_k, eps=eps)
+        # X is ca coords (b, n, 3), mask is seq mask
+        mask_2D = torch.unsqueeze(mask, 1) * torch.unsqueeze(mask, 2)
+        dX = torch.unsqueeze(X, 1) - torch.unsqueeze(X, 2)
+        D = mask_2D * torch.sqrt(torch.sum(dX**2, 3) + eps)
+        D_max, _ = torch.max(D, -1, keepdim=True)
+        D_adjust = D + (1.0 - mask_2D) * D_max
+        D_neighbors, E_idx = torch.topk(
+            D_adjust, np.minimum(self.top_k, X.shape[1]), dim=-1, largest=False
+        )
+        return D_neighbors, E_idx
 
     def _rbf(self, D):
         device = D.device
@@ -1834,7 +1806,7 @@ class ProteinFeatures(nn.Module):
 
         b = X[:, :, 1, :] - X[:, :, 0, :]
         c = X[:, :, 2, :] - X[:, :, 1, :]
-        a = torch.linalg.cross(b, c, dim=-1)
+        a = torch.linalg.cross(b, c)
         Cb = -0.58273431 * a + 0.56802827 * b - 0.54067466 * c + X[:, :, 1, :]
         Ca = X[:, :, 1, :]
         N = X[:, :, 0, :]
@@ -1902,7 +1874,7 @@ class ProteinMPNN(nn.Module):
         time_cond_dim=None,
         input_S_is_embeddings=False,
     ):
-        super(ProteinMPNN, self).__init__()
+        super().__init__()
 
         # Hyperparameters
         self.node_features = node_features
@@ -1911,16 +1883,16 @@ class ProteinMPNN(nn.Module):
 
         # Featurization layers
         if ca_only:
-            self.features = CA_ProteinFeatures(
+            self.features = CAProteinFeatures(
                 node_features, edge_features, top_k=k_neighbors, augment_eps=augment_eps
             )
-            self.W_v = nn.Linear(node_features, hidden_dim, bias=True)
+            self.W_v = nn.Linear(node_features, hidden_dim)
         else:
             self.features = ProteinFeatures(
                 node_features, edge_features, top_k=k_neighbors, augment_eps=augment_eps
             )
 
-        self.W_e = nn.Linear(edge_features, hidden_dim, bias=True)
+        self.W_e = nn.Linear(edge_features, hidden_dim)
         self.input_S_is_embeddings = input_S_is_embeddings
         if not self.input_S_is_embeddings:
             self.W_s = nn.Embedding(vocab, hidden_dim)
@@ -1955,7 +1927,7 @@ class ProteinMPNN(nn.Module):
                 for _ in range(num_decoder_layers)
             ]
         )
-        self.W_out = nn.Linear(hidden_dim, num_letters, bias=True)
+        self.W_out = nn.Linear(hidden_dim, num_letters)
 
         for p in self.parameters():
             if p.dim() > 1:
@@ -1995,10 +1967,7 @@ class ProteinMPNN(nn.Module):
         encoder_embs = h_V
 
         # Concatenate sequence embeddings for autoregressive decoder
-        if self.input_S_is_embeddings:
-            h_S = S
-        else:
-            h_S = self.W_s(S)
+        h_S = S if self.input_S_is_embeddings else self.W_s(S)
         h_ES = cat_neighbors_nodes(h_S, h_E, E_idx)
 
         # Build encoder embeddings
@@ -2039,21 +2008,19 @@ class ProteinMPNN(nn.Module):
 
         if return_node_embs:
             return h_V, encoder_embs
-        else:
-            logits = self.W_out(h_V)
-            log_probs = F.log_softmax(logits, dim=-1)
-            return log_probs
+        logits = self.W_out(h_V)
+        return F.log_softmax(logits, dim=-1)
 
     def sample(
         self,
-        X,
-        randn,
-        S_true,
-        chain_mask,
-        chain_encoding_all,
-        residue_idx,
-        mask=None,
+        X: torch.Tensor,
+        randn: torch.Tensor,
+        S_true: torch.Tensor,
+        chain_mask: torch.Tensor,
+        chain_encoding_all: torch.Tensor,
+        residue_idx: torch.Tensor,
         temperature=1.0,
+        mask: torch.Tensor | None = None,
         omit_AAs_np=None,
         bias_AAs_np=None,
         chain_M_pos=None,
@@ -2291,8 +2258,7 @@ class ProteinMPNN(nn.Module):
         new_decoding_order = []
         for t_dec in list(decoding_order[0,].cpu().data.numpy()):
             if t_dec not in list(itertools.chain(*new_decoding_order)):
-                list_a = [item for item in tied_pos if t_dec in item]
-                if list_a:
+                if list_a := [item for item in tied_pos if t_dec in item]:
                     new_decoding_order.append(list_a[0])
                 else:
                     new_decoding_order.append([t_dec])
@@ -2320,7 +2286,6 @@ class ProteinMPNN(nn.Module):
         mask_fw = mask_1D * (1.0 - mask_attend)
 
         N_batch, N_nodes = X.size(0), X.size(1)
-        log_probs = torch.zeros((N_batch, N_nodes, 21), device=device)
         all_probs = torch.zeros(
             (N_batch, N_nodes, 21), device=device, dtype=torch.float
         )
@@ -2372,9 +2337,7 @@ class ProteinMPNN(nn.Module):
                     logits += (
                         tied_beta[t] * (self.W_out(h_V_t) / temperature) / len(t_list)
                     )
-            if done_flag:
-                pass
-            else:
+            if not done_flag:
                 bias_by_res_gathered = bias_by_res[:, t, :]  # [B, 21]
                 probs = F.softmax(
                     logits
@@ -2518,7 +2481,6 @@ class ProteinMPNN(nn.Module):
         )
         mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
         mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
-        mask_bw = mask_1D * mask_attend
         mask_fw = mask_1D * (1.0 - mask_attend)
 
         h_EXV_encoder_fw = mask_fw * h_EXV_encoder
@@ -2528,29 +2490,3 @@ class ProteinMPNN(nn.Module):
         logits = self.W_out(h_V)
         log_probs = F.log_softmax(logits, dim=-1)
         return log_probs
-
-
-def get_buried_positions_mask(coords, seq_mask=None, threshold=6.0):
-    ca_idx = residue_constants.atom_order["CA"]  # typically 1
-    cb_idx = residue_constants.atom_order["CB"]  # typically 3
-    if seq_mask is None:
-        seq_mask = torch.ones_like(coords)[..., 0, 0]
-    coords = fill_in_cbeta_for_atom37_coords(coords)
-
-    # get 8 closest neighbors by CB
-    neighbor_coords = coords[:, :, cb_idx]
-
-    ca_neighbor_dists, edge_index = protein_mpnn.get_closest_neighbors(
-        neighbor_coords, seq_mask, 9
-    )
-    edge_index = edge_index[..., 1:].contiguous()
-
-    # compute avg CB distance
-    cb_coords = coords[:, :, cb_idx]
-    neighbor_cb = protein_mpnn.gather_nodes(cb_coords, edge_index)
-    avg_cb_dist = (
-        (neighbor_cb - cb_coords[..., None, :]).square().sum(-1).sqrt().mean(-1)
-    )
-
-    buried_positions_mask = (avg_cb_dist < threshold).float() * seq_mask
-    return buried_positions_mask

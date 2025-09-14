@@ -32,8 +32,7 @@ from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import seq_to_aatype_batched
 from protpardelle.env import PROTEINMPNN_WEIGHTS
-from protpardelle.evaluate import design_sequence
-from protpardelle.integrations.protein_mpnn import get_mpnn_model
+from protpardelle.integrations.protein_mpnn import design_sequence, get_mpnn_model
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
@@ -1116,9 +1115,7 @@ class Protpardelle(nn.Module):
 
         # Initialize masks/features
         if use_fullmpnn or use_fullmpnn_for_final:
-            fullmpnn_model = get_mpnn_model(
-                PROTEINMPNN_WEIGHTS, device=self.device
-            )
+            fullmpnn_model = get_mpnn_model(PROTEINMPNN_WEIGHTS, device=self.device)
 
         # Initialize noise schedule/parameters
         s_t_min = s_t_min * self.sigma_data
