@@ -37,7 +37,6 @@ from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
     PACKAGE_ROOT_DIR,
-    PROTEINMPNN_WEIGHTS,
     PROTPARDELLE_MODEL_PARAMS,
     PROTPARDELLE_OUTPUT_DIR,
 )
@@ -68,10 +67,7 @@ class ProtpardelleSampler:
         self.device = device
         self.num_mpnn_seqs = num_mpnn_seqs
         if self.num_mpnn_seqs > 0:
-            self.mpnn_model = get_mpnn_model(
-                PROTEINMPNN_WEIGHTS,
-                device=self.device,
-            )
+            self.mpnn_model = get_mpnn_model(model_name="v_48_020", device=self.device)
         else:
             self.mpnn_model = None
 
@@ -368,10 +364,7 @@ def generate(
 ):
     device = get_default_device()
     if num_mpnn_seqs > 0:
-        mpnn_model = get_mpnn_model(
-            PROTEINMPNN_WEIGHTS,
-            device=device,
-        )
+        mpnn_model = get_mpnn_model(model_name="v_48_020", device=device)
     else:
         mpnn_model = None
 
