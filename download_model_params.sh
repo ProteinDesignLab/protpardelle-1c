@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-for cmd in git curl aria2c hf; do
+for cmd in curl aria2c hf; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         echo "Error: $cmd is required but not installed." >&2
         exit 1

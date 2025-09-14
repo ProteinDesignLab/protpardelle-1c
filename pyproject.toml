@@ -34,6 +34,7 @@ dependencies = [
     "numpy",
     "omegaconf",
     "pandas",
+    "prody",
     "pyyaml",
     "scipy",
     "torch>=2.6.0",
@@ -46,6 +47,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "pre-commit"]
+viz = ["py3dmol", "matplotlib", "seaborn"]
 
 [tool.pytest.ini_options]
 addopts = "-v -s"
