@@ -207,6 +207,8 @@ def norm_path(
 
 def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     """Set the seed for all random number generators.
+
+    Adapted from https://github.com/pyg-team/pytorch_geometric/blob/master/torch_geometric/seed.py
     Freeze CUDA for reproducibility if needed.
 
     Args:
@@ -217,6 +219,7 @@ def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     if freeze_cuda:
         # nonrandom CUDNN convolution algo, maybe slower
