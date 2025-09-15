@@ -208,11 +208,11 @@ def motif_loss(
     """Compute the motif loss.
 
     Args:
-        x (torch.Tensor): The input tensor. (B, L, A, 3)
+        x (torch.Tensor): The input tensor. (B, L, 37, 3)
         motif_idx (list[list[int]]): The motif indices. A list of length B,
             each a list[int] for motif residue indices
-        motif_coords (torch.Tensor): The motif coordinates.
-        atom_mask (torch.Tensor): The atom mask. (B, L, A)
+        motif_coords (torch.Tensor): The motif coordinates. (B, M, 37, 3)
+        atom_mask (torch.Tensor): The atom mask. (B, L, 37)
 
     Returns:
         torch.Tensor: The computed motif loss. (B,)
