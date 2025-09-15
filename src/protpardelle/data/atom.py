@@ -3,6 +3,7 @@
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 """
 
+import numpy as np
 import torch
 
 from protpardelle.common import residue_constants
@@ -23,7 +24,7 @@ def atom14_mask_from_aatype(
 
     # source_mask is (21, 14) originally
     device = aatype.device
-    source_mask = torch.tensor(residue_constants.restype_atom14_mask, device=device)
+    source_mask = torch.from_numpy(residue_constants.restype_atom14_mask.astype(np.float32)).to(device)
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
@@ -49,7 +50,7 @@ def atom37_mask_from_aatype(
 
     # source_mask is (21, 37) originally
     device = aatype.device
-    source_mask = torch.tensor(residue_constants.restype_atom37_mask, device=device)
+    source_mask = torch.from_numpy(residue_constants.restype_atom37_mask.astype(np.float32)).to(device)
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
@@ -74,7 +75,9 @@ def atom73_mask_from_aatype(
     """
 
     device = aatype.device
-    source_mask = torch.tensor(residue_constants.restype_atom73_mask, device=device)
+    source_mask = torch.from_numpy(
+        residue_constants.restype_atom73_mask.astype(np.float32)
+    ).to(device)
     atom_mask = source_mask[aatype]
 
     if seq_mask is not None:

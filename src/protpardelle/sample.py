@@ -783,10 +783,11 @@ def sample(
                 or sampling_config["sampling"]["allatom_cfg"]["uniform_steps"]
             )
             if allatom:
-                mpnn_ckpt_path = str(
+                mpnn_ckpt_path = (
                     PROTPARDELLE_MODEL_PARAMS / "weights" / "cc58_epoch97_minimpnn.pth"
                 )
-                model.load_minimpnn(mpnn_ckpt_path=mpnn_ckpt_path)
+
+                model.load_minimpnn(mpnn_ckpt_path)
 
             sse_cond = None
             adj_cond = None

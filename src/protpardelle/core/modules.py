@@ -15,6 +15,7 @@ from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from torch import broadcast_tensors, einsum
 from torch.amp import autocast
+from torch.optim.lr_scheduler import LRScheduler
 from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
@@ -1285,54 +1286,64 @@ class TimeCondUViT(nn.Module):
 ########################################
 
 
-class LinearWarmupCosineDecay(torch.optim.lr_scheduler._LRScheduler):
+class LinearWarmupCosineDecay(LRScheduler):
     def __init__(
         self,
-        optimizer,
-        max_lr,
-        warmup_steps=1000,
-        decay_steps=int(1e6),
-        min_lr=1e-6,
+        optimizer: torch.optim.Optimizer,
+        max_lr: float,
+        warmup_steps: int = 1000,
+        decay_steps: int = 1000000,
+        min_lr: float = 1e-6,
         **kwargs,
     ):
+        super().__init__(optimizer, **kwargs)
+
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.warmup_steps = warmup_steps
         self.decay_steps = decay_steps
         self.total_steps = warmup_steps + decay_steps
-        super(LinearWarmupCosineDecay, self).__init__(optimizer, **kwargs)
 
-    def get_lr(self):
-        # TODO double check for off-by-one errors
-        if self.last_epoch < self.warmup_steps:
-            curr_lr = self.last_epoch / self.warmup_steps * self.max_lr
-            return [curr_lr for group in self.optimizer.param_groups]
-        elif self.last_epoch < self.total_steps:
-            time = (self.last_epoch - self.warmup_steps) / self.decay_steps * np.pi
-            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
-                1 + np.cos(time)
+    def get_lr(self) -> list[float]:
+        """Compute the current learning rate for all param groups."""
+
+        # Handle warmup (if any)
+        if (self.warmup_steps > 0) and (self.last_epoch < self.warmup_steps):
+            progress = self.last_epoch / max(1, self.warmup_steps)
+            curr_lr = progress * self.max_lr
+        # Cosine decay phase
+        elif (self.decay_steps > 0) and (self.last_epoch < self.total_steps):
+            # Fraction of decay completed (0 at start of decay, 1 at end)
+            decay_progress = (self.last_epoch - self.warmup_steps) / max(
+                1, self.decay_steps
             )
-            return [curr_lr for group in self.optimizer.param_groups]
+            time = decay_progress * np.pi
+            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
+                1.0 + float(np.cos(time))
+            )
         else:
-            return [self.min_lr for group in self.optimizer.param_groups]
+            curr_lr = self.min_lr
+
+        # Return LR for each param group
+        return [curr_lr for _ in self.optimizer.param_groups]
 
 
 class NoiseConditionalProteinMPNN(nn.Module):
     def __init__(
         self,
-        n_channel=128,
-        n_layers=3,
-        n_neighbors=32,
-        time_cond_dim=None,
-        vocab_size=21,
-        input_S_is_embeddings=False,
+        n_channel: int = 128,
+        n_layers: int = 3,
+        n_neighbors: int = 32,
+        vocab_size: int = 21,
+        time_cond_dim: int | None = None,
+        input_S_is_embeddings: bool = False,
     ):
         super().__init__()
         self.n_channel = n_channel
         self.n_layers = n_layers
         self.n_neighbors = n_neighbors
-        self.time_cond_dim = time_cond_dim
         self.vocab_size = vocab_size
+        self.time_cond_dim = time_cond_dim
         self.bb_idxs_if_atom37 = [
             residue_constants.atom_order[a] for a in ["N", "CA", "C", "O"]
         ]
@@ -1355,8 +1366,13 @@ class NoiseConditionalProteinMPNN(nn.Module):
         )
 
     def forward(
-        self, denoised_coords, noisy_aatype, seq_mask, residue_index, time_cond
-    ):
+        self,
+        denoised_coords: torch.Tensor,
+        noisy_aatype: torch.Tensor,
+        seq_mask: torch.Tensor,
+        residue_index: torch.Tensor,
+        time_cond: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if denoised_coords.shape[-2] == 37:
             denoised_coords = denoised_coords[:, :, 1]  # CHANGED to ca-only
 
@@ -1374,4 +1390,5 @@ class NoiseConditionalProteinMPNN(nn.Module):
             time_cond=time_cond,
             return_node_embs=True,
         )
+
         return node_embs, encoder_embs

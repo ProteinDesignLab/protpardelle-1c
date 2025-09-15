@@ -974,7 +974,7 @@ restype_atom73_mask[-2:, [0, 1, 2, 4]] = 1
 
 
 # RFdiffusion benchmark
-RFDIFFUSION_BENCHMARK_TIP_ATOMS = {
+RFDIFFUSION_BENCHMARK_TIP_ATOMS: dict[str, list[str]] = {
     "ALA": ["CA", "CB"],
     "ARG": ["CD", "CZ", "NE", "NH1", "NH2"],
     "ASP": ["CB", "CG", "OD1", "OD2"],

@@ -305,9 +305,7 @@ def run_protein_mpnn(
             randn_1,
         )
         mask_for_loss = mask * chain_M * chain_M_pos
-        scores = _scores(
-            S, log_probs, mask_for_loss
-        )  # score only the redesigned part
+        scores = _scores(S, log_probs, mask_for_loss)  # score only the redesigned part
         native_score = scores.cpu().data.numpy()
         global_scores = _scores(
             S, log_probs, mask
@@ -423,23 +421,16 @@ def run_protein_mpnn(
                         )
                         l0 = 0
                         for mc_length in list(
-                            np.array(masked_chain_length_list)[
-                                np.argsort(masked_list)
-                            ]
+                            np.array(masked_chain_length_list)[np.argsort(masked_list)]
                         )[:-1]:
                             l0 += mc_length
                             native_seq = native_seq[:l0] + "/" + native_seq[l0:]
                             l0 += 1
-                        sorted_masked_chain_letters = np.argsort(
-                            masked_list_list[0]
-                        )
+                        sorted_masked_chain_letters = np.argsort(masked_list_list[0])
                         print_masked_chains = [
-                            masked_list_list[0][i]
-                            for i in sorted_masked_chain_letters
+                            masked_list_list[0][i] for i in sorted_masked_chain_letters
                         ]
-                        sorted_visible_chain_letters = np.argsort(
-                            visible_list_list[0]
-                        )
+                        sorted_visible_chain_letters = np.argsort(visible_list_list[0])
                         print_visible_chains = [
                             visible_list_list[0][i]
                             for i in sorted_visible_chain_letters
@@ -468,9 +459,7 @@ def run_protein_mpnn(
                             ).strip()
                         except subprocess.CalledProcessError:
                             commit_str = "unknown"
-                        print_model_name = (
-                            "CA_model_name" if ca_only else "model_name"
-                        )
+                        print_model_name = "CA_model_name" if ca_only else "model_name"
                         if write_output_files:
                             f.write(
                                 f">{name_}, score={native_score_print}, global_score={global_native_score_print}, fixed_chains={print_visible_chains}, designed_chains={print_masked_chains}, {print_model_name}={model_name}, git_hash={commit_str}, seed={seed}\n{native_seq}\n"
@@ -483,9 +472,7 @@ def run_protein_mpnn(
                         list_of_AAs.append(seq[start:end])
                         start = end
 
-                    seq = "".join(
-                        list(np.array(list_of_AAs)[np.argsort(masked_list)])
-                    )
+                    seq = "".join(list(np.array(list_of_AAs)[np.argsort(masked_list)]))
                     l0 = 0
                     for mc_length in list(
                         np.array(masked_chain_length_list)[np.argsort(masked_list)]
@@ -2015,8 +2002,8 @@ class ProteinMPNN(nn.Module):
             torch.zeros_like(h_V, device=device)
             for _ in range(len(self.decoder_layers))
         ]
-        constant = torch.tensor(omit_AAs_np, device=device)
-        constant_bias = torch.tensor(bias_AAs_np, device=device)
+        constant = torch.from_numpy(omit_AAs_np.astype(np.float32)).to(device)
+        constant_bias = torch.from_numpy(bias_AAs_np.astype(np.float32)).to(device)
         # chain_mask_combined = chain_mask*chain_M_pos
         omit_AA_mask_flag = omit_AA_mask != None
 
