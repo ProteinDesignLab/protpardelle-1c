@@ -53,6 +53,7 @@ _default_esmfold_path = _default_protpardelle_model_params / "ESMFold"
 _default_protein_mpnn_weights = (
     _default_protpardelle_model_params / "ProteinMPNN/vanilla_model_weights"
 )
+_default_ligand_mpnn_weights = _default_protpardelle_model_params / "LigandMPNN"
 _default_protpardelle_output_dir = PROJECT_ROOT_DIR / "results"
 
 PROTPARDELLE_MODEL_PARAMS = norm_path(
@@ -61,6 +62,9 @@ PROTPARDELLE_MODEL_PARAMS = norm_path(
 ESMFOLD_PATH = norm_path(os.getenv("ESMFOLD_PATH", str(_default_esmfold_path)))
 PROTEINMPNN_WEIGHTS = norm_path(
     os.getenv("PROTEINMPNN_WEIGHTS", str(_default_protein_mpnn_weights))
+)
+LIGANDMPNN_WEIGHTS = norm_path(
+    os.getenv("LIGANDMPNN_WEIGHTS", str(_default_ligand_mpnn_weights))
 )
 PROTPARDELLE_OUTPUT_DIR = norm_path(
     os.getenv("PROTPARDELLE_OUTPUT_DIR", str(_default_protpardelle_output_dir))
@@ -78,6 +82,7 @@ __all__ = [
     "PROTPARDELLE_MODEL_PARAMS",
     "ESMFOLD_PATH",
     "PROTEINMPNN_WEIGHTS",
+    "LIGANDMPNN_WEIGHTS",
     "PROTPARDELLE_OUTPUT_DIR",
     "FOLDSEEK_BIN",
 ]
