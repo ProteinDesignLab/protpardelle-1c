@@ -28,6 +28,7 @@ dependencies = [
     "einops",
     "huggingface_hub",
     "hydra-core",
+    "jaxtyping",
     "jupyter",
     "ml_collections",
     "modelcif",
