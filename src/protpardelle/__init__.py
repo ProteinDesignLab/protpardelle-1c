@@ -5,4 +5,4 @@ described in [Conditional Protein Structure Generation with Protpardelle-1c](htt
 It provides tools for unconditional and conditional protein design at both all-atom and backbone-only resolution.
 """
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"
