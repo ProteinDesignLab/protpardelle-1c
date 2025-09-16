@@ -69,11 +69,8 @@ def apply_dotdict_recursively(input_obj: Any) -> Any:
     if isinstance(input_obj, dict):
         # Convert the current dictionary to a dotdict
         return DotDict({k: apply_dotdict_recursively(v) for k, v in input_obj.items()})
-    if isinstance(input_obj, list):
-        # Apply recursively to all elements in the list
-        return [apply_dotdict_recursively(item) for item in input_obj]
 
-    # Return the object as-is if it's neither a dict nor a list
+    # Return the object as-is for non-dicts (lists, scalars, etc.)
     return input_obj
 
 
