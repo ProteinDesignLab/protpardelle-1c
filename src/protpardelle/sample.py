@@ -640,7 +640,7 @@ def sample(
         per_config_save_dir.mkdir(exist_ok=True)
 
         with initialize_config_dir(
-            config_dir=str(PACKAGE_ROOT_DIR / "configs/sampling"),
+            config_dir=str(PACKAGE_ROOT_DIR / "configs/model_configs"),
             version_base="1.3.2",
         ):
             sampling_config = compose(config_name=sampling_config_name)
