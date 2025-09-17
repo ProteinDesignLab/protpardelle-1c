@@ -67,7 +67,6 @@ model:
   crop_conditional: True
   conditioning_style: "concat" # 'concat', 'noise_residual', 'concat_and_noise_residual'
   compute_loss_on_all_atoms: false
-  dummy_fill_masked_atoms: True
   struct_model:
     arch: "dit"
     n_atoms: 37
