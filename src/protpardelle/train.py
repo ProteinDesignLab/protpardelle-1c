@@ -22,6 +22,7 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import TrainingConfig
 from protpardelle.core import diffusion, modules
 from protpardelle.core.models import Protpardelle
 from protpardelle.data.atom import atom37_mask_from_aatype
@@ -106,13 +107,13 @@ class ProtpardelleTrainer:
 
     def __init__(
         self,
-        config: argparse.Namespace,
+        config: TrainingConfig,
         device: Device,
     ) -> None:
         """Initialize the ProtpardelleTrainer.
 
         Args:
-            config (argparse.Namespace): The training configuration.
+            config (TrainingConfig): The training configuration.
             device (Device): The device to train on.
         """
 
