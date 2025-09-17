@@ -174,7 +174,6 @@ def namespace_to_dict(namespace: argparse.Namespace) -> dict:
 
 def norm_path(
     path: StrPath,
-    *,
     expandvars: bool = True,
     expanduser: bool = True,
     resolve: bool = True,

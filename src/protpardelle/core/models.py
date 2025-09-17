@@ -7,7 +7,6 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 from __future__ import annotations
 
-import argparse
 import copy
 import re
 from collections import defaultdict
@@ -27,6 +26,7 @@ from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import TrainingConfig
 from protpardelle.core import diffusion, modules
 from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
@@ -282,9 +282,16 @@ def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
 class MiniMPNN(nn.Module):
     """Wrapper for ProteinMPNN network to predict sequence from structure."""
 
-    def __init__(self, config: argparse.Namespace):
+    def __init__(self, config: TrainingConfig) -> None:
+        """Initialize the MiniMPNN model.
+
+        Args:
+            config (TrainingConfig): The training configuration.
+        """
+
         super().__init__()
         self.config = config
+
         self.mpnn_config = config.model.mpnn_model
         self.n_tokens = config.data.n_aatype_tokens
         self.seq_emb_dim = self.mpnn_config.n_channel
@@ -306,42 +313,62 @@ class MiniMPNN(nn.Module):
 
     def forward(
         self,
-        denoised_coords: TensorType["b n a x", float],
-        coords_noise_level: TensorType["b", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
-        seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
-        return_embeddings: bool = False,
-    ):
+        denoised_coords: Float[torch.Tensor, "B L 37 3"],
+        coords_noise_level: Float[torch.Tensor, "B"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        seq_self_cond: Float[torch.Tensor, "B L V"] | None = None,  # logprobs
+        seq_crop_cond: Int[torch.Tensor, "B L"] | None = None,  # motif aatypes
+    ) -> Float[torch.Tensor, "B L V"]:
+        """Predict sequence log-probabilities from denoised coordinates.
+
+        Args:
+            denoised_coords (torch.Tensor): The denoised coordinates.
+            coords_noise_level (torch.Tensor): The noise level of the coordinates.
+            seq_mask (torch.Tensor): The sequence mask.
+            residue_index (torch.Tensor): The residue index.
+            seq_self_cond (torch.Tensor | None, optional): The self-conditioning input.
+                Defaults to None.
+            seq_crop_cond (torch.Tensor | None, optional): The crop-conditioning input.
+                Defaults to None.
+
+        Returns:
+            torch.Tensor: The predicted sequence log-probabilities.
+        """
+
         coords_noise_level_scaled = 0.25 * torch.log(coords_noise_level)
         noise_cond = self.noise_block(coords_noise_level_scaled)
 
-        b, n, _, _ = denoised_coords.shape
-        if seq_self_cond is None or not self.mpnn_config.use_self_conditioning:
-            seq_emb_in = torch.zeros(b, n, self.seq_emb_dim).to(denoised_coords)
+        B, L = denoised_coords.shape[:2]
+        device = denoised_coords.device
+        if (seq_self_cond is None) or (not self.mpnn_config.use_self_conditioning):
+            seq_emb_in = torch.zeros(B, L, self.seq_emb_dim, device=device)
         else:
-            seq_emb_in = self.token_embedding(seq_self_cond.exp())
+            seq_emb_in = self.token_embedding(torch.exp(seq_self_cond))
 
         if seq_crop_cond is not None:
             seq_emb_in = seq_emb_in + self.token_embedding(seq_crop_cond.float())
 
-        node_embs, encoder_embs = self.mpnn_net(
+        node_embs, _ = self.mpnn_net(
             denoised_coords, seq_emb_in, seq_mask, residue_index, noise_cond
         )
 
         logits = self.proj_out(node_embs)
         pred_logprobs = F.log_softmax(logits, -1)
 
-        if return_embeddings:
-            return pred_logprobs, node_embs, encoder_embs
         return pred_logprobs
 
 
 class CoordinateDenoiser(nn.Module):
     """Wrapper for U-ViT/DiT module to denoise structure coordinates."""
 
-    def __init__(self, config: argparse.Namespace) -> None:
+    def __init__(self, config: TrainingConfig) -> None:
+        """Initialize the CoordinateDenoiser.
+
+        Args:
+            config (TrainingConfig): The training configuration.
+        """
+
         super().__init__()
         self.config = config
 
@@ -413,19 +440,38 @@ class CoordinateDenoiser(nn.Module):
 
     def forward(
         self,
-        noisy_coords: TensorType["b n a x", float],
-        noise_level: TensorType["b n", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int] | None = None,
-        chain_index: TensorType["b n", int] | None = None,
-        hotspot_mask: TensorType["b n", int] | None = None,
-        struct_self_cond: TensorType["b n a x", float] | None = None,
-        struct_crop_cond: TensorType["b n a x", float] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
+        noisy_coords: Float[torch.Tensor, "B L 37 3"],
+        noise_level: Float[torch.Tensor, "B L"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"] | None = None,
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        struct_self_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
+        struct_crop_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        tol: float = 1e-6,
     ) -> torch.Tensor:
+        """Predict denoised coordinates from noisy coordinates.
 
-        noise_level = noise_level.clamp(min=1e-6)
+        Args:
+            noisy_coords (torch.Tensor): The noisy coordinates to denoise.
+            noise_level (torch.Tensor): The level of noise in the coordinates.
+            seq_mask (torch.Tensor): A mask indicating valid sequence elements.
+            residue_index (torch.Tensor | None, optional): The residue indices for each sequence element. Defaults to None.
+            chain_index (torch.Tensor | None, optional): The chain indices for each sequence element. Defaults to None.
+            hotspot_mask (torch.Tensor | None, optional): A mask indicating hotspot regions. Defaults to None.
+            struct_self_cond (torch.Tensor | None, optional): The self-conditioning features. Defaults to None.
+            struct_crop_cond (torch.Tensor | None, optional): The crop-conditioning features. Defaults to None.
+            sse_cond (torch.Tensor | None, optional): The secondary structure elements. Defaults to None.
+            adj_cond (torch.Tensor | None, optional): The adjacency conditioning features. Defaults to None.
+            tol (float, optional): A tolerance value for numerical stability. Defaults to 1e-6.
+
+        Returns:
+            torch.Tensor: The predicted denoised coordinates.
+        """
+
+        noise_level = noise_level.clamp(min=tol)
 
         # Prep inputs and time conditioning
         actual_var_data = self.sigma_data**2
@@ -441,7 +487,7 @@ class CoordinateDenoiser(nn.Module):
         if struct_self_cond is None:
             struct_self_cond = torch.zeros_like(noisy_coords)
         if sse_cond is None:
-            sse_cond = torch.zeros_like(residue_index).long()
+            sse_cond = torch.zeros_like(residue_index, dtype=torch.long)
 
         if self.config.model.crop_conditional:
             if (
@@ -481,7 +527,7 @@ class CoordinateDenoiser(nn.Module):
             ):
                 if struct_crop_cond is None:
                     struct_crop_cond = torch.zeros_like(noisy_coords)
-                struct_crop_cond = rearrange(struct_crop_cond, "b n a c -> b c n a")
+                struct_crop_cond = rearrange(struct_crop_cond, "b l a c -> b c l a")
                 motif_cond = self.net.cond_to_patch_embedding(
                     struct_crop_cond
                 )  # spacing info is leaked
@@ -536,14 +582,15 @@ def parse_fixed_pos_str(
     residue_index: TensorType["n", int],
     chain_index: TensorType["n", int],
 ) -> list[int]:
-    """Parse a string of fixed positions in the format "A1, A10-25" and
-    return the corresponding list of absolute indices.
+    """Parse a string of fixed positions.
+
+    In the format of "A1, A10-25" and return the corresponding list of absolute indices.
 
     Args:
         fixed_pos_list (str): Comma-separated string representing fixed positions (e.g., "A1,A10-25").
         chain_id_mapping (dict[str, int]): Mapping of chain letter to chain index (e.g., {'A': 0, 'B': 1}).
-        residue_index (torch.Tensor): Tensor of residue indices. (N,)
-        chain_index (torch.Tensor): Tensor of chain indices. (N,)
+        residue_index (torch.Tensor): Tensor of residue indices.
+        chain_index (torch.Tensor): Tensor of chain indices.
 
     Returns:
         list[int]: The absolute indices of the fixed positions.
@@ -563,9 +610,9 @@ def parse_fixed_pos_str(
         if not match:
             raise ValueError(f"Invalid position format: {pos}")
 
-        chain_letter = match.group(1)
-        start_residue = int(match.group(2))
-        end_residue = int(match.group(3)) if match.group(3) else start_residue
+        chain_letter = match[1]
+        start_residue = int(match[2])
+        end_residue = int(match[3]) if match[3] else start_residue
 
         if chain_letter not in chain_id_mapping:
             raise ValueError(f"Chain ID {chain_letter} not found in mapping.")
@@ -613,7 +660,7 @@ class Protpardelle(nn.Module):
         'codesign': train both an allatom denoiser and MiniMPNN at once.
     """
 
-    def __init__(self, config: argparse.Namespace, device: Device = None):
+    def __init__(self, config: TrainingConfig, device: Device = None):
         super().__init__()
 
         self.config = config
@@ -646,12 +693,6 @@ class Protpardelle(nn.Module):
             **vars(config.diffusion.training),
         )
         self.sampling_noise_schedule_default = self.make_sampling_noise_schedule()
-        self.sampling_noise_schedule_bb = partial(
-            diffusion.noise_schedule, function="backbone"
-        )
-        self.sampling_noise_schedule_sc = partial(
-            diffusion.noise_schedule, function="sidechain"
-        )
 
         if device is None:
             device = get_default_device()
@@ -672,6 +713,7 @@ class Protpardelle(nn.Module):
         # Load pretrained checkpoint
         if ckpt_path is None:
             ckpt_path = getattr(self.config.model, f"{module_name}_checkpoint")
+
         ckpt_dict = torch.load(ckpt_path, weights_only=False, map_location=self.device)
         model_state_dict = ckpt_dict["model_state_dict"]
 
@@ -717,7 +759,6 @@ class Protpardelle(nn.Module):
 
     def forward(
         self,
-        *,
         noisy_coords: TensorType["b n a x", float],
         noise_level: TensorType["b n", float],
         seq_mask: TensorType["b n", float],
@@ -776,7 +817,6 @@ class Protpardelle(nn.Module):
                 residue_index,
                 seq_self_cond=seq_self_cond,
                 seq_crop_cond=seq_crop_cond,
-                return_embeddings=False,
             )
             aatype_logprobs = aatype_logprobs * seq_mask.unsqueeze(-1)
         else:
@@ -869,14 +909,13 @@ class Protpardelle(nn.Module):
 
     def sample(
         self,
-        *,
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None = None,
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
         hotspots: str | list[str] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
-        gt_aatype: TensorType["b n", int] | None = None,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        gt_aatype: Int[torch.Tensor, "B L"] | None = None,
         n_steps: int = 200,
         step_scale: float = 1.2,
         s_churn: float = 50.0,
@@ -900,11 +939,11 @@ class Protpardelle(nn.Module):
         dy: float | None = None,
         dz: float | None = None,
         dummy_fill_mode: Literal["zero", "CA"] = "zero",
-        xt_start: TensorType["b n a x", float] | None = None,
+        xt_start: Float[torch.Tensor, "B L A 3"] | None = None,
         partial_diffusion: DictConfig | None = None,
         conditional_cfg: DictConfig | None = None,
         motif_placements_full: list[str] | None = None,
-        motif_all_atom_stage1: TensorType["b n a x", float] | None = None,
+        motif_all_atom_stage1: Float[torch.Tensor, "B L A 3"] | None = None,
         motif_idx_stage1: list[list[int]] | None = None,
         stage2: bool = False,
         tip_atom_conditioning: bool = False,
