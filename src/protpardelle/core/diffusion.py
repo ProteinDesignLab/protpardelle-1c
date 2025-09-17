@@ -6,17 +6,19 @@ Authors: Alex Chu, Tianyu Lu, Zhaoyang Li
 from typing import Literal
 
 import torch
+from jaxtyping import Float
 
+from protpardelle.data.atom import dummy_fill
 from protpardelle.utils import unsqueeze_trailing_dims
 
 
 def compute_sampling_noise(
-    timestep: torch.Tensor,
+    timestep: Float[torch.Tensor, "..."],
     sigma_data: float = 10.0,
     s_min: float = 0.001,
-    s_max: float = 80,
+    s_max: float = 80.0,
     rho: float = 7.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Computes the sampling noise level for a given timestep.
 
     We set high noise = 1; low noise = 0. opposite of Karras et al. schedule
@@ -40,17 +42,17 @@ def compute_sampling_noise(
 
 
 def noise_schedule(
-    timestep: torch.Tensor,
+    timestep: Float[torch.Tensor, "..."],
     function: Literal["uniform", "lognormal", "mpnn", "constant"] = "uniform",
     sigma_data: float = 10.0,
     psigma_mean: float = -0.5,
     psigma_std: float = 1.5,
     s_min: float = 0.001,
-    s_max: float = 80,
+    s_max: float = 80.0,
     rho: float = 7.0,
     time_power: float = 4.0,
     constant_val: float = 0.0,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "..."]:
     """Computes the noise schedule for a given timestep.
 
     Args:
@@ -74,7 +76,7 @@ def noise_schedule(
     """
 
     if function == "lognormal":
-        normal_sample = torch.special.ndtri(timestep)
+        normal_sample = torch.special.ndtri(timestep)  # pylint: disable=not-callable
         noise_level = sigma_data * torch.exp(psigma_mean + psigma_std * normal_sample)
     elif function == "uniform":
         noise_level = compute_sampling_noise(
@@ -94,32 +96,31 @@ def noise_schedule(
 
 
 def noise_coords(
-    coords: torch.Tensor,
-    noise_level: torch.Tensor,
-    atom_mask: torch.Tensor,
-    dummy_fill_mode: str = "zero",
-) -> torch.Tensor:
+    atom37_coords: Float[torch.Tensor, "B L 37 3"],
+    atom37_mask: Float[torch.Tensor, "B L 37"],
+    noise_level: Float[torch.Tensor, "B"],
+    dummy_fill_mode: Literal["CA", "CB", "zero"] = "zero",
+) -> Float[torch.Tensor, "B L 37 3"]:
     """Applies noise to the coordinates.
 
     Args:
-        coords (torch.Tensor): The input coordinates. (B, N, A, X)
-        noise_level (torch.Tensor): The noise level for each batch. (B,)
-        atom_mask (torch.Tensor): The atom mask indicating which atoms are present. (B, N, A)
+        atom37_coords (torch.Tensor): The input coordinates.
+        atom37_mask (torch.Tensor): The atom mask indicating which atoms are present.
+        noise_level (torch.Tensor): The noise level for each batch.
+        dummy_fill_mode (Literal["CA", "CB", "zero"], optional): The mode for filling in dummy atoms.
+            Defaults to "zero".
 
     Returns:
-        torch.Tensor: The noisy coordinates. (B, N, A, X)
+        torch.Tensor: The noisy coordinates.
     """
 
-    dummy_fill_mask = 1.0 - atom_mask
-    if dummy_fill_mode == "zero":
-        dummy_fill_value = torch.zeros_like(coords)
-    else:
-        dummy_fill_value = coords[..., 1:2, :]  # CA
-    coords = coords * atom_mask.unsqueeze(
-        -1
-    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
+    atom37_coords = dummy_fill(
+        atom37_coords, atom37_mask, mode=dummy_fill_mode
+    )  # (B, L, 37, 3)
 
-    noise = torch.randn_like(coords) * unsqueeze_trailing_dims(noise_level, coords)
-    noisy_coords = coords + noise
+    noise = torch.randn_like(atom37_coords) * unsqueeze_trailing_dims(
+        noise_level, target=atom37_coords
+    )
+    noisy_coords = atom37_coords + noise
 
     return noisy_coords

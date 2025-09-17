@@ -1255,16 +1255,16 @@ class Protpardelle(nn.Module):
                 bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
                 xt = diffusion.noise_coords(
                     pd_coords,
-                    pd_noise_level,
-                    atom_mask=bb_atom_mask,
+                    bb_atom_mask,
+                    noise_level=pd_noise_level,
                     dummy_fill_mode=dummy_fill_mode,
                 )
             else:
                 pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
                 xt = diffusion.noise_coords(
                     pd_coords,
-                    pd_noise_level,
-                    atom_mask=pd_atom_mask,
+                    pd_atom_mask,
+                    noise_level=pd_noise_level,
                     dummy_fill_mode=dummy_fill_mode,
                 )
             print(

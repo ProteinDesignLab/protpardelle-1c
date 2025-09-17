@@ -404,8 +404,8 @@ class ProtpardelleTrainer:
         noise_level = self.module.training_noise_schedule(timestep)
         noised_coords = diffusion.noise_coords(
             atom_coords,
-            noise_level,
             atom_mask,
+            noise_level=noise_level,
             dummy_fill_mode=self.config.data.dummy_fill_mode,
         )
 
