@@ -588,7 +588,7 @@ class PDBDataset(Dataset):
                 )
             )
         else:
-            with open(f"{self.pdb_path}/{mode}_{subset}pdb_keys.list", "r") as f:
+            with open(f"{self.pdb_path}/{mode}_{subset}_pdb_keys.list", "r") as f:
                 self.pdb_keys = np.array(f.read().split("\n")[:-1])
 
         if overfit > 0:
