@@ -1,8 +1,13 @@
+"""Initialization file for configuration data classes.
+
+Author: Zhaoyang Li
+"""
+
 from typing import TypeAlias
 
-from protpardelle.configs.model_dataclasses import ModelConfig
-from protpardelle.configs.sample_dataclasses import SamplingConfig
-from protpardelle.configs.train_dataclasses import TrainingConfig
+from protpardelle.configs.running_dataclasses import ModelConfig
+from protpardelle.configs.sampling_dataclasses import SamplingConfig
+from protpardelle.configs.training_dataclasses import TrainingConfig
 
 Config: TypeAlias = TrainingConfig | ModelConfig | SamplingConfig
 

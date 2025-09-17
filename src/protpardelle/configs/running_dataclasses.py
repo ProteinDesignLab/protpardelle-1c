@@ -1,4 +1,4 @@
-"""Data classes for model configuration.
+"""Data classes for running configuration.
 
 Author: Zhaoyang Li
 """
