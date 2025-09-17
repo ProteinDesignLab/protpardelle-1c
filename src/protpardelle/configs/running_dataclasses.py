@@ -129,6 +129,6 @@ class Hydra:
 
 
 @dataclass
-class ModelConfig:
+class RunningConfig:
     sampling: Sampling
     hydra: Hydra
