@@ -7,25 +7,24 @@ from typing import Literal
 
 import numpy as np
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 from protpardelle.common import residue_constants
 
 
 def atom14_mask_from_aatype(
-    aatype: torch.Tensor, seq_mask: torch.Tensor | None = None
-) -> torch.Tensor:
+    aatype: Int[torch.Tensor, "B L"], seq_mask: Float[torch.Tensor, "B L"] | None = None
+) -> Float[torch.Tensor, "B L 14"]:
     """Generate a mask for atom14 representation from amino acid type.
 
     Args:
-        aatype (torch.Tensor): Amino acid type tensor of shape (B, L).
-        seq_mask (torch.Tensor | None, optional): Sequence mask tensor of shape (B, L). Defaults to None.
+        aatype (torch.Tensor): Amino acid type tensor.
+        seq_mask (torch.Tensor | None, optional): Sequence mask tensor. Defaults to None.
 
     Returns:
-        torch.Tensor: Atom14 mask tensor of shape (B, L, 14).
+        torch.Tensor: Atom14 mask tensor.
     """
 
-    # source_mask is (21, 14) originally
     device = aatype.device
     source_mask = torch.from_numpy(
         residue_constants.restype_atom14_mask.astype(np.float32)
@@ -41,19 +40,18 @@ def atom14_mask_from_aatype(
 
 
 def atom37_mask_from_aatype(
-    aatype: torch.Tensor, seq_mask: torch.Tensor | None = None
-) -> torch.Tensor:
+    aatype: Int[torch.Tensor, "B L"], seq_mask: Float[torch.Tensor, "B L"] | None = None
+) -> Float[torch.Tensor, "B L 37"]:
     """Generate a mask for atom37 representation from amino acid type.
 
     Args:
-        aatype (torch.Tensor): Amino acid type tensor of shape (B, L).
-        seq_mask (torch.Tensor | None, optional): Sequence mask tensor of shape (B, L). Defaults to None.
+        aatype (torch.Tensor): Amino acid type tensor.
+        seq_mask (torch.Tensor | None, optional): Sequence mask tensor. Defaults to None.
 
     Returns:
-        torch.Tensor: Atom37 mask tensor of shape (B, L, 37).
+        torch.Tensor: Atom37 mask tensor.
     """
 
-    # source_mask is (21, 37) originally
     device = aatype.device
     source_mask = torch.from_numpy(
         residue_constants.restype_atom37_mask.astype(np.float32)
@@ -69,16 +67,16 @@ def atom37_mask_from_aatype(
 
 
 def atom73_mask_from_aatype(
-    aatype: torch.Tensor, seq_mask: torch.Tensor | None = None
-) -> torch.Tensor:
+    aatype: Int[torch.Tensor, "B L"], seq_mask: Float[torch.Tensor, "B L"] | None = None
+) -> Float[torch.Tensor, "B L 73"]:
     """Generate a mask for atom73 representation from amino acid type.
 
     Args:
-        aatype (torch.Tensor): Amino acid type tensor of shape (B, L).
-        seq_mask (torch.Tensor | None, optional): Sequence mask tensor of shape (B, L). Defaults to None.
+        aatype (torch.Tensor): Amino acid type tensor.
+        seq_mask (torch.Tensor | None, optional): Sequence mask tensor. Defaults to None.
 
     Returns:
-        torch.Tensor: Atom73 mask tensor of shape (B, L, 73).
+        torch.Tensor: Atom73 mask tensor.
     """
 
     device = aatype.device
@@ -93,18 +91,18 @@ def atom73_mask_from_aatype(
 
 
 def atom14_coords_to_atom37_coords(
-    atom14_coords: torch.Tensor, aatype: torch.Tensor
-) -> torch.Tensor:
+    atom14_coords: Float[torch.Tensor, "L 14 3"], aatype: Int[torch.Tensor, "L"]
+) -> Float[torch.Tensor, "L 37 3"]:
     """Convert atom14 coordinates to atom37 coordinates.
 
     Not batched.
 
     Args:
-        atom14_coords (torch.Tensor): Atom14 coordinates. (L, 14, 3)
-        aatype (torch.Tensor): Amino acid type. (L,)
+        atom14_coords (torch.Tensor): Atom14 coordinates.
+        aatype (torch.Tensor): Amino acid type.
 
     Returns:
-        torch.Tensor: Atom37 coordinates. (L, 37, 3)
+        torch.Tensor: Atom37 coordinates.
     """
 
     device = atom14_coords.device
@@ -127,16 +125,16 @@ def atom14_coords_to_atom37_coords(
 
 
 def atom14_coords_to_atom37_coords_batched(
-    atom14_coords: torch.Tensor, aatype: torch.Tensor
-) -> torch.Tensor:
+    atom14_coords: Float[torch.Tensor, "B L 14 3"], aatype: Int[torch.Tensor, "B L"]
+) -> Float[torch.Tensor, "B L 37 3"]:
     """Convert atom14 coordinates to atom37 coordinates.
 
     Args:
-        atom14_coords (torch.Tensor): Atom14 coordinates. (B, L, 14, 3)
-        aatype (torch.Tensor): Amino acid type. (B, L)
+        atom14_coords (torch.Tensor): Atom14 coordinates.
+        aatype (torch.Tensor): Amino acid type.
 
     Returns:
-        torch.Tensor: Atom37 coordinates. (B, L, 37, 3)
+        torch.Tensor: Atom37 coordinates.
     """
 
     device = atom14_coords.device
@@ -163,19 +161,19 @@ def atom14_coords_to_atom37_coords_batched(
 
 
 def atom37_coords_to_atom14_coords(
-    atom37_coords: torch.Tensor,
-    aatype: torch.Tensor,
-) -> torch.Tensor:
+    atom37_coords: Float[torch.Tensor, "L 37 3"],
+    aatype: Int[torch.Tensor, "L"],
+) -> Float[torch.Tensor, "L 14 3"]:
     """Convert atom37 coordinates to atom14 coordinates.
 
     Not batched.
 
     Args:
-        atom37_coords (torch.Tensor): Atom37 coordinates. (L, 37, 3)
-        aatype (torch.Tensor): Amino acid types. (L,)
+        atom37_coords (torch.Tensor): Atom37 coordinates.
+        aatype (torch.Tensor): Amino acid types.
 
     Returns:
-        torch.Tensor: Atom14 coordinates. (L, 14, 3)
+        torch.Tensor: Atom14 coordinates.
     """
 
     device = atom37_coords.device
@@ -193,19 +191,19 @@ def atom37_coords_to_atom14_coords(
 
 
 def b_factors_37_to_b_factors_14(
-    b_factors_37: torch.Tensor,
-    aatype: torch.Tensor,
-) -> torch.Tensor:
+    b_factors_37: Float[torch.Tensor, "L 37"],
+    aatype: Int[torch.Tensor, "L"],
+) -> Float[torch.Tensor, "L 14"]:
     """Convert B-factors from atom37 representation to atom14 representation.
 
     Not batched.
 
     Args:
-        b_factors_37 (torch.Tensor): B-factors in atom37 representation. (L, 37)
-        aatype (torch.Tensor): Amino acid types. (L,)
+        b_factors_37 (torch.Tensor): B-factors in atom37 representation.
+        aatype (torch.Tensor): Amino acid types.
 
     Returns:
-        torch.Tensor: B-factors in atom14 representation. (L, 14)
+        torch.Tensor: B-factors in atom14 representation.
     """
 
     device = b_factors_37.device
@@ -222,16 +220,18 @@ def b_factors_37_to_b_factors_14(
     return b_factors_14
 
 
-def bb_coords_to_atom37_coords(bb_coords: torch.Tensor) -> torch.Tensor:
+def bb_coords_to_atom37_coords(
+    bb_coords: Float[torch.Tensor, "L 4 3"],
+) -> Float[torch.Tensor, "L 37 3"]:
     """Convert backbone coordinates to atom37 coordinates.
 
     Not batched.
 
     Args:
-        bb_coords (torch.Tensor): Backbone coordinates. (L, 4, 3)
+        bb_coords (torch.Tensor): Backbone coordinates.
 
     Returns:
-        torch.Tensor: Atom37 coordinates. (L, 37, 3)
+        torch.Tensor: Atom37 coordinates.
     """
 
     device = bb_coords.device
@@ -245,18 +245,18 @@ def bb_coords_to_atom37_coords(bb_coords: torch.Tensor) -> torch.Tensor:
 
 
 def atom37_coords_to_atom73_coords(
-    atom37_coords: torch.Tensor, aatype: torch.Tensor
-) -> torch.Tensor:
+    atom37_coords: Float[torch.Tensor, "L 37 3"], aatype: Int[torch.Tensor, "L"]
+) -> Float[torch.Tensor, "L 73 3"]:
     """Convert atom37 coordinates to atom73 coordinates.
 
     Not batched.
 
     Args:
-        atom37_coords (torch.Tensor): Atom37 coordinates. (L, 37, 3)
-        aatype (torch.Tensor): Amino acid types. (L,)
+        atom37_coords (torch.Tensor): Atom37 coordinates.
+        aatype (torch.Tensor): Amino acid types.
 
     Returns:
-        torch.Tensor: Atom73 coordinates. (L, 73, 3)
+        torch.Tensor: Atom73 coordinates.
     """
 
     device = atom37_coords.device
@@ -276,18 +276,18 @@ def atom37_coords_to_atom73_coords(
 
 
 def atom73_coords_to_atom37_coords(
-    atom73_coords: torch.Tensor, aatype: torch.Tensor
-) -> torch.Tensor:
+    atom73_coords: Float[torch.Tensor, "L 73 3"], aatype: Int[torch.Tensor, "L"]
+) -> Float[torch.Tensor, "L 37 3"]:
     """Convert atom73 coordinates to atom37 coordinates.
 
     Not batched.
 
     Args:
-        atom73_coords (torch.Tensor): Atom73 coordinates. (L, 73, 3)
-        aatype (torch.Tensor): Amino acid types. (L,)
+        atom73_coords (torch.Tensor): Atom73 coordinates.
+        aatype (torch.Tensor): Amino acid types.
 
     Returns:
-        torch.Tensor: Atom37 coordinates. (L, 37, 3)
+        torch.Tensor: Atom37 coordinates.
     """
 
     device = atom73_coords.device
@@ -306,19 +306,22 @@ def atom73_coords_to_atom37_coords(
     return atom37_coords
 
 
-def fill_in_cbeta_for_atom37_coords(atom37_coords: torch.Tensor) -> torch.Tensor:
-    """Fill in the CBeta atom coordinates for a given set of atom37 coordinates.
+def fill_in_cbeta_for_atom37_coords(
+    atom37_coords: Float[torch.Tensor, "... 37 3"],
+) -> Float[torch.Tensor, "... 37 3"]:
+    """Fill in the CB atom coordinates for a given set of atom37 coordinates.
 
     Args:
-        atom37_coords (torch.Tensor): Atom37 coordinates. (L, 37, 3)
+        atom37_coords (torch.Tensor): Atom37 coordinates.
 
     Returns:
-        torch.Tensor: Updated Atom37 coordinates with CBeta filled in. (L, 37, 3)
+        torch.Tensor: Updated Atom37 coordinates with CB filled in.
     """
 
     b = atom37_coords[..., 1, :] - atom37_coords[..., 0, :]
     c = atom37_coords[..., 2, :] - atom37_coords[..., 1, :]
-    a = torch.cross(b, c, dim=-1)
+    a = torch.linalg.cross(b, c)  # pylint: disable=not-callable
+
     cbeta = -0.58273431 * a + 0.56802827 * b - 0.54067466 * c + atom37_coords[..., 1, :]
     updated_atom37_coords = torch.clone(atom37_coords)
     updated_atom37_coords[..., 3, :] = cbeta
@@ -327,10 +330,10 @@ def fill_in_cbeta_for_atom37_coords(atom37_coords: torch.Tensor) -> torch.Tensor
 
 
 def dummy_fill(
-    atom37_coords: Float[torch.Tensor, "L 37 3"],
-    atom37_mask: Float[torch.Tensor, "L 37"],
+    atom37_coords: Float[torch.Tensor, "... 37 3"],
+    atom37_mask: Float[torch.Tensor, "... 37"],
     mode: Literal["CA", "CB", "zero"] = "zero",
-) -> Float[torch.Tensor, "L 37 3"]:
+) -> Float[torch.Tensor, "... 37 3"]:
     """Fill in ghost side chain atoms with either the CA or CB atom value
     for each residue, depending on the mode.
 
@@ -344,7 +347,7 @@ def dummy_fill(
         torch.Tensor: Filled coordinates.
     """
 
-    dummy_fill_mask: Float[torch.Tensor, "L 37"] = 1.0 - atom37_mask
+    dummy_fill_mask: Float[torch.Tensor, "... 37"] = 1.0 - atom37_mask
 
     if mode == "CA":
         dummy_fill_value = atom37_coords[..., 1:2, :]  # CA
@@ -360,4 +363,5 @@ def dummy_fill(
     atom37_coords = atom37_coords * atom37_mask.unsqueeze(
         -1
     ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
+
     return atom37_coords
