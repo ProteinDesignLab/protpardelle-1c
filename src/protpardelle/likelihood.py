@@ -130,11 +130,11 @@ def forward_ode(
             dummy_fill_mask = 1 - atom_mask
             if x0 is not None:
                 dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
+                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, target=xt)
                 ) + x0[:, :, 1:2, :]
             else:
                 dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
+                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, target=xt)
                 ) + xt[:, :, 1:2, :]
             xt = xt * atom_mask
             xt = xt + dummy_fill_noise * dummy_fill_mask
@@ -147,7 +147,7 @@ def forward_ode(
             chain_index=chain_index,
             run_mpnn_model=False,
         )
-        dx_dt = (xt - x0) / utils.unsqueeze_trailing_dims(sigma, xt)
+        dx_dt = (xt - x0) / utils.unsqueeze_trailing_dims(sigma, target=xt)
         dx_dt = dx_dt * atom_mask
         return dx_dt, x0
 
@@ -166,17 +166,17 @@ def forward_ode(
                 hutch_proj = (dx_dt * eps * atom_mask).sum()
                 grad = torch.autograd.grad(hutch_proj, xt)[0]
             xt.requires_grad_(False)
-            dx = dx_dt * utils.unsqueeze_trailing_dims(step_size, dx_dt)
+            dx = dx_dt * utils.unsqueeze_trailing_dims(step_size, target=dx_dt)
             xt = xt + dx
             dlogp_dt = (grad * eps * atom_mask).sum((1, 2, 3))
-            dlogp = dlogp_dt * utils.unsqueeze_trailing_dims(step_size, dlogp_dt)
+            dlogp = dlogp_dt * utils.unsqueeze_trailing_dims(step_size, target=dlogp_dt)
             sum_dlogp = sum_dlogp + dlogp
 
             sigma = sigma_next
 
             # Logging
             xt_scale = sigma_data / utils.unsqueeze_trailing_dims(
-                torch.sqrt(sigma_next**2 + sigma_data**2), xt
+                torch.sqrt(sigma_next**2 + sigma_data**2), target=xt
             )
             scaled_xt = xt * xt_scale
             xt_traj.append(scaled_xt.cpu())
