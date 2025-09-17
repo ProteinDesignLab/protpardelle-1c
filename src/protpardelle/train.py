@@ -377,8 +377,8 @@ class ProtpardelleTrainer:
                 )
             atom_coords, crop_cond_mask, hotspot_mask = (
                 make_crop_cond_mask_and_recenter_coords(
-                    atom_mask,
-                    atom_coords,
+                    atom_coords=atom_coords,
+                    atom_mask=atom_mask,
                     aatype=aatype,
                     chain_index=chain_index,
                     **vars(self.config.train.crop_cond),

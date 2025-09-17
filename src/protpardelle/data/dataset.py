@@ -8,25 +8,21 @@ import math
 from collections.abc import Sequence
 from itertools import accumulate
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from jaxtyping import Float
 from torch.utils.data import Dataset, RandomSampler, Sampler
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
-import protpardelle.data.pdb_io
-import protpardelle.utils
-from protpardelle.common.residue_constants import (
-    RFDIFFUSION_BENCHMARK_TIP_ATOMS,
-    atom_order,
-    order_restype,
-    restype_1to3,
-)
-from protpardelle.data import atom
+from protpardelle.common import residue_constants
+from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
+from protpardelle.data.pdb_io import load_feats_from_pdb
+from protpardelle.utils import unsqueeze_trailing_dims
 
 FEATURES_1D = (
     "coords_in",
@@ -56,18 +52,18 @@ FEATURES_LONG = ("aatype", "residue_index", "chain_index", "orig_size", "sse", "
 
 
 def make_fixed_size_1d(
-    data: torch.Tensor, fixed_size: int = 128
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pads or crops a 1D tensor (L, ...) to (fixed_size, ...).
+    data: Float[torch.Tensor, "L ..."], fixed_size: int = 128
+) -> tuple[Float[torch.Tensor, "N ..."], Float[torch.Tensor, "N"]]:
+    """Pads or crops a 1D tensor.
 
     Args:
-        data (torch.Tensor): Input tensor of shape (L, ...).
+        data (torch.Tensor): Input tensor.
         fixed_size (int): Desired length.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor]: A tuple containing:
-            new_data (torch.Tensor): Tensor of shape (fixed_size, ...).
-            mask (torch.Tensor): Binary mask of shape (fixed_size) indicating valid data.
+            new_data (torch.Tensor): New tensor.
+            mask (torch.Tensor): Binary mask indicating valid data.
     """
 
     data_len = data.shape[0]
@@ -93,18 +89,18 @@ def make_fixed_size_1d(
 
 
 def make_fixed_size_2d(
-    data: torch.Tensor, fixed_size: int = 128
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pads or crops a 2D tensor (H, W, ...) to (fixed_size, fixed_size, ...).
+    data: Float[torch.Tensor, "H W ..."], fixed_size: int = 128
+) -> tuple[Float[torch.Tensor, "N N ..."], Float[torch.Tensor, "N N"]]:
+    """Pads or crops a 2D tensor.
 
     Args:
-        data (torch.Tensor): Input tensor of shape (H, W, ...).
+        data (torch.Tensor): Input tensor.
         fixed_size (int, optional): Desired height and width. Defaults to 128.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor]: A tuple containing:
-            new_data (torch.Tensor): Tensor of shape (fixed_size, fixed_size, ...).
-            mask (torch.Tensor): Binary mask of shape (fixed_size, fixed_size) indicating valid data.
+            new_data (torch.Tensor): New tensor.
+            mask (torch.Tensor): Binary mask indicating valid data.
     """
 
     H, W, *extra_shapes = data.shape
@@ -153,33 +149,52 @@ def make_fixed_size_2d(
 
 
 def apply_random_se3(
-    coords_in, atom_mask=None, translation_scale=1.0, return_rot: bool = False
-):
-    # unbatched. center on the mean of CA coords
-    coords_mean = coords_in[:, 1:2].mean(-3, keepdim=True)
-    coords_in -= coords_mean
+    atom_coords: Float[torch.Tensor, "L A 3"],
+    atom_mask: Float[torch.Tensor, "L A"] | None = None,
+    translation_scale: float = 1.0,
+) -> Float[torch.Tensor, "L A 3"]:
+    """Applies a random rotation and translation to the coordinates.
+
+    Not batched.
+
+    Args:
+        atom_coords (torch.Tensor): Input coordinates.
+        atom_mask (torch.Tensor | None, optional): Atom mask.
+        translation_scale (float, optional): Scale for translation. Defaults to 1.0.
+
+    Returns:
+        torch.Tensor: Transformed coordinates.
+    """
+
+    coords_mean = atom_coords[:, 1:2].mean(dim=-3, keepdim=True)
+    atom_coords = atom_coords - coords_mean
+
     random_rot = uniform_rand_rotation(1).squeeze(0)
-    coords_in = coords_in @ random_rot
+    atom_coords = atom_coords @ random_rot
     random_trans = torch.randn_like(coords_mean) * translation_scale
-    coords_in += random_trans
+    atom_coords = atom_coords + random_trans
+
     if atom_mask is not None:
-        coords_in = coords_in * atom_mask.unsqueeze(-1)
-    if return_rot:
-        return coords_in, random_rot
-    else:
-        return coords_in
+        atom_coords = atom_coords * atom_mask.unsqueeze(-1)
+    return atom_coords
 
 
-def uniform_rand_rotation(batch_size):
+def uniform_rand_rotation(batch_size: int) -> Float[torch.Tensor, "B 3 3"]:
+    """Creates a rotation matrix uniformly at random in SO(3).
+
+    Uses quaternionic multiplication to generate independent rotation matrices for each batch.
+
+    Args:
+        batch_size (int): The number of rotation matrices to generate.
+
+    Returns:
+        torch.Tensor: The generated rotation matrices.
     """
-    Creates a shape (batch_size, 3, 3) rotation matrix uniformly at random in SO(3)
-    Uses quaternionic multiplication to generate independent rotation matrices for each batch
 
-    Credit: Steven Dunne
-    """
     q = torch.randn(batch_size, 4)
-    q /= torch.norm(q, dim=1, keepdim=True)
-    rotation = torch.zeros(batch_size, 3, 3).to(q)
+    q = q / torch.norm(q, dim=1, keepdim=True)
+    rotation = torch.zeros(batch_size, 3, 3)
+
     a, b, c, d = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
     rotation[:, 0, :] = torch.stack(
         [2 * a**2 - 1 + 2 * b**2, 2 * b * c - 2 * a * d, 2 * b * d + 2 * a * c]
@@ -190,41 +205,69 @@ def uniform_rand_rotation(batch_size):
     rotation[:, 2, :] = torch.stack(
         [2 * b * d - 2 * a * c, 2 * c * d + 2 * a * b, 2 * a**2 - 1 + 2 * d**2]
     ).T
+
     return rotation
 
 
 def dummy_fill(
-    coords_in: TensorType["n a 3"], atom_mask: TensorType["n a"], mode: str
-) -> TensorType["n a 3"]:
-    """
-    Fill in ghost side chain atoms with either the CA or CB atom value for each residue, depending on the mode.
+    atom37_coords: Float[torch.Tensor, "L 37 3"],
+    atom37_mask: Float[torch.Tensor, "L 37"],
+    mode: Literal["CA", "CB", "zero"] = "zero",
+) -> Float[torch.Tensor, "L 37 3"]:
+    """Fill in ghost side chain atoms with either the CA or CB atom value
+    for each residue, depending on the mode.
 
-    Default to zeros if mode is not "CA" or "CB"
+    Args:
+        atom37_coords (torch.Tensor): Input coordinates.
+        atom37_mask (torch.Tensor): Atom mask.
+        mode (Literal["CA", "CB", "zero"], optional): Mode for filling in ghost atoms.
+            Defaults to "zero".
+
+    Returns:
+        torch.Tensor: Filled coordinates.
     """
-    assert mode in ["CA", "CB"], f"Invalid dummy fill mode: {mode}"
-    dummy_fill_mask = 1 - atom_mask
+
+    dummy_fill_mask = 1 - atom37_mask
+
     if mode == "CA":
-        dummy_fill_value = coords_in[..., 1:2, :]  # CA
+        dummy_fill_value = atom37_coords[..., 1:2, :]  # CA
     elif mode == "CB":
-        dummy_fill_value = atom.fill_in_cbeta_for_atom37_coords(coords_in)[
+        dummy_fill_value = fill_in_cbeta_for_atom37_coords(atom37_coords)[
             ..., 3:4, :
         ]  # idealized CB
+    elif mode == "zero":
+        dummy_fill_value = torch.zeros_like(atom37_coords)
     else:
-        dummy_fill_value = 0
-    coords_in = coords_in * atom_mask.unsqueeze(
+        raise ValueError(f"Unknown dummy fill mode: {mode}")
+
+    atom37_coords = atom37_coords * atom37_mask.unsqueeze(
         -1
     ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
-    return coords_in
+    return atom37_coords
 
 
-def get_masked_coords_array(coords, atom_mask):
+def get_masked_coords_array(
+    atom_coords: Float[torch.Tensor, "L A 3"],
+    atom_mask: Float[torch.Tensor, "L A"],
+) -> np.ma.MaskedArray:
+    """Create a masked array from atom coordinates and mask.
+
+    Args:
+        atom_coords (torch.Tensor): Atom coordinates.
+        atom_mask (torch.Tensor): Atom mask.
+
+    Returns:
+        np.ma.MaskedArray: Masked array of atom coordinates.
+    """
+
     ma_mask = repeat(1 - atom_mask.unsqueeze(-1).cpu().numpy(), "... 1 -> ... 3")
-    return np.ma.array(coords.cpu().numpy(), mask=ma_mask)
+
+    return np.ma.array(atom_coords.cpu().numpy(), mask=ma_mask)
 
 
 def make_crop_cond_mask_and_recenter_coords(
-    atom_mask: torch.Tensor,
     atom_coords: torch.Tensor,
+    atom_mask: torch.Tensor,
     aatype: torch.Tensor | None = None,
     chain_index: torch.Tensor | None = None,
     contiguous_prob: float = 0.05,
@@ -416,12 +459,17 @@ def make_crop_cond_mask_and_recenter_coords(
                 motif_idx = torch.nonzero(mask.sum(-1)).flatten()
                 for mi in motif_idx:
                     aatype_int = aatype[i][mi]
-                    motif_aatype_str = restype_1to3[order_restype[aatype_int.item()]]
+                    motif_aatype_str = residue_constants.restype_1to3[
+                        residue_constants.order_restype[aatype_int.item()]
+                    ]
 
                     # Original Protpardelle tip atom definition, also used in La-Proteina
-                    tip_atomtypes = RFDIFFUSION_BENCHMARK_TIP_ATOMS[motif_aatype_str]
+                    tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                        motif_aatype_str
+                    ]
                     tip_atom_idx_atom37 = [
-                        atom_order.get(atype) for atype in tip_atomtypes
+                        residue_constants.atom_order.get(atype)
+                        for atype in tip_atomtypes
                     ]
 
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)
@@ -464,7 +512,7 @@ class PDBDataset(Dataset):
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
-        dummy_fill_mode: str = "zero",
+        dummy_fill_mode: Literal["CA", "CB", "zero"] = "zero",
         subset: str | float = "",
     ) -> None:
         """Initialize the PDBDataset.
@@ -485,8 +533,8 @@ class PDBDataset(Dataset):
                 Defaults to 1.0.
             chain_residx_gap (int, optional): Offset added to residue indices to
                 separate chains. Defaults to 200.
-            dummy_fill_mode (str, optional): Strategy to fill coordinates for
-                non-existing atoms (e.g., "zero"). Defaults to "zero".
+            dummy_fill_mode (Literal["CA", "CB", "zero"], optional): Strategy to fill coordinates
+                for non-existing atoms. Defaults to "zero".
             subset (str | float, optional): Dataset-specific subset identifier to
                 train on; if a float in (0, 1], interpreted as a fraction of data
                 to sample. Defaults to "".
@@ -550,10 +598,7 @@ class PDBDataset(Dataset):
             ).repeat(n_data // overfit)
 
     def __len__(self):
-        if self.short_epoch:
-            return min(len(self.pdb_keys), 256)
-        else:
-            return len(self.pdb_keys)
+        return min(len(self.pdb_keys), 256) if self.short_epoch else len(self.pdb_keys)
 
     def __getitem__(self, idx):
         pdb_key = self.pdb_keys[idx]
@@ -595,7 +640,7 @@ class PDBDataset(Dataset):
             raise ValueError("Invalid pdb path.")
 
         try:
-            example, _ = protpardelle.data.pdb_io.load_feats_from_pdb(
+            example, _ = load_feats_from_pdb(
                 data_file, chain_residx_gap=self.chain_residx_gap, chain_id=chain_id
             )
             coords_in = example["atom_positions"]
@@ -605,11 +650,10 @@ class PDBDataset(Dataset):
 
         # Apply data augmentation
         if self.se3_data_augment:
-            coords_in, random_rot = apply_random_se3(
+            coords_in = apply_random_se3(
                 coords_in,
                 atom_mask=example["atom_mask"],
                 translation_scale=self.translation_scale,
-                return_rot=True,
             )
         else:
             coords_mean = coords_in[:, 1:2].mean(-3, keepdim=True)
@@ -831,7 +875,7 @@ def calc_sigma_data(
 
         if config.train.crop_conditional:
             coords, _, _ = make_crop_cond_mask_and_recenter_coords(
-                atom_mask, coords, **vars(config.train.crop_cond)
+                atom_coords=coords, atom_mask=atom_mask, **vars(config.train.crop_cond)
             )
 
         collected_coords.append(coords)
@@ -849,9 +893,9 @@ def calc_sigma_data(
 
     if config.model.compute_loss_on_all_atoms:
         # Compute sigma_data on all 37 atoms for each residue
-        atom_mask = torch.ones_like(
-            atom_mask
-        ) * protpardelle.utils.unsqueeze_trailing_dims(seq_mask, atom_mask)
+        atom_mask = torch.ones_like(atom_mask) * unsqueeze_trailing_dims(
+            seq_mask, atom_mask
+        )
 
     # Estimate sigma_data
     masked_coords = get_masked_coords_array(coords, atom_mask)
