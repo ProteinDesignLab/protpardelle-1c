@@ -143,8 +143,11 @@ def make_fixed_size_2d(
     )
 
     new_data = F.pad(cropped, pad_dims)
+
+    # Mask is 2D (H, W), so pad with 4 values only (W then H).
     valid = torch.ones((h_len, w_len), device=device)
-    mask = F.pad(valid, pad_dims)
+    pad_dims_mask = (0, pad_w, 0, pad_h)
+    mask = F.pad(valid, pad_dims_mask)
 
     return new_data, mask
 
