@@ -243,18 +243,19 @@ def unsqueeze_trailing_dims(
 
     Args:
         x (torch.Tensor): The input tensor.
-        target (torch.Tensor | None, optional): The target tensor to match dimensions with. Defaults to None.
-        add_ndims (int, optional): The number of dimensions to add. Defaults to 1.
+        target (torch.Tensor | None, optional): The target tensor to match dimensions with.
+            If None, add_ndims will be used. Defaults to None.
+        add_ndims (int, optional): The number of dimensions to add. Can be overridden by target.
+            Defaults to 1.
 
     Returns:
         torch.Tensor: The modified tensor with trailing dimensions unsqueezed.
     """
 
-    if target is None:
-        for _ in range(add_ndims):
-            x = x.unsqueeze(-1)
-    else:
-        while len(x.shape) < len(target.shape):
-            x = x.unsqueeze(-1)
+    if target is not None:
+        add_ndims = target.ndim - x.ndim
 
-    return x
+    if add_ndims > 0:
+        return x[(...,) + (None,) * add_ndims]
+
+    raise ValueError("Must add a positive number of dimensions.")
