@@ -20,6 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from jaxtyping import Float, Int
 from omegaconf import DictConfig
 from torch.types import Device
 from torchtyping import TensorType
@@ -46,14 +47,14 @@ logger = get_logger(__name__)
 
 
 def fill_motif_seq(
-    s_hat: torch.Tensor,
+    s_hat: Int[torch.Tensor, "B L"],
     motif_idx: list[list[int]],
     motif_aatype: list[list[int]],
 ) -> torch.Tensor:
     """Fill in the motif sequence in the predicted sequence.
 
     Args:
-        s_hat (torch.Tensor): The predicted sequence. (B, L)
+        s_hat (torch.Tensor): The predicted sequence.
         motif_idx (list[list[int]]): The indices of the motif positions.
         motif_aatype (list[list[int]]): The amino acid types of the motifs.
 
@@ -73,11 +74,11 @@ def fill_motif_seq(
 
 
 def apply_crop_cond_strategy(
-    coords: torch.Tensor,
+    coords: Float[torch.Tensor, "B L 37 3"],
     motif_idx: list[list[int]],
     motif_aatype: list[list[str]],
     strategy: Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"],
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "B L 37 3"]:
     """Apply crop-conditioning by zeroing out non-conditioned atoms.
 
     Strategies:
@@ -88,9 +89,9 @@ def apply_crop_cond_strategy(
         - "backbone-sidechain": keep everything (no masking).
 
     Args:
-        coords (torch.Tensor): The input coordinates. (B, L, A, 3)
-        motif_idx (list[list[int]]): A list of length B, each a list[int] for motif residue indices
-        motif_aatype (list[list[str]]): A list of length B, each a list[str] for motif amino acid types
+        coords (torch.Tensor): The input coordinates.
+        motif_idx (list[list[int]]): A list of length B, each a list[int] for motif residue indices.
+        motif_aatype (list[list[str]]): A list of length B, each a list[str] for motif amino acid types.
         strategy (Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"]):
             The cropping strategy to apply.
 
@@ -98,7 +99,7 @@ def apply_crop_cond_strategy(
         ValueError: If an unknown strategy is provided.
 
     Returns:
-        torch.Tensor: The cropped coordinates. (B, L, A, 3)
+        torch.Tensor: The cropped coordinates.
     """
 
     # Remove heteroatom entries from motif_aatype if present
@@ -106,7 +107,7 @@ def apply_crop_cond_strategy(
         [ma for ma in mab if ma in residue_constants.restype_3to1]
         for mab in motif_aatype
     ]
-    crop = coords.clone()
+    crop_cond_coords = coords.clone()
 
     # Indices: backbone atoms are [0, 1, 2, 4]; sidechain is complement (3 and 5:)
     backbone_idxs = [0, 1, 2, 4]
@@ -114,13 +115,13 @@ def apply_crop_cond_strategy(
 
     if strategy == "backbone":
         # Zero all sidechain atoms globally
-        crop[:, :, sidechain_idxs] = 0
+        crop_cond_coords[:, :, sidechain_idxs] = 0
     elif strategy == "sidechain":
         # Zero backbone atoms globally
-        crop[:, :, backbone_idxs] = 0
+        crop_cond_coords[:, :, backbone_idxs] = 0
     elif strategy == "sidechain-tip":
-        # Zero backbone globally
-        crop[:, :, backbone_idxs] = 0
+        # Zero backbone atoms globally
+        crop_cond_coords[:, :, backbone_idxs] = 0
 
         # For motif residues, keep only tip atoms for that residue type
         for b, (idxs, aatypes) in enumerate(zip(motif_idx, motif_aatype)):
@@ -130,18 +131,22 @@ def apply_crop_cond_strategy(
                 tip_atoms = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aatype]
                 keep_idxs = [residue_constants.atom_order[atom] for atom in tip_atoms]
                 crop_idxs = np.delete(np.arange(37), keep_idxs)
-                crop[b, idx, crop_idxs] = 0
+                crop_cond_coords[b, idx, crop_idxs] = 0
     elif strategy == "backbone-sidechain":
         # Keep everything
         pass
     else:
         raise ValueError(f"Unknown crop conditioning strategy: {strategy}")
 
-    return crop
+    return crop_cond_coords
 
 
 def get_time_dependent_scale(
-    schedule: str, w: float, curr_step: int, n_steps: int, stage2: bool = False
+    schedule: Literal["constant", "cubic", "quadratic", "custom"],
+    w: float,
+    curr_step: int,
+    n_steps: int,
+    stage2: bool = False,
 ) -> float:
     """Get a time-dependent scaling factor.
 
@@ -155,7 +160,8 @@ def get_time_dependent_scale(
     The returned value is multiplied by guidance weight w.
 
     Args:
-        schedule (str): The scheduling strategy to use.
+        schedule (Literal["constant", "cubic", "quadratic", "custom"]):
+            The scheduling strategy to use.
         w (float): The base weight to scale.
         curr_step (int): The current step in the process.
         n_steps (int): The total number of steps.
@@ -200,47 +206,70 @@ def get_time_dependent_scale(
 
 
 def motif_loss(
-    x: torch.Tensor,
+    x: Float[torch.Tensor, "B L 37 3"],
     motif_idx: list[list[int]],
-    motif_coords: torch.Tensor,
-    atom_mask: torch.Tensor,
-) -> torch.Tensor:
+    motif_coords: Float[torch.Tensor, "B M 37 3"],
+    atom_mask: Float[torch.Tensor, "B L 37"],
+) -> Float[torch.Tensor, "B"]:
     """Compute the motif loss.
 
     Args:
-        x (torch.Tensor): The input tensor. (B, L, 37, 3)
+        x (torch.Tensor): The input tensor.
         motif_idx (list[list[int]]): The motif indices. A list of length B,
-            each a list[int] for motif residue indices
-        motif_coords (torch.Tensor): The motif coordinates. (B, M, 37, 3)
-        atom_mask (torch.Tensor): The atom mask. (B, L, 37)
+            each a list[int] for motif residue indices.
+        motif_coords (torch.Tensor): The motif coordinates. Each batch shares the same
+            motif length.
+        atom_mask (torch.Tensor): The atom mask.
 
     Returns:
-        torch.Tensor: The computed motif loss. (B,)
+        torch.Tensor: The computed motif loss.
     """
 
     batch_size = x.shape[0]
-    losses: list[torch.Tensor] = []
+    loss_list: list[Float[torch.Tensor, ""]] = []
     for b in range(batch_size):
         loss = (x[b, motif_idx[b]] - motif_coords[b]).square().sum(-1)
-        losses.append(torch.sum(loss * atom_mask[b, motif_idx[b]]))
+        loss_list.append(torch.sum(loss * atom_mask[b, motif_idx[b]]))
+    losses = torch.stack(loss_list)
 
-    return torch.stack(losses)
+    return losses
 
 
-def group_consecutive_idx(nums):
+def group_consecutive_idx(nums: list[int]) -> list[list[int]]:
+    """Group consecutive indices in a list of integers.
 
-    nums = np.array(nums)
+    Args:
+        nums (list[int]): The input list of integers.
+
+    Returns:
+        list[list[int]]: A list of lists, where each sublist contains
+        consecutive integers from the input list.
+    """
+
+    nums_array = np.array(nums)
+
     # Find the indices where the difference between consecutive elements is greater than 1
-    breaks = np.where(np.diff(nums) != 1)[0] + 1
+    breaks = np.where(np.diff(nums_array) != 1)[0] + 1
 
     # Split the array at those indices
-    result = np.split(nums, breaks)
+    result = np.split(nums_array, breaks)
 
     # Convert the subarrays to lists
     return [sublist.tolist() for sublist in result]
 
 
 def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
+    """Convert a list of contiguous integer ranges to a list of indices.
+
+    Args:
+        contig (list[list[int]]): A list of lists, where each sublist contains
+            contiguous integers.
+
+    Returns:
+        list[list[int]]: A list of lists, where each sublist contains the
+            corresponding indices for the contiguous ranges.
+    """
+
     result = []
     start_idx = 0
     for c in contig:
