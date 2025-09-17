@@ -1,9 +1,3 @@
-model:
-  model_ckpt: "" # Path to denoiser model weights
-  model_cfg: "" # Path to denoiser model config
-  minimpnn_path: "" # Path to minimpnn model weights
-  full_mpnn_path: "" # If provided, replace full MPNN in model_cfg with this path
-
 sampling:
   n_steps: 500 # number of denoising steps
   s_churn: 200 # add s_churn / n_steps amount of noise when noise level is between s_max and s_min
