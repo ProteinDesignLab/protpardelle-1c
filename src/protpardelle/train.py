@@ -51,7 +51,7 @@ def masked_cross_entropy_loss(
     logprobs: torch.Tensor,
     target: torch.Tensor,
     loss_mask: torch.Tensor,
-    tol: float = 1e-7,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked cross-entropy loss.
 
@@ -59,6 +59,7 @@ def masked_cross_entropy_loss(
         logprobs (torch.Tensor): Log probabilities of the predicted tokens.
         target (torch.Tensor): One-hot encoded target tokens.
         loss_mask (torch.Tensor): Mask to apply to the loss.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked cross-entropy loss.
@@ -76,7 +77,7 @@ def masked_mse_loss(
     y: torch.Tensor,
     mask: torch.Tensor,
     weights: torch.Tensor | None = None,
-    tol: float = 1e-7,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked mean squared error loss.
 
@@ -85,7 +86,7 @@ def masked_mse_loss(
         y (torch.Tensor): Target values.
         mask (torch.Tensor): Mask to apply to the loss.
         weights (torch.Tensor | None, optional): Weights to apply to the loss. Defaults to None.
-        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-7.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked mean squared error loss.
