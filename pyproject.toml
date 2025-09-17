@@ -6,13 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "protpardelle"
 authors = [
     { name = "Tianyu Lu", email = "tianyulu@stanford.edu" },
-    { name = "Richard W. Shuai", email = "rshuai@stanford.edu" },
+    { name = "Richard Shuai", email = "rshuai@stanford.edu" },
     { name = "Petr Kouba", email = "petrkouba3@gmail.com" },
     { name = "Zhaoyang Li", email = "zhaoyangli@stanford.edu" },
     { name = "Yilin Chen", email = "yilinc5@stanford.edu" },
     { name = "Akio Shirali", email = "akios@stanford.edu" },
     { name = "Jinho Kim", email = "zhkim216@stanford.edu" },
-    { name = "Possu Huang", email = "possu@stanford.edu" },
+    { name = "Po-Ssu Huang", email = "possu@stanford.edu" },
 ]
 license = { file = "LICENSE" }
 dynamic = ["version"]
