@@ -20,7 +20,7 @@ from torch.utils.data import Dataset, RandomSampler, Sampler
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
-from protpardelle.data.atom import fill_in_cbeta_for_atom37_coords
+from protpardelle.data.atom import dummy_fill
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.utils import unsqueeze_trailing_dims
 
@@ -207,43 +207,6 @@ def uniform_rand_rotation(batch_size: int) -> Float[torch.Tensor, "B 3 3"]:
     ).T
 
     return rotation
-
-
-def dummy_fill(
-    atom37_coords: Float[torch.Tensor, "L 37 3"],
-    atom37_mask: Float[torch.Tensor, "L 37"],
-    mode: Literal["CA", "CB", "zero"] = "zero",
-) -> Float[torch.Tensor, "L 37 3"]:
-    """Fill in ghost side chain atoms with either the CA or CB atom value
-    for each residue, depending on the mode.
-
-    Args:
-        atom37_coords (torch.Tensor): Input coordinates.
-        atom37_mask (torch.Tensor): Atom mask.
-        mode (Literal["CA", "CB", "zero"], optional): Mode for filling in ghost atoms.
-            Defaults to "zero".
-
-    Returns:
-        torch.Tensor: Filled coordinates.
-    """
-
-    dummy_fill_mask = 1 - atom37_mask
-
-    if mode == "CA":
-        dummy_fill_value = atom37_coords[..., 1:2, :]  # CA
-    elif mode == "CB":
-        dummy_fill_value = fill_in_cbeta_for_atom37_coords(atom37_coords)[
-            ..., 3:4, :
-        ]  # idealized CB
-    elif mode == "zero":
-        dummy_fill_value = torch.zeros_like(atom37_coords)
-    else:
-        raise ValueError(f"Unknown dummy fill mode: {mode}")
-
-    atom37_coords = atom37_coords * atom37_mask.unsqueeze(
-        -1
-    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
-    return atom37_coords
 
 
 def get_masked_coords_array(
