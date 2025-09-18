@@ -606,7 +606,7 @@ def sample(
     ):
         if motif_cfg is None:
             if motif_pdb is not None:
-                motif_fps.append(motif_pdb)
+                motif_fps.append(norm_path(motif_pdb))
             else:
                 motif_fps.append(motif_dir / f"{ri:03}_unconditional")
         elif motif_cfg.endswith(".pdb") or motif_cfg.endswith(".cif"):
@@ -1112,6 +1112,7 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
     motif_dir: str | None = typer.Option(None, help="Directory containing motif PDBs"),
+    motif_pdb: str | None = typer.Option(None, help="Single motif PDB file, overrides motif_dir"),
     project_name: str | None = typer.Option(None, help="wandb project name"),
     num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
@@ -1135,6 +1136,7 @@ def main(
         sampling_yaml_path=sampling_yaml_path,
         project_name=project_name,
         motif_dir=motif_dir,
+        motif_pdb=motif_pdb,
         num_samples=num_samples,
         num_mpnn_seqs=num_mpnn_seqs,
         batch_size=batch_size,
