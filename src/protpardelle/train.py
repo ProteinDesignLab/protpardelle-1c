@@ -348,12 +348,13 @@ class ProtpardelleTrainer:
         return sigma_data
 
     def compute_loss(
-        self, input_dict: dict[str, torch.Tensor]
+        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-9
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the loss for a given input batch.
 
         Args:
             input_dict (dict[str, torch.Tensor]): Input tensors for the model.
+            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-9.
 
         Raises:
             NotImplementedError: If the all atom loss computation is not implemented.
@@ -402,7 +403,9 @@ class ProtpardelleTrainer:
             adj_cond = None
 
         # Noise data
-        timestep = torch.rand(batch_size).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
+        timestep = torch.rand(batch_size, device=self.device).clamp(
+            min=tol, max=1 - tol
+        )
         noise_level = self.module.training_noise_schedule(timestep)
         noised_coords = diffusion.noise_coords(
             atom_coords,
