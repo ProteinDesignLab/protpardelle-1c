@@ -52,7 +52,7 @@ class DotDict(dict):
             ) from e
 
 
-def apply_dotdict_recursively(input_obj: Any) -> Any:
+def apply_dotdict_recursively(input_obj: dict[str, Any]) -> DotDict:
     """Convert dictionaries to DotDict instances recursively.
 
     Args:
@@ -64,9 +64,16 @@ def apply_dotdict_recursively(input_obj: Any) -> Any:
             Non-dictionary objects are returned unchanged.
     """
 
-    if input_obj is None:
-        return None
     if isinstance(input_obj, dict):
+        for key in input_obj:
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"Non-string key detected in dictionary: {key} (type: {type(key)})"
+                )
+            if key in dict.__dict__:
+                raise KeyError(
+                    f"Key '{key}' in dictionary shadows a built-in dict attribute."
+                )
         # Convert the current dictionary to a dotdict
         return DotDict({k: apply_dotdict_recursively(v) for k, v in input_obj.items()})
 
