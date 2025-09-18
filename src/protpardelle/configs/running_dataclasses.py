@@ -6,7 +6,8 @@ Author: Zhaoyang Li
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+
+# from typing import Literal
 
 
 @dataclass
@@ -29,7 +30,8 @@ class PartialDiffusion:
 @dataclass
 class DiscontiguousMotifAssignment:
     enabled: bool
-    strategy: Literal["fixed"]
+    # strategy: Literal["fixed"]
+    strategy: str
     fixed_motif_pos: list[int]
 
 
@@ -41,7 +43,8 @@ class CropConditionalGuidance:
     freq: int
     freq_start: float
     freq_end: float
-    strategy: Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"]
+    # strategy: Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"]
+    strategy: str
 
 
 @dataclass
@@ -54,7 +57,8 @@ class ReconstructionGuidance:
     enabled: bool
     start: float
     end: float
-    schedule: Literal["constant", "quadratic", "cubic", "custom"]
+    # schedule: Literal["constant", "quadratic", "cubic", "custom"]
+    schedule: str
     max_scale: float
     loss_weights: LossWeights
 
@@ -82,7 +86,8 @@ class AllAtomCfg:
     skip_mpnn_proportion: float
     use_fullmpnn: bool
     use_fullmpnn_for_final: bool
-    anneal_seq_resampling_rate: Literal["linear"]
+    # anneal_seq_resampling_rate: Literal["linear"]
+    anneal_seq_resampling_rate: str
     jump_steps: bool
     uniform_steps: bool
 
