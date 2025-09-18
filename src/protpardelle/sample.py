@@ -531,6 +531,7 @@ def generate(
 def sample(
     sampling_yaml_path: StrPath,
     motif_dir: StrPath | None = None,
+    motif_pdb: StrPath | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
@@ -546,6 +547,7 @@ def sample(
     Args:
         sampling_yaml_path (StrPath): Path to sampling config, see examples/sampling/*.yaml for examples
         motif_dir (StrPath | None, optional): Folder containing motifs to scaffold. Defaults to None.
+        motif_pdb (Path, optional): Overrides motif_dir, use by specifying the motifs inside sampling_yaml_path to null
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
@@ -603,7 +605,10 @@ def sample(
         )
     ):
         if motif_cfg is None:
-            motif_fps.append(motif_dir / f"{ri:03}_unconditional")
+            if motif_pdb is not None:
+                motif_fps.append(motif_pdb)
+            else:
+                motif_fps.append(motif_dir / f"{ri:03}_unconditional")
         elif motif_cfg.endswith(".pdb") or motif_cfg.endswith(".cif"):
             motif_fps.append(motif_dir / motif_cfg)
         else:
