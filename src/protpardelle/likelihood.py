@@ -20,7 +20,8 @@ from protpardelle.data import dataset
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import (
     PROJECT_ROOT_DIR,
-    PROTPARDELLE_MODEL_PARAMS,
+    PROTPARDELLE_MODEL_CONFIGS,
+    PROTPARDELLE_MODEL_WEIGHTS,
     PROTPARDELLE_OUTPUT_DIR,
 )
 from protpardelle.utils import get_logger, seed_everything, unsqueeze_trailing_dims
@@ -57,7 +58,7 @@ def batch_from_pdbs(list_of_pdbs):
 def forward_ode(
     model,
     batch,
-    n_steps=100,
+    num_steps=100,
     sigma_min=0.01,
     sigma_max=800,
     verbose=False,
@@ -112,7 +113,7 @@ def forward_ode(
     noise_schedule = lambda t: diffusion.noise_schedule(
         t, s_min=sigma_min / sigma_data, s_max=sigma_max / sigma_data
     )
-    timesteps = torch.linspace(0, 1, n_steps + 1)
+    timesteps = torch.linspace(0, 1, num_steps + 1)
     sigma = noise_schedule(timesteps[0])
 
     # init to sigma_min
@@ -235,9 +236,9 @@ def runner(
     if seed is not None:
         seed_everything(seed)
 
-    config_path = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
+    config_path = PROTPARDELLE_MODEL_CONFIGS / f"{model_name}.yaml"
     checkpoint_path = (
-        PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+        PROTPARDELLE_MODEL_WEIGHTS / f"{model_name}_epoch{epoch}.pth"
     )
 
     model = load_model(config_path, checkpoint_path)

@@ -172,8 +172,8 @@ class RelativePositionalEncoding(nn.Module):
         super().__init__()
 
         self.max_rel_idx = max_rel_idx
-        self.n_rel_pos = 2 * self.max_rel_idx + 1
-        self.linear = nn.Linear(self.n_rel_pos, attn_dim)
+        self.num_relpos = 2 * self.max_rel_idx + 1
+        self.linear = nn.Linear(self.num_relpos, attn_dim)
         self.relchain = relchain
         self.cyclic = cyclic
 
@@ -199,9 +199,9 @@ class RelativePositionalEncoding(nn.Module):
             d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
         device = d_ij.device
 
-        v_bins = torch.arange(self.n_rel_pos, device=device) - self.max_rel_idx
+        v_bins = torch.arange(self.num_relpos, device=device) - self.max_rel_idx
         idxs = torch.abs(d_ij.unsqueeze(-1) - v_bins[None, None]).argmin(-1)
-        p_ij = F.one_hot(idxs, num_classes=self.n_rel_pos).float()
+        p_ij = F.one_hot(idxs, num_classes=self.num_relpos).float()
         embeddings = self.linear(p_ij)
 
         return embeddings
@@ -600,17 +600,29 @@ def default(val, d):
     return d() if callable(d) else d
 
 
-def posemb_sincos_1d(patches, temperature=10000, residue_index=None):
-    _, n, dim, device, dtype = *patches.shape, patches.device, patches.dtype
+def posemb_sincos_1d(
+    patches: torch.Tensor,
+    temperature: float = 10000.0,
+    residue_index: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """1D sine-cosine positional embedding."""
 
-    n = torch.arange(n, device=device) if residue_index is None else residue_index
-    assert (dim % 2) == 0, "feature dimension must be multiple of 2 for sincos emb"
-    omega = torch.arange(dim // 2, device=device) / (dim // 2 - 1)
+    B, L, C = patches.shape
+    device = patches.device
+
+    if residue_index is None:
+        residue_index = torch.arange(L, device=device)
+
+    if C % 2 != 0:
+        raise ValueError("feature dimension must be multiple of 2 for sincos emb")
+
+    omega = torch.arange(C // 2, device=device) / (C // 2 - 1)
     omega = 1.0 / (temperature**omega)
 
-    n = n.unsqueeze(-1) * omega
-    pe = torch.cat((n.sin(), n.cos()), dim=-1)
-    return pe.type(dtype)
+    residue_index = residue_index.unsqueeze(-1) * omega
+    posemb = torch.cat((residue_index.sin(), residue_index.cos()), dim=-1)
+
+    return posemb
 
 
 class LayerNorm(nn.Module):
@@ -624,13 +636,13 @@ class LayerNorm(nn.Module):
 
 
 class NoiseConditioningBlock(nn.Module):
-    def __init__(self, n_in_channel: int, n_out_channel: int) -> None:
+    def __init__(self, num_in_channels: int, num_out_channels: int) -> None:
         super().__init__()
         self.block = nn.Sequential(
-            NoiseEmbedding(n_in_channel),
-            nn.Linear(n_in_channel, n_out_channel),
+            NoiseEmbedding(num_in_channels),
+            nn.Linear(num_in_channels, num_out_channels),
             nn.SiLU(),
-            nn.Linear(n_out_channel, n_out_channel),
+            nn.Linear(num_out_channels, num_out_channels),
         )
 
     def forward(self, noise_level):
@@ -642,11 +654,11 @@ class NoiseConditioningBlock(nn.Module):
 
 class TimeCondResnetBlock(nn.Module):
     def __init__(
-        self, nic, noc, cond_nc, conv_layer=nn.Conv2d, dropout=0.1, n_norm_in_groups=4
+        self, nic, noc, cond_nc, conv_layer=nn.Conv2d, dropout=0.1, num_norm_in_groups=4
     ):
         super().__init__()
         self.block1 = nn.Sequential(
-            nn.GroupNorm(num_groups=nic // n_norm_in_groups, num_channels=nic),
+            nn.GroupNorm(num_groups=nic // num_norm_in_groups, num_channels=nic),
             nn.SiLU(),
             conv_layer(nic, noc, 3, 1, 1),
         )
@@ -1091,9 +1103,9 @@ class TimeCondUViT(nn.Module):
         depth: int = 6,
         heads: int = 8,
         dim_head: int = 32,
-        n_filt_per_layer: list[int] = [],  # TODO: tuple
-        n_blocks_per_layer: int = 2,
-        n_atoms: int = 37,
+        num_filt_per_layer: list[int] = [],  # TODO: tuple
+        num_blocks_per_layer: int = 2,
+        num_atoms: int = 37,
         channels_per_atom: int = 6,
         attn_bias_dim: int | None = None,
         time_cond_dim: int | None = None,
@@ -1117,36 +1129,36 @@ class TimeCondUViT(nn.Module):
 
         self.position_embedding_type = position_embedding_type
         channels = channels_per_atom
-        self.n_conv_layers = n_conv_layers = len(n_filt_per_layer)
-        if n_conv_layers > 0:
-            post_conv_filt = n_filt_per_layer[-1]
-        self.conv_skip_connection = conv_skip_connection and n_conv_layers == 1
-        transformer_seq_len = seq_len // (2**n_conv_layers)
+        self.num_conv_layers = num_conv_layers = len(num_filt_per_layer)
+        if num_conv_layers > 0:
+            post_conv_filt = num_filt_per_layer[-1]
+        self.conv_skip_connection = conv_skip_connection and num_conv_layers == 1
+        transformer_seq_len = seq_len // (2**num_conv_layers)
         assert transformer_seq_len % patch_size == 0
 
-        dim_a = post_conv_atom_dim = max(1, n_atoms // (2 ** (n_conv_layers - 1)))
-        if n_conv_layers == 0:
-            patch_dim = patch_size * n_atoms * channels_per_atom
-            patch_dim_out = patch_size * n_atoms * 3
-            dim_a = n_atoms
-        elif conv_skip_connection and n_conv_layers == 1:
+        dim_a = post_conv_atom_dim = max(1, num_atoms // (2 ** (num_conv_layers - 1)))
+        if num_conv_layers == 0:
+            patch_dim = patch_size * num_atoms * channels_per_atom
+            patch_dim_out = patch_size * num_atoms * 3
+            dim_a = num_atoms
+        elif conv_skip_connection and num_conv_layers == 1:
             patch_dim = patch_size * (channels + post_conv_filt) * post_conv_atom_dim
             patch_dim_out = patch_size * post_conv_filt * post_conv_atom_dim
-        elif n_conv_layers > 0:
+        elif num_conv_layers > 0:
             patch_dim = patch_dim_out = patch_size * post_conv_filt * post_conv_atom_dim
 
         # Make downsampling conv
-        # Downsamples n-1 times where n is n_conv_layers
+        # Downsamples n-1 times where n is num_conv_layers
         down_conv = []
         block_in = channels
-        for i, nf in enumerate(n_filt_per_layer):
+        for i, nf in enumerate(num_filt_per_layer):
             block_out = nf
             layer = []
-            for j in range(n_blocks_per_layer):
-                n_groups = 2 if i == 0 and j == 0 else 4
+            for j in range(num_blocks_per_layer):
+                num_groups = 2 if i == 0 and j == 0 else 4
                 layer.append(
                     TimeCondResnetBlock(
-                        block_in, block_out, time_cond_dim, n_norm_in_groups=n_groups
+                        block_in, block_out, time_cond_dim, num_norm_in_groups=num_groups
                     )
                 )
                 block_in = block_out
@@ -1161,7 +1173,7 @@ class TimeCondUViT(nn.Module):
         )
         self.cond_to_patch_embedding = nn.Sequential(
             Rearrange("b c (n p) a -> b n (p c a)", p=patch_size),
-            nn.Linear(patch_size * n_atoms * 3, time_cond_dim),
+            nn.Linear(patch_size * num_atoms * 3, time_cond_dim),
             LayerNorm(time_cond_dim),
         )
 
@@ -1199,11 +1211,11 @@ class TimeCondUViT(nn.Module):
 
         # Make upsampling conv
         up_conv = []
-        for i, nf in enumerate(reversed(n_filt_per_layer)):
+        for i, nf in enumerate(reversed(num_filt_per_layer)):
             skip_in = nf
             block_out = nf
             layer = []
-            for _ in range(n_blocks_per_layer):
+            for _ in range(num_blocks_per_layer):
                 layer.append(
                     TimeCondResnetBlock(block_in + skip_in, block_out, time_cond_dim)
                 )
@@ -1212,7 +1224,7 @@ class TimeCondUViT(nn.Module):
         self.up_conv = nn.ModuleList(up_conv)
 
         # Conv out
-        if n_conv_layers > 0:
+        if num_conv_layers > 0:
             self.conv_out = nn.Sequential(
                 nn.GroupNorm(num_groups=block_out // 4, num_channels=block_out),
                 nn.SiLU(),
@@ -1230,7 +1242,7 @@ class TimeCondUViT(nn.Module):
         chain_index=None,
     ) -> torch.Tensor:
 
-        if self.n_conv_layers > 0:  # pad up to even dims
+        if self.num_conv_layers > 0:  # pad up to even dims
             coords = F.pad(coords, (0, 0, 0, 0, 0, 1, 0, 0))
 
         x = rearr_coords = rearrange(coords, "b n a c -> b c n a")
@@ -1239,7 +1251,7 @@ class TimeCondUViT(nn.Module):
             for block in layer:
                 x = block(x, time=time_cond)
                 hidden_states.append(x)
-            if i != self.n_conv_layers - 1:
+            if i != self.num_conv_layers - 1:
                 x = F.avg_pool2d(x, kernel_size=2, stride=2, ceil_mode=True)
 
         if self.conv_skip_connection:
@@ -1270,10 +1282,10 @@ class TimeCondUViT(nn.Module):
             for block in layer:
                 x = torch.cat([x, hidden_states.pop()], 1)
                 x = block(x, time=time_cond)
-            if i != self.n_conv_layers - 1:
+            if i != self.num_conv_layers - 1:
                 x = F.interpolate(x, size=hidden_states[-1].shape[2:], mode="nearest")
 
-        if self.n_conv_layers > 0:
+        if self.num_conv_layers > 0:
             x = self.conv_out(x)
             x = x[..., :-1, :]  # drop even-dims padding
 
@@ -1330,17 +1342,17 @@ class LinearWarmupCosineDecay(LRScheduler):
 class NoiseConditionalProteinMPNN(nn.Module):
     def __init__(
         self,
-        n_channel: int = 128,
-        n_layers: int = 3,
-        n_neighbors: int = 32,
+        num_channels: int = 128,
+        num_layers: int = 3,
+        num_neighbors: int = 32,
         vocab_size: int = 21,
         time_cond_dim: int | None = None,
         input_S_is_embeddings: bool = False,
     ):
         super().__init__()
-        self.n_channel = n_channel
-        self.n_layers = n_layers
-        self.n_neighbors = n_neighbors
+        self.num_channels = num_channels
+        self.num_layers = num_layers
+        self.num_neighbors = num_neighbors
         self.vocab_size = vocab_size
         self.time_cond_dim = time_cond_dim
         self.bb_idxs_if_atom37 = [
@@ -1350,13 +1362,13 @@ class NoiseConditionalProteinMPNN(nn.Module):
 
         self.mpnn = ProteinMPNN(
             num_letters=vocab_size,
-            node_features=n_channel,
-            edge_features=n_channel,
-            hidden_dim=n_channel,
-            num_encoder_layers=n_layers,
-            num_decoder_layers=n_layers,
+            node_features=num_channels,
+            edge_features=num_channels,
+            hidden_dim=num_channels,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
             vocab=vocab_size,
-            k_neighbors=n_neighbors,
+            k_neighbors=num_neighbors,
             augment_eps=0.0,
             dropout=0.1,
             ca_only=True,  # CHANGED -- better to use CA-only for noisy coords

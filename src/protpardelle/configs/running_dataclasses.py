@@ -21,7 +21,7 @@ class NoiseSchedule:
 class PartialDiffusion:
     enabled: bool
     pdb_file_path: str | None
-    n_steps: int
+    num_steps: int
     repack: bool | None
     seq: str | None
 
@@ -91,7 +91,7 @@ class AllAtomCfg:
 class Stage2Cfg:
     enabled: bool
     rewind_steps: int
-    n_steps: int
+    num_steps: int
     s_churn: int
     step_scale: float
     sidechain_mode: bool
@@ -101,7 +101,7 @@ class Stage2Cfg:
 
 @dataclass
 class Sampling:
-    n_steps: int
+    num_steps: int
     s_churn: int
     step_scale: float
     noise_schedule: NoiseSchedule

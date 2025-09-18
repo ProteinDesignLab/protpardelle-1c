@@ -383,11 +383,11 @@ def make_crop_cond_mask_and_recenter_coords(
     b, n, a = atom_mask.shape
     device = atom_mask.device
     seq_mask = atom_mask[..., 1]
-    n_res = seq_mask.sum(-1)
+    num_res = seq_mask.sum(-1)
     masks = []
     all_hotspot_masks = torch.zeros((b, n), device=device)
 
-    for i, nr in enumerate(n_res):
+    for i, nr in enumerate(num_res):
         nr = nr.int().item()
         mask = torch.zeros((n, a), device=device)
         if chain_index is not None and chain_index[i].sum(-1) > 0:
@@ -436,19 +436,19 @@ def make_crop_cond_mask_and_recenter_coords(
             random_residue = torch.randint(0, nr, (1,), device=device).squeeze()
             cb_dist_i = cb_distances[random_residue] + 1e3 * (1 - seq_mask[i])
             close_mask = cb_dist_i <= dist_threshold
-            n_neighbors = close_mask.sum().int()
+            num_neighbors = close_mask.sum().int()
 
             # pick how many neighbors (up to 10)
-            n_sele = torch.randint(
+            num_sele = torch.randint(
                 2,
-                n_neighbors.clamp(min=3, max=max_discontiguous_res + 1),
+                num_neighbors.clamp(min=3, max=max_discontiguous_res + 1),
                 (1,),
                 device=device,
             )
 
             # Select the indices of CB atoms that are close together
             idxs = torch.arange(n, device=device)[close_mask.bool()]
-            idxs = idxs[torch.randperm(len(idxs))[:n_sele]]
+            idxs = idxs[torch.randperm(len(idxs))[:num_sele]]
 
             if len(idxs) > 0:
                 mask[idxs] = 1
@@ -635,10 +635,10 @@ class PDBDataset(Dataset):
                 self.pdb_keys = np.array(f.read().split("\n")[:-1])
 
         if overfit > 0:
-            n_data = len(self.pdb_keys)
+            num_data = len(self.pdb_keys)
             self.pdb_keys = np.random.choice(
-                self.pdb_keys, min(n_data, overfit), replace=False
-            ).repeat(n_data // overfit)
+                self.pdb_keys, min(num_data, overfit), replace=False
+            ).repeat(num_data // overfit)
 
     def __len__(self):
         return min(len(self.pdb_keys), 256) if self.short_epoch else len(self.pdb_keys)

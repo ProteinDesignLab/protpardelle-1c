@@ -1,6 +1,6 @@
 sampling:
-  n_steps: 500 # number of denoising steps
-  s_churn: 200 # add s_churn / n_steps amount of noise when noise level is between s_max and s_min
+  num_steps: 500 # number of denoising steps
+  s_churn: 200 # add s_churn / num_steps amount of noise when noise level is between s_max and s_min
   step_scale: 1.2 # inverse temperature, 1.0 is taking denoising steps exactly according to model's predictions, 0.8 is higher temperature
   noise_schedule:
     _partial_: true
@@ -11,7 +11,7 @@ sampling:
   partial_diffusion:
     enabled: true # use partial diffusion
     pdb_file_path: # input pdb to apply partial diffusion
-    n_steps: 100 # go back these many steps, 100 here with sampling.backbone.n_steps=500 means going back to step 400
+    num_steps: 100 # go back these many steps, 100 here with sampling.backbone.num_steps=500 means going back to step 400
   dx: 0.0 # translate motif in x-axis
   dy: 0.0 # translate motif in y-axis
   dz: 0.0 # translate motif in z-axis
@@ -55,7 +55,7 @@ sampling:
   stage2_cfg:
     enabled: false
     rewind_steps: 50
-    n_steps: 200
+    num_steps: 200
     s_churn: 100
     step_scale: 1.2
     sidechain_mode: true

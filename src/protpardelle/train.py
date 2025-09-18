@@ -485,7 +485,7 @@ class ProtpardelleTrainer:
         if self.config.model.task in ["seqdes", "codesign"]:
             alpha = self.config.model.mpnn_model.label_smoothing
             aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
-            target_oh = (1 - alpha) * aatype_oh + alpha / self.module.n_tokens
+            target_oh = (1 - alpha) * aatype_oh + alpha / self.module.num_tokens
             mpnn_loss = masked_cross_entropy_loss(
                 aatype_logprobs, target_oh, seq_mask
             ).mean()

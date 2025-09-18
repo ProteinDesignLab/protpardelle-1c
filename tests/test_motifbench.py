@@ -90,7 +90,7 @@ def _reconstruct_motif_indices(total_len: int, seglens: Sequence[int]) -> np.nda
 def test_contig_to_motif_placement_happy(
     spec: str,
     length_range: list[int],
-    n_samples: int,
+    num_samples: int,
     constraints: list[range | str],
 ) -> None:
     """Test the contig_to_motif_placement function with a happy path scenario.
@@ -98,17 +98,17 @@ def test_contig_to_motif_placement_happy(
     Args:
         spec (str): The full placement specification string.
         length_range (list[int]): A list containing the minimum and maximum length of the contig.
-        n_samples (int): The number of samples to generate.
+        num_samples (int): The number of samples to generate.
         constraints (list[range  |  str]): A list of constraints for each segment in the spec.
     """
     mot_idx_list, placement_specs, full_specs, total_lengths = (
-        contig_to_motif_placement(spec, length_range, n_samples)
+        contig_to_motif_placement(spec, length_range, num_samples)
     )
 
-    assert len(mot_idx_list) == n_samples
-    assert len(placement_specs) == n_samples
-    assert len(full_specs) == n_samples
-    assert len(total_lengths) == n_samples
+    assert len(mot_idx_list) == num_samples
+    assert len(placement_specs) == num_samples
+    assert len(full_specs) == num_samples
+    assert len(total_lengths) == num_samples
 
     for mot_idx, placement_simple, full_spec, total_len in zip(
         mot_idx_list, placement_specs, full_specs, total_lengths

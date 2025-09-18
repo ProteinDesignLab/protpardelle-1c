@@ -145,7 +145,7 @@ def get_time_dependent_scale(
     schedule: Literal["constant", "cubic", "quadratic", "custom"],
     w: float,
     curr_step: int,
-    n_steps: int,
+    num_steps: int,
     stage2: bool = False,
 ) -> float:
     """Get a time-dependent scaling factor.
@@ -164,7 +164,7 @@ def get_time_dependent_scale(
             The scheduling strategy to use.
         w (float): The base weight to scale.
         curr_step (int): The current step in the process.
-        n_steps (int): The total number of steps.
+        num_steps (int): The total number of steps.
         stage2 (bool, optional): Whether we are in stage 2. Defaults to False.
 
     Returns:
@@ -172,14 +172,14 @@ def get_time_dependent_scale(
     """
 
     # Normalize potential out-of-range values
-    n_steps = max(1, n_steps)
+    num_steps = max(1, num_steps)
 
     if schedule == "constant":
         scale = 1.0
     elif schedule == "cubic":
-        scale = (curr_step / n_steps) ** 3
+        scale = (curr_step / num_steps) ** 3
     elif schedule == "quadratic":
-        scale = (curr_step / n_steps) ** 2
+        scale = (curr_step / num_steps) ** 2
     elif schedule == "custom":
         if stage2:
             if curr_step < 25:
@@ -293,23 +293,23 @@ class MiniMPNN(nn.Module):
         self.config = config
 
         self.mpnn_config = config.model.mpnn_model
-        self.n_tokens = config.data.n_aatype_tokens
+        self.num_tokens = config.data.n_aatype_tokens
         self.seq_emb_dim = self.mpnn_config.n_channel
         time_cond_dim = self.mpnn_config.n_channel * self.mpnn_config.noise_cond_mult
 
         self.noise_block = modules.NoiseConditioningBlock(
             self.mpnn_config.n_channel, time_cond_dim
         )
-        self.token_embedding = nn.Linear(self.n_tokens, self.seq_emb_dim)
+        self.token_embedding = nn.Linear(self.num_tokens, self.seq_emb_dim)
         self.mpnn_net = modules.NoiseConditionalProteinMPNN(
-            n_channel=self.mpnn_config.n_channel,
-            n_layers=self.mpnn_config.n_layers,
-            n_neighbors=self.mpnn_config.n_neighbors,
+            num_channels=self.mpnn_config.n_channel,
+            num_layers=self.mpnn_config.n_layers,
+            num_neighbors=self.mpnn_config.n_neighbors,
             vocab_size=config.data.n_aatype_tokens,
             time_cond_dim=time_cond_dim,
             input_S_is_embeddings=True,
         )
-        self.proj_out = nn.Linear(self.mpnn_config.n_channel, self.n_tokens)
+        self.proj_out = nn.Linear(self.mpnn_config.n_channel, self.num_tokens)
 
     def forward(
         self,
@@ -372,18 +372,14 @@ class CoordinateDenoiser(nn.Module):
         super().__init__()
         self.config = config
 
-        # Configuration
+        self.struct_config = config.model.struct_model
         self.sigma_data = config.data.sigma_data
-        m_cfg = config.model.struct_model
-        nc = m_cfg.n_channel
-        bb_atoms = ["N", "CA", "C", "O"]
-        n_atoms = config.model.struct_model.n_atoms
-        self.use_conv = len(m_cfg.uvit.n_filt_per_layer) > 0
-        if self.use_conv and n_atoms == 37:
-            n_atoms += 1  # make it an even number
-        self.n_atoms = n_atoms
-        self.bb_idxs = [residue_constants.atom_order[atom] for atom in bb_atoms]
-        n_xyz = (
+        self.num_atoms = config.model.struct_model.n_atoms
+
+        self.bb_idxs = [
+            residue_constants.atom_order[atom] for atom in ["N", "CA", "C", "O"]
+        ]
+        num_xyz = (
             9
             if config.model.crop_conditional
             and "concat" in config.model.conditioning_style
@@ -393,36 +389,37 @@ class CoordinateDenoiser(nn.Module):
             config.model.crop_conditional
             and "hotspot" in config.model.conditioning_style
         ):
-            n_xyz += 1
+            num_xyz += 1
         if config.model.crop_conditional and "ssadj" in config.model.conditioning_style:
-            n_xyz += 3  # one-hot encoding [helix, strand, loop]
+            num_xyz += 3  # one-hot encoding [helix, strand, loop]
 
-        # Neural networks
-        n_noise_channel = nc * m_cfg.noise_cond_mult
-        n_motif_channel = (
-            nc * m_cfg.motif_cond_mult
+        num_channels = self.struct_config.n_channel
+        num_noise_channels = num_channels * self.struct_config.noise_cond_mult
+        num_motif_channels = (
+            num_channels * self.struct_config.motif_cond_mult
             if (
-                "motif_cond_mult" in m_cfg
+                "motif_cond_mult" in self.struct_config
                 and "conditioning_style" in config.model
                 and "separate_motif_track" in config.model.conditioning_style
             )
             else None
         )
+
         self.net = modules.TimeCondUViT(
             seq_len=config.data.fixed_size,
-            patch_size=m_cfg.uvit.patch_size,
-            dim=nc,
-            depth=m_cfg.uvit.n_layers,
-            n_filt_per_layer=m_cfg.uvit.n_filt_per_layer,
-            heads=m_cfg.uvit.n_heads,
-            dim_head=m_cfg.uvit.dim_head,
-            conv_skip_connection=m_cfg.uvit.conv_skip_connection,
-            n_atoms=n_atoms,
-            channels_per_atom=n_xyz,
-            time_cond_dim=n_noise_channel,
-            motif_cond_dim=n_motif_channel,
-            position_embedding_type=m_cfg.uvit.position_embedding_type,
-            position_embedding_max=m_cfg.uvit.position_embedding_max,
+            patch_size=self.struct_config.uvit.patch_size,
+            dim=num_channels,
+            depth=self.struct_config.uvit.n_layers,
+            num_filt_per_layer=self.struct_config.uvit.n_filt_per_layer,
+            heads=self.struct_config.uvit.n_heads,
+            dim_head=self.struct_config.uvit.dim_head,
+            conv_skip_connection=self.struct_config.uvit.conv_skip_connection,
+            num_atoms=self.num_atoms,
+            channels_per_atom=num_xyz,
+            time_cond_dim=num_noise_channels,
+            motif_cond_dim=num_motif_channels,
+            position_embedding_type=self.struct_config.uvit.position_embedding_type,
+            position_embedding_max=self.struct_config.uvit.position_embedding_max,
             noise_residual=config.model.crop_conditional
             and "conditioning_style" in config.model
             and "noise_residual" in config.model.conditioning_style,
@@ -430,13 +427,25 @@ class CoordinateDenoiser(nn.Module):
             and "conditioning_style" in config.model
             and "ssadj" in config.model.conditioning_style,
             attn_dropout=(
-                m_cfg.uvit.attn_dropout if "attn_dropout" in m_cfg.uvit else 0.0
+                self.struct_config.uvit.attn_dropout
+                if "attn_dropout" in self.struct_config.uvit
+                else 0.0
             ),
-            out_dropout=m_cfg.uvit.out_dropout if "out_dropout" in m_cfg.uvit else 0.0,
-            ff_dropout=m_cfg.uvit.ff_dropout if "ff_dropout" in m_cfg.uvit else 0.1,
-            dit=m_cfg.arch == "dit",
+            out_dropout=(
+                self.struct_config.uvit.out_dropout
+                if "out_dropout" in self.struct_config.uvit
+                else 0.0
+            ),
+            ff_dropout=(
+                self.struct_config.uvit.ff_dropout
+                if "ff_dropout" in self.struct_config.uvit
+                else 0.1
+            ),
+            dit=self.struct_config.arch == "dit",
         )
-        self.noise_block = modules.NoiseConditioningBlock(nc, n_noise_channel)
+        self.noise_block = modules.NoiseConditioningBlock(
+            num_channels, num_noise_channels
+        )
 
     def forward(
         self,
@@ -665,21 +674,19 @@ class Protpardelle(nn.Module):
 
         self.config = config
         self.task = config.model.task
-        self.n_tokens = config.data.n_aatype_tokens
+        self.num_tokens = config.data.n_aatype_tokens
 
         self.use_mpnn_model = self.task in {"seqdes", "codesign"}
 
         # Modules
-        self.bb_idxs = [0, 1, 2, 4]
-        self.n_atoms = 37
         self.struct_model = CoordinateDenoiser(config)
-
-        self.bb_idxs = self.struct_model.bb_idxs
-        self.n_atoms = self.struct_model.n_atoms
-        self.chain_residx_gap = config.data.chain_residx_gap
 
         if self.use_mpnn_model:
             self.mpnn_model = MiniMPNN(config)
+
+        self.bb_idxs = self.struct_model.bb_idxs
+        self.num_atoms = self.struct_model.num_atoms
+        self.chain_residx_gap = config.data.chain_residx_gap
 
         # Load any pretrained modules
         for module_name in self.config.model.pretrained_modules:
@@ -820,7 +827,7 @@ class Protpardelle(nn.Module):
             )
             aatype_logprobs = aatype_logprobs * seq_mask.unsqueeze(-1)
         else:
-            aatype_logprobs = repeat(seq_mask, "b n -> b n t", t=self.n_tokens)
+            aatype_logprobs = repeat(seq_mask, "b l -> b l v", v=self.num_tokens)
             aatype_logprobs = torch.ones_like(aatype_logprobs)
             aatype_logprobs = F.log_softmax(aatype_logprobs, -1)
 
@@ -916,7 +923,7 @@ class Protpardelle(nn.Module):
         sse_cond: Int[torch.Tensor, "B L"] | None = None,
         adj_cond: Int[torch.Tensor, "B L L"] | None = None,
         gt_aatype: Int[torch.Tensor, "B L"] | None = None,
-        n_steps: int = 200,
+        num_steps: int = 200,
         step_scale: float = 1.2,
         s_churn: float = 50.0,
         noise_scale: float = 1.0,
@@ -961,11 +968,11 @@ class Protpardelle(nn.Module):
             (if gt_coords is not provided).
         gt_cond_atom_mask: mask identifying atoms to apply gt_coords.
         gt_aatype: conditioning information for sequence.
-        n_steps: number of denoising steps (ODE discretizations).
+        num_steps: number of denoising steps (ODE discretizations).
         step_scale: scale to apply to the score.
-        s_churn: gamma = s_churn / n_steps describes the additional noise to add
+        s_churn: gamma = s_churn / num_steps describes the additional noise to add
             relatively at each denoising step. Use 0.0 for deterministic sampling or
-            0.2 * n_steps as a rough default for stochastic sampling.
+            0.2 * num_steps as a rough default for stochastic sampling.
         noise_scale: scale to apply to gamma.
         s_t_min: don't apply s_churn below this noise level.
         s_t_max: don't apply s_churn above this noise level.
@@ -1169,8 +1176,8 @@ class Protpardelle(nn.Module):
 
             # reconstruction guidance
             recon_on = curr_step >= (
-                cc.reconstruction_guidance.start * n_steps
-            ) and curr_step < (cc.reconstruction_guidance.end * n_steps)
+                cc.reconstruction_guidance.start * num_steps
+            ) and curr_step < (cc.reconstruction_guidance.end * num_steps)
             if (
                 cc.enabled
                 and cc.reconstruction_guidance.enabled
@@ -1183,7 +1190,7 @@ class Protpardelle(nn.Module):
                     cc.reconstruction_guidance.schedule,
                     cc.reconstruction_guidance.max_scale,
                     curr_step,
-                    n_steps,
+                    num_steps,
                     stage2=stage2,
                 )
                 score = score + guidance * guidance_scale
@@ -1276,16 +1283,16 @@ class Protpardelle(nn.Module):
 
         sigma = sigma_float = noise_schedule(1)
 
-        timesteps = torch.linspace(1, 0, n_steps + 1)
+        timesteps = torch.linspace(1, 0, num_steps + 1)
 
         crop_cond_coords = None
 
-        coords_shape = seq_mask.shape + (self.n_atoms, 3)
+        coords_shape = seq_mask.shape + (self.num_atoms, 3)
         if xt_start is not None:
             logger.info("Using supplied xt to start diffusion")
             xt = xt_start
         elif partial_diffusion is not None and pd.enabled:
-            pd_step = n_steps - pd.n_steps
+            pd_step = num_steps - pd.num_steps
             pd_timestep = timesteps[pd_step]
             if not isinstance(pd.pdb_file_path, list):
                 pd.pdb_file_path = [pd.pdb_file_path] * batch_size
@@ -1338,7 +1345,7 @@ class Protpardelle(nn.Module):
             logger.info(
                 "Partial diffusion, going back to step %d, T=%.2f",
                 pd_step,
-                pd_step / n_steps,
+                pd_step / num_steps,
             )
         else:
             xt = torch.randn(*coords_shape).to(self.device)
@@ -1349,7 +1356,7 @@ class Protpardelle(nn.Module):
         if not pd.enabled:
             if jump_steps or uniform_steps:
                 if gt_aatype is None:
-                    fake_logits = repeat(seq_mask, "b n -> b n t", t=self.n_tokens)
+                    fake_logits = repeat(seq_mask, "b l -> b l v", v=self.num_tokens)
                     s_hat = (sample_aatype(fake_logits) * seq_mask).long()
                 else:
                     s_hat = gt_aatype
@@ -1379,7 +1386,7 @@ class Protpardelle(nn.Module):
             mask37 = atom37_mask_from_aatype(s_hat, seq_mask).bool()
             mask73 = atom73_mask_from_aatype(s_hat, seq_mask).bool()
 
-        begin_mpnn_step = int(n_steps * skip_mpnn_proportion)
+        begin_mpnn_step = int(num_steps * skip_mpnn_proportion)
 
         # Prepare to run sampling trajectory
         sigma = torch.full((seq_mask.shape[0],), sigma, device=self.device)
@@ -1446,7 +1453,7 @@ class Protpardelle(nn.Module):
             "minimpnn_seqcond" in cc.crop_conditional_guidance
             and cc.crop_conditional_guidance.minimpnn_seqcond
         ):
-            crop_cond_seq_oh = torch.zeros(batch_size, seq_length, self.n_tokens).to(
+            crop_cond_seq_oh = torch.zeros(batch_size, seq_length, self.num_tokens).to(
                 xt.device
             )
             # fill in with motif aatype at the current motif_idx
@@ -1478,11 +1485,11 @@ class Protpardelle(nn.Module):
             # Set up noise levels
             sigma_next = sigma_next_float = noise_schedule(t)
 
-            if i == n_steps - 1:
+            if i == num_steps - 1:
                 sigma_next *= 0
                 sigma_next_float *= 0
             gamma = (
-                s_churn / n_steps
+                s_churn / num_steps
                 if (sigma_next >= s_t_min and sigma_next <= s_t_max)
                 else 0.0
             )
@@ -1567,7 +1574,7 @@ class Protpardelle(nn.Module):
                     xt = xt + dummy_fill_noise * dummy_fill_mask
                 atom_mask = zero_atom_mask
             elif self.config.model.task == "ai-allatom-hybrid" and uniform_steps:
-                if i < (0.5 * n_steps):
+                if i < (0.5 * num_steps):
                     xt = xt * bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
                 else:
@@ -1692,7 +1699,7 @@ class Protpardelle(nn.Module):
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
-                            if i < (0.5 * n_steps):
+                            if i < (0.5 * num_steps):
                                 xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
@@ -1741,8 +1748,8 @@ class Protpardelle(nn.Module):
                         xt_rep = xt_hat.clone()
                         if cc.enabled and (
                             cc.replacement_guidance.enabled
-                            and i >= (cc.replacement_guidance.start * n_steps)
-                            and i < (cc.replacement_guidance.end * n_steps)
+                            and i >= (cc.replacement_guidance.start * num_steps)
+                            and i < (cc.replacement_guidance.end * num_steps)
                         ):
                             for bi, _ in enumerate(motif_idx):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
@@ -1873,7 +1880,7 @@ class Protpardelle(nn.Module):
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
-                            if i < (0.5 * n_steps):
+                            if i < (0.5 * num_steps):
                                 xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
@@ -1922,8 +1929,8 @@ class Protpardelle(nn.Module):
                         xt_rep = xt_hat.clone()
                         if cc.enabled and (
                             cc.replacement_guidance.enabled
-                            and i >= (cc.replacement_guidance.start * n_steps)
-                            and i < (cc.replacement_guidance.end * n_steps)
+                            and i >= (cc.replacement_guidance.start * num_steps)
+                            and i < (cc.replacement_guidance.end * num_steps)
                         ):
                             for bi, _ in enumerate(motif_idx):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
@@ -2024,7 +2031,7 @@ class Protpardelle(nn.Module):
                         # Determine sequence resampling probability
                         if anneal_seq_resampling_rate is not None:
                             step_time = 1 - (i - begin_mpnn_step) / max(
-                                1, n_steps - begin_mpnn_step
+                                1, num_steps - begin_mpnn_step
                             )
                             if anneal_seq_resampling_rate == "linear":
                                 resampling_rate = step_time
@@ -2037,7 +2044,7 @@ class Protpardelle(nn.Module):
 
                         # Resample sequence or design with full ProteinMPNN
                         if gt_aatype is None and not pd.enabled:
-                            if i == n_steps - 1 and use_fullmpnn_for_final:
+                            if i == num_steps - 1 and use_fullmpnn_for_final:
                                 s_hat = design_with_fullmpnn(
                                     x0,
                                     seq_mask,
@@ -2187,7 +2194,7 @@ def load_model(
     if device is None:
         device = get_default_device()
 
-    config = load_config(config_path)
+    config = load_config(config_path, TrainingConfig)
 
     checkpoint_path = norm_path(checkpoint_path)
     if not checkpoint_path.is_file():

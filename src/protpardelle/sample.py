@@ -37,9 +37,11 @@ from protpardelle.data.pdb_io import load_feats_from_pdb, write_coords_to_pdb
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
-    PACKAGE_ROOT_DIR,
-    PROTPARDELLE_MODEL_PARAMS,
+    MINIMPNN_WEIGHTS,
+    PROTPARDELLE_MODEL_CONFIGS,
+    PROTPARDELLE_MODEL_WEIGHTS,
     PROTPARDELLE_OUTPUT_DIR,
+    PROTPARDELLE_RUNNING_CONFIGS,
 )
 from protpardelle.evaluate import compute_self_consistency
 from protpardelle.integrations.protein_mpnn import get_mpnn_model
@@ -274,7 +276,7 @@ def draw_samples(
         sampling_kwargs["uniform_steps"] = True
 
         sampling_kwargs["partial_diffusion"]["enabled"] = True
-        sampling_kwargs["partial_diffusion"]["n_steps"] = rewind_steps
+        sampling_kwargs["partial_diffusion"]["num_steps"] = rewind_steps
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
             tmp_dir / f"stage1_{i}.pdb" for i in range(len(samp_coords))
         ]
@@ -642,7 +644,7 @@ def sample(
         per_config_save_dir.mkdir(exist_ok=True)
 
         with initialize_config_dir(
-            config_dir=str(PACKAGE_ROOT_DIR / "configs/running"),
+            config_dir=str(PROTPARDELLE_RUNNING_CONFIGS),
             version_base="1.3.2",
         ):
             sampling_config = compose(config_name=sampling_config_name)
@@ -688,11 +690,9 @@ def sample(
             per_motif_save_dir.mkdir(exist_ok=True)
             all_save_dirs.append(per_motif_save_dir)
 
-            config_path = str(
-                PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
-            )
+            config_path = str(PROTPARDELLE_MODEL_CONFIGS / f"{model_name}.yaml")
             checkpoint_path = str(
-                PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+                PROTPARDELLE_MODEL_WEIGHTS / f"{model_name}_epoch{epoch}.pth"
             )
 
             sampling_config["sampling"]["step_scale"] = stepscale
@@ -705,7 +705,7 @@ def sample(
                 sampling_config["sampling"]["partial_diffusion"][
                     "pdb_file_path"
                 ] = motif_fp
-                sampling_config["sampling"]["partial_diffusion"]["n_steps"] = rs
+                sampling_config["sampling"]["partial_diffusion"]["num_steps"] = rs
                 sampling_config["sampling"]["motif_file_path"] = "test_dir/empty.pdb"
             else:
                 sampling_config["sampling"]["motif_file_path"] = motif_fp
@@ -785,11 +785,7 @@ def sample(
                 or sampling_config["sampling"]["allatom_cfg"]["uniform_steps"]
             )
             if allatom:
-                mpnn_ckpt_path = (
-                    PROTPARDELLE_MODEL_PARAMS / "weights" / "cc58_epoch97_minimpnn.pth"
-                )
-
-                model.load_minimpnn(mpnn_ckpt_path)
+                model.load_minimpnn(MINIMPNN_WEIGHTS)
 
             sse_cond = None
             adj_cond = None
