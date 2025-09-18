@@ -3,7 +3,6 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
-import argparse
 import math
 from collections.abc import Sequence
 from itertools import accumulate
@@ -20,6 +19,7 @@ from torch.utils.data import Dataset, RandomSampler, Sampler
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import TrainingConfig
 from protpardelle.data.atom import dummy_fill
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.utils import unsqueeze_trailing_dims
@@ -226,6 +226,80 @@ def get_masked_coords_array(
     ma_mask = repeat(1 - atom_mask.unsqueeze(-1).cpu().numpy(), "... 1 -> ... 3")
 
     return np.ma.array(atom_coords.cpu().numpy(), mask=ma_mask)
+
+
+def calc_sigma_data(
+    dataset: Dataset,
+    config: TrainingConfig,
+    num_workers: int,
+) -> float:
+    """Given a dataset and the model training config, estimate sigma_data.
+
+    Args:
+        dataset (Dataset): The dataset to use for estimation.
+        config (TrainingConfig): The training configuration.
+        num_workers (int): The number of workers to use for data loading.
+
+    Returns:
+        float: The estimated sigma_data.
+    """
+
+    sigma_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=config.train.batch_size,
+        num_workers=num_workers,
+        pin_memory=False,
+        shuffle=True,
+        drop_last=False,
+    )
+
+    collected_coords = []
+    collected_atom_masks = []
+    collected_seq_masks = []
+
+    num_batches = math.ceil(
+        config.data.n_examples_for_sigma_data / config.train.batch_size
+    )
+    for i, inputs in tqdm(
+        enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
+    ):
+        # Stop collecting once we've reached enough examples
+        if i == num_batches:
+            break
+
+        seq_mask = inputs["seq_mask"]
+        coords = inputs["coords_in"]
+        atom_mask = inputs["atom_mask"]
+
+        if config.train.crop_conditional:
+            coords, _, _ = make_crop_cond_mask_and_recenter_coords(
+                atom_coords=coords, atom_mask=atom_mask, **vars(config.train.crop_cond)
+            )
+
+        collected_coords.append(coords)
+        collected_atom_masks.append(atom_mask)
+        collected_seq_masks.append(seq_mask)
+
+    # Convert collected data lists to tensors
+    coords = torch.cat(collected_coords, dim=0)[: config.data.n_examples_for_sigma_data]
+    atom_mask = torch.cat(collected_atom_masks, dim=0)[
+        : config.data.n_examples_for_sigma_data
+    ]
+    seq_mask = torch.cat(collected_seq_masks, dim=0)[
+        : config.data.n_examples_for_sigma_data
+    ]
+
+    if config.model.compute_loss_on_all_atoms:
+        # Compute sigma_data on all 37 atoms for each residue
+        atom_mask = torch.ones_like(atom_mask) * unsqueeze_trailing_dims(
+            seq_mask, atom_mask
+        )
+
+    # Estimate sigma_data
+    masked_coords = get_masked_coords_array(coords, atom_mask)
+    sigma_data = float(masked_coords.std())
+
+    return sigma_data
 
 
 def make_crop_cond_mask_and_recenter_coords(
@@ -798,70 +872,3 @@ class StochasticMixedSampler(Sampler):
             int(np.ceil(len(self.datasets[0]) / self.primary_samples_per_batch))
             * self.batch_size
         )
-
-
-def calc_sigma_data(
-    dataset: Dataset,
-    config: argparse.Namespace,
-    num_workers: int,
-) -> float:
-    """
-    Given a dataset and the model training config, estimate sigma_data.
-    """
-
-    sigma_dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=config.train.batch_size,
-        num_workers=num_workers,
-        pin_memory=False,
-        shuffle=True,
-        drop_last=False,
-    )
-
-    collected_coords = []
-    collected_atom_masks = []
-    collected_seq_masks = []
-
-    num_batches = math.ceil(
-        config.data.n_examples_for_sigma_data / config.train.batch_size
-    )
-    for i, inputs in tqdm(
-        enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
-    ):
-        # Stop collecting once we've reached enough examples
-        if i == num_batches:
-            break
-
-        seq_mask = inputs["seq_mask"]
-        coords = inputs["coords_in"]
-        atom_mask = inputs["atom_mask"]
-
-        if config.train.crop_conditional:
-            coords, _, _ = make_crop_cond_mask_and_recenter_coords(
-                atom_coords=coords, atom_mask=atom_mask, **vars(config.train.crop_cond)
-            )
-
-        collected_coords.append(coords)
-        collected_atom_masks.append(atom_mask)
-        collected_seq_masks.append(seq_mask)
-
-    # Convert collected data lists to tensors
-    coords = torch.cat(collected_coords, dim=0)[: config.data.n_examples_for_sigma_data]
-    atom_mask = torch.cat(collected_atom_masks, dim=0)[
-        : config.data.n_examples_for_sigma_data
-    ]
-    seq_mask = torch.cat(collected_seq_masks, dim=0)[
-        : config.data.n_examples_for_sigma_data
-    ]
-
-    if config.model.compute_loss_on_all_atoms:
-        # Compute sigma_data on all 37 atoms for each residue
-        atom_mask = torch.ones_like(atom_mask) * unsqueeze_trailing_dims(
-            seq_mask, atom_mask
-        )
-
-    # Estimate sigma_data
-    masked_coords = get_masked_coords_array(coords, atom_mask)
-    sigma_data = round(float(masked_coords.std()), 2)
-    print(f"mean={masked_coords.mean():.2f}, sigma_data={sigma_data}")
-    return sigma_data

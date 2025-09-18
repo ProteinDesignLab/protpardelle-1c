@@ -287,7 +287,7 @@ class ProtpardelleTrainer:
         # sampling from the combined datasets according to specified mixing ratios.
         train_datasets = [
             PDBDataset(
-                pdb_path=self.config.data.pdb_paths[di],
+                pdb_path=pdb_path,
                 fixed_size=self.config.data.fixed_size,
                 mode="train",
                 overfit=overfit,
@@ -296,9 +296,11 @@ class ProtpardelleTrainer:
                 translation_scale=self.config.data.translation_scale,
                 chain_residx_gap=self.config.data.chain_residx_gap,
                 dummy_fill_mode=self.config.data.dummy_fill_mode,
-                subset=self.config.data.subset[di],
+                subset=subset,
             )
-            for di, _ in enumerate(self.config.data.pdb_paths)
+            for pdb_path, subset in zip(
+                self.config.data.pdb_paths, self.config.data.subset
+            )
         ]
         dataset: ConcatDataset[PDBDataset] = ConcatDataset(train_datasets)
 
