@@ -28,6 +28,7 @@ from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import RunningConfig, SamplingConfig, TrainingConfig
 from protpardelle.core.models import Protpardelle, load_model
 from protpardelle.data.atom import bb_coords_to_atom37_coords
 from protpardelle.data.dataset import make_fixed_size_1d
@@ -47,6 +48,7 @@ from protpardelle.utils import (
     apply_dotdict_recursively,
     get_default_device,
     get_logger,
+    load_config,
     norm_path,
     seed_everything,
 )

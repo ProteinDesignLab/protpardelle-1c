@@ -10,11 +10,13 @@ import random
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast, overload
 
 import numpy as np
 import torch
-import yaml
+from omegaconf import OmegaConf
+
+from protpardelle.configs import Config, RunningConfig, SamplingConfig, TrainingConfig
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
@@ -154,17 +156,29 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     return logger
 
 
-def load_config(config_path: StrPath) -> argparse.Namespace:
-    """Load a YAML configuration file and convert it to a namespace."""
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[RunningConfig]
+) -> RunningConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[SamplingConfig]
+) -> SamplingConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[TrainingConfig]
+) -> TrainingConfig: ...
+def load_config(config_path: StrPath, config_dataclass: type[Config]) -> Config:
+    """Load a YAML file and merge it into the structured Config schema."""
     config_path = norm_path(config_path)
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_dict = yaml.safe_load(f)
-    config = dict_to_namespace(config_dict)
+    raw = OmegaConf.load(config_path)
+    base = OmegaConf.structured(config_dataclass)
+    merged = OmegaConf.merge(base, raw)
 
-    return config
+    return cast(Config, merged)
 
 
 def namespace_to_dict(namespace: argparse.Namespace) -> dict:

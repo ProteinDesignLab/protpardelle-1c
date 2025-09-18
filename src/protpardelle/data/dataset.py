@@ -22,7 +22,9 @@ from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
 from protpardelle.data.atom import dummy_fill
 from protpardelle.data.pdb_io import load_feats_from_pdb
-from protpardelle.utils import unsqueeze_trailing_dims
+from protpardelle.utils import get_logger, unsqueeze_trailing_dims
+
+logger = get_logger(__name__)
 
 FEATURES_1D = (
     "coords_in",
@@ -615,8 +617,12 @@ class PDBDataset(Dataset):
                     ~self.cif_df["homodimer"]
                 ]  # filter out homodimers
                 new_size = len(self.cif_df)
-                print(
-                    f"Filtering by resolution better than {subset}A and total length less than {self.fixed_size} residues. Removed {orig_size - new_size} examples, will train on {new_size} examples."
+                logger.info(
+                    "Filtering by resolution better than %sA and total length less than %s residues. Removed %s examples, will train on %s examples.",
+                    subset,
+                    self.fixed_size,
+                    orig_size - new_size,
+                    new_size,
                 )
             self.pdb_keys = list(
                 set(
@@ -682,7 +688,7 @@ class PDBDataset(Dataset):
             )
             coords_in = example["atom_positions"]
         except Exception as e:
-            print(f"File {data_file} throws {e}")
+            logger.error("Error loading PDB %s: %s", data_file, str(e))
             return
 
         # Apply data augmentation
@@ -869,7 +875,7 @@ class StochasticMixedSampler(Sampler):
             # Yield the indices for this batch
             yield from batch_indices
 
-    def __len__(self):
+    def __len__(self) -> int:
         return (
             int(np.ceil(len(self.datasets[0]) / self.primary_samples_per_batch))
             * self.batch_size

@@ -3,7 +3,6 @@
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
 """
 
-import argparse
 import random
 import subprocess
 from contextlib import nullcontext
@@ -619,7 +618,7 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
-    config = load_config(config_path)
+    config = load_config(config_path, TrainingConfig)
 
     if debug:
         logger.debug("Debug mode is enabled")

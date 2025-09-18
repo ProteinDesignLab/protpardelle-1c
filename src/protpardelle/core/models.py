@@ -579,8 +579,8 @@ class CoordinateDenoiser(nn.Module):
 def parse_fixed_pos_str(
     fixed_pos_str: str,
     chain_id_mapping: dict[str, int],
-    residue_index: TensorType["n", int],
-    chain_index: TensorType["n", int],
+    residue_index: Int[torch.Tensor, "L"],
+    chain_index: Int[torch.Tensor, "L"],
 ) -> list[int]:
     """Parse a string of fixed positions.
 
@@ -981,8 +981,6 @@ class Protpardelle(nn.Module):
         use_fullmpnn_for_final: use "full" ProteinMPNN at the final step.
         noise_schedule: specify the noise level timesteps for sampling.
         tqdm_pbar: progress bar in interactive contexts.
-        return_last: return only the sampled structure and sequence.
-        return_aux: return a dict of everything associated with the sampling run.
         jump_steps: use superposition scheme for sampling.
         uniform_steps: allatom denoising with same noise level changes at each step, not superposition scheme
         motif_file_path: path to .pdb structure containing motif info, possibly containing additional unused residues
@@ -1140,7 +1138,9 @@ class Protpardelle(nn.Module):
 
             motif_size = motif_all_atom.shape[-3]
             logger.info(
-                f"Using motif from {motif_file_path} with {motif_size} motif residues."
+                "Using motif from %s with %d motif residues.",
+                motif_file_path,
+                motif_size,
             )
 
             # translate the motif
@@ -1282,7 +1282,7 @@ class Protpardelle(nn.Module):
 
         coords_shape = seq_mask.shape + (self.n_atoms, 3)
         if xt_start is not None:
-            print("Using supplied xt to start diffusion")
+            logger.info("Using supplied xt to start diffusion")
             xt = xt_start
         elif partial_diffusion is not None and pd.enabled:
             pd_step = n_steps - pd.n_steps
@@ -1335,8 +1335,10 @@ class Protpardelle(nn.Module):
                     noise_level=pd_noise_level,
                     dummy_fill_mode=dummy_fill_mode,
                 )
-            print(
-                f"Partial diffusion, going back to step {pd_step}, T={(pd_step / n_steps):.2f}"
+            logger.info(
+                "Partial diffusion, going back to step %d, T=%.2f",
+                pd_step,
+                pd_step / n_steps,
             )
         else:
             xt = torch.randn(*coords_shape).to(self.device)
@@ -1856,12 +1858,12 @@ class Protpardelle(nn.Module):
 
                                 if dummy_fill_mode == "zero":
                                     dummy_fill_noise = torch.randn_like(
-                                        xt
-                                    ) * unsqueeze_trailing_dims(sigma, xt)
+                                        xt_hat
+                                    ) * unsqueeze_trailing_dims(sigma, xt_hat)
                                 else:
                                     dummy_fill_noise = (
-                                        torch.randn_like(xt)
-                                        * unsqueeze_trailing_dims(sigma, xt)
+                                        torch.randn_like(xt_hat)
+                                        * unsqueeze_trailing_dims(sigma, xt_hat)
                                         + x0[:, :, 1:2, :]
                                     )
                                 xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
@@ -1902,12 +1904,12 @@ class Protpardelle(nn.Module):
 
                                     if dummy_fill_mode == "zero":
                                         dummy_fill_noise = torch.randn_like(
-                                            xt
-                                        ) * unsqueeze_trailing_dims(sigma, xt)
+                                            xt_hat
+                                        ) * unsqueeze_trailing_dims(sigma, xt_hat)
                                     else:
                                         dummy_fill_noise = (
-                                            torch.randn_like(xt)
-                                            * unsqueeze_trailing_dims(sigma, xt)
+                                            torch.randn_like(xt_hat)
+                                            * unsqueeze_trailing_dims(sigma, xt_hat)
                                             + x0[:, :, 1:2, :]
                                         )
                                     xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)

@@ -1,6 +1,6 @@
 """Neural network modules.
 
-Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu
+Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import copy
@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
+from jaxtyping import Float, Int
 from torch import broadcast_tensors, einsum
 from torch.amp import autocast
 from torch.optim.lr_scheduler import LRScheduler
@@ -169,6 +170,7 @@ class RelativePositionalEncoding(nn.Module):
         cyclic: bool = False,
     ) -> None:
         super().__init__()
+
         self.max_rel_idx = max_rel_idx
         self.n_rel_pos = 2 * self.max_rel_idx + 1
         self.linear = nn.Linear(self.n_rel_pos, attn_dim)
@@ -179,10 +181,10 @@ class RelativePositionalEncoding(nn.Module):
         """Compute relative positional encodings.
 
         Args:
-            index (torch.Tensor): Absolute positions. (B, N)
+            index (torch.Tensor): Absolute positions. (B, L)
 
         Returns:
-            torch.Tensor: Relative positional encodings. (B, N, N, C)
+            torch.Tensor: Relative positional encodings. (B, L, L, C)
         """
 
         if self.relchain:
@@ -218,6 +220,7 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x = rearrange(x, "... (d r) -> ... d r", r=2)
     x1, x2 = x.unbind(dim=-1)
     x = torch.stack((-x2, x1), dim=-1)
+
     return rearrange(x, "... d r -> ... (d r)")
 
 
@@ -247,6 +250,7 @@ def apply_rotary_emb(
         t[..., end_index:],
     )
     t = (t * freqs.cos() * scale) + (rotate_half(t) * freqs.sin() * scale)
+
     return torch.cat((t_left, t, t_right), dim=-1)
 
 
@@ -610,17 +614,17 @@ def posemb_sincos_1d(patches, temperature=10000, residue_index=None):
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim: int) -> None:
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(dim))
         self.register_buffer("beta", torch.zeros(dim))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
 
 
 class NoiseConditioningBlock(nn.Module):
-    def __init__(self, n_in_channel, n_out_channel):
+    def __init__(self, n_in_channel: int, n_out_channel: int) -> None:
         super().__init__()
         self.block = nn.Sequential(
             NoiseEmbedding(n_in_channel),
@@ -696,7 +700,7 @@ class TimeCondAttention(nn.Module):
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         dit: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         hidden_dim = dim_head * heads
         dim_context = default(dim_context, dim)
@@ -777,9 +781,6 @@ class TimeCondAttention(nn.Module):
         has_context = exists(context)
 
         context = default(context, x)
-
-        if x.shape[-1] != self.norm.gamma.shape[-1]:
-            print(context.shape, x.shape, self.norm.gamma.shape)
 
         x = self.norm(x)
 
@@ -984,7 +985,7 @@ class TimeCondTransformer(nn.Module):
         if "rotary" in position_embedding_type:
             self.rope = RotaryEmbedding(
                 dim=(dim // heads), use_residx=True, cache_if_possible=False
-            )  # Changed to use residx
+            )  # changed to use residx
         if "relative" in position_embedding_type:
             self.relpos = nn.Sequential(
                 RelativePositionalEncoding(
@@ -1084,7 +1085,6 @@ class TimeCondTransformer(nn.Module):
 class TimeCondUViT(nn.Module):
     def __init__(
         self,
-        *,
         seq_len: int,
         dim: int,
         patch_size: int = 1,
@@ -1114,8 +1114,7 @@ class TimeCondUViT(nn.Module):
         # Initialize configuration params
         if time_cond_dim is None:
             time_cond_dim = dim * 4
-        # if motif_cond_dim is None:
-        #     motif_cond_dim = dim * 4
+
         self.position_embedding_type = position_embedding_type
         channels = channels_per_atom
         self.n_conv_layers = n_conv_layers = len(n_filt_per_layer)
