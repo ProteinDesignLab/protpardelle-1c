@@ -790,29 +790,31 @@ class StochasticMixedSampler(Sampler):
     provided mixing ratios, but we are guaranteed to draw a fixed number of samples from the
     primary dataset (equal to int(batch_size * mixing_ratios[0])).
 
-    Parameters:
-    - datasets (list[Dataset]): A list of datasets to sample from. The first dataset is considered
-                                the primary dataset that will be sampled without replacement.
-    - mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
-                                   The sum of all ratios should be equal to 1. The length of this list
-                                   should be equal to the number of datasets.
-    - batch_size (int): The batch size for which samples need to be drawn.
-
     Attributes:
-    - primary_dataset_length (int): The length of the primary dataset.
-    - primary_samples_per_batch (int): The number of primary dataset examples we draw per batch.
-    - offsets (list[int]): The accumulated offset of each dataset when all datasets are concatenated.
-    - samplers (list[Sampler]): List of samplers for each dataset. The primary dataset uses a
-                                RandomSampler without replacement while all others use a RandomSampler with replacement.
-
-    Methods:
-    - __iter__: Returns an iterator that provides indices to draw samples from the combined dataset.
-    - __len__: Returns the approximate length of indices that will be drawn in total.
+        primary_dataset_length (int): The length of the primary dataset.
+        primary_samples_per_batch (int): The number of primary dataset examples we draw per batch.
+        offsets (list[int]): The accumulated offset of each dataset when all datasets are concatenated.
+        samplers (list[Sampler]): A list of samplers for each dataset. The primary dataset uses a
+            RandomSampler without replacement while all others use a RandomSampler with replacement.
     """
 
     def __init__(
-        self, datasets: Sequence[Dataset], mixing_ratios: list[float], batch_size: int
-    ):
+        self,
+        datasets: Sequence[PDBDataset],
+        mixing_ratios: list[float],
+        batch_size: int,
+    ) -> None:
+        """Stochastic Mixed Sampler.
+
+        Args:
+            datasets (Sequence[PDBDataset]): A list of datasets to sample from. The first dataset
+                is considered the primary dataset that will be sampled without replacement.
+            mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
+                The sum of all ratios should be equal to 1. The length of this list should be equal
+                to the number of datasets.
+            batch_size (int): The batch size for which samples need to be drawn.
+        """
+
         self.datasets = datasets
         self.mixing_ratios = np.array(mixing_ratios)
         self.batch_size = batch_size
