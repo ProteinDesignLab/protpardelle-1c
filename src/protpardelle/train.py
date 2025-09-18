@@ -402,7 +402,7 @@ class ProtpardelleTrainer:
             adj_cond = None
 
         # Noise data
-        timestep = torch.rand(batch_size, device=self.device)
+        timestep = torch.rand(batch_size).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
         noise_level = self.module.training_noise_schedule(timestep)
         noised_coords = diffusion.noise_coords(
             atom_coords,
