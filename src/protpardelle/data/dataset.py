@@ -181,32 +181,36 @@ def apply_random_se3(
     return atom_coords
 
 
-def uniform_rand_rotation(batch_size: int) -> Float[torch.Tensor, "B 3 3"]:
+def uniform_rand_rotation(
+    batch_size: int, seed: int | None = None
+) -> Float[torch.Tensor, "B 3 3"]:
     """Creates a rotation matrix uniformly at random in SO(3).
 
     Uses quaternionic multiplication to generate independent rotation matrices for each batch.
 
     Args:
         batch_size (int): The number of rotation matrices to generate.
+        seed (int | None, optional): Random seed for reproducibility. Defaults to None.
 
     Returns:
         torch.Tensor: The generated rotation matrices.
     """
 
-    q = torch.randn(batch_size, 4)
+    rng = torch.Generator().manual_seed(seed) if seed is not None else None
+    q = torch.randn(batch_size, 4, generator=rng)
     q = q / torch.norm(q, dim=1, keepdim=True)
     rotation = torch.zeros(batch_size, 3, 3)
 
     a, b, c, d = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
     rotation[:, 0, :] = torch.stack(
         [2 * a**2 - 1 + 2 * b**2, 2 * b * c - 2 * a * d, 2 * b * d + 2 * a * c]
-    ).T
+    ).t()
     rotation[:, 1, :] = torch.stack(
         [2 * b * c + 2 * a * d, 2 * a**2 - 1 + 2 * c**2, 2 * c * d - 2 * a * b]
-    ).T
+    ).t()
     rotation[:, 2, :] = torch.stack(
         [2 * b * d - 2 * a * c, 2 * c * d + 2 * a * b, 2 * a**2 - 1 + 2 * d**2]
-    ).T
+    ).t()
 
     return rotation
 

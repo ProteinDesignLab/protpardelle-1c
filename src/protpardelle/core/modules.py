@@ -448,7 +448,7 @@ class NoiseEmbedding(nn.Module):
         freqs = freqs / (self.num_channels // 2 - self.endpoint)
         freqs = (1 / self.max_positions) ** freqs
 
-        if len(x.shape) == 1:
+        if x.ndim == 1:
             x = x.outer(freqs.to(x.dtype))
         else:
             b, l = x.shape

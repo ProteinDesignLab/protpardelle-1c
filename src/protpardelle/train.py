@@ -92,7 +92,7 @@ def masked_mse_loss(
         torch.Tensor: The computed masked mean squared error loss.
     """
 
-    data_dims = tuple(range(1, len(x.shape)))
+    data_dims = tuple(range(1, x.ndim))
     mse = (x - y).square() * mask
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
