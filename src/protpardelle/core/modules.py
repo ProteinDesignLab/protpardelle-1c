@@ -397,47 +397,6 @@ class RotaryEmbedding(nn.Module):
 
         return apply_rotary_emb(freqs, t, seq_dim=seq_dim)
 
-    def rotate_queries_with_cached_keys(self, q, k, seq_dim=None, offset=0):
-        seq_dim = default(seq_dim, self.default_seq_dim)
-
-        q_len, k_len = q.shape[seq_dim], k.shape[seq_dim]
-        assert q_len <= k_len
-
-        rotated_q = self.rotate_queries_or_keys(
-            q, seq_dim=seq_dim, offset=k_len - q_len + offset
-        )
-        rotated_k = self.rotate_queries_or_keys(k, seq_dim=seq_dim, offset=offset)
-
-        rotated_q = rotated_q.type(q.dtype)
-        rotated_k = rotated_k.type(k.dtype)
-
-        return rotated_q, rotated_k
-
-    def rotate_queries_and_keys(
-        self, q, k, residx: TensorType["b n", float], seq_dim=None
-    ):
-        seq_dim = default(seq_dim, self.default_seq_dim)
-
-        assert self.use_xpos
-        device, dtype, seq_len = q.device, q.dtype, q.shape[seq_dim]
-
-        seq = self.get_seq_pos(seq_len, residx, dtype=dtype, device=device)
-
-        freqs = self.forward(seq, seq_len=seq_len)
-        scale = self.get_scale(seq, seq_len=seq_len).to(dtype)
-
-        if seq_dim == -3:
-            freqs = rearrange(freqs, "n d -> n 1 d")
-            scale = rearrange(scale, "n d -> n 1 d")
-
-        rotated_q = apply_rotary_emb(freqs, q, scale=scale, seq_dim=seq_dim)
-        rotated_k = apply_rotary_emb(freqs, k, scale=scale**-1, seq_dim=seq_dim)
-
-        rotated_q = rotated_q.type(q.dtype)
-        rotated_k = rotated_k.type(k.dtype)
-
-        return rotated_q, rotated_k
-
     def get_scale(self, t: torch.Tensor, seq_len: int | None = None, offset=0):
         assert self.use_xpos
 
@@ -1158,7 +1117,10 @@ class TimeCondUViT(nn.Module):
                 num_groups = 2 if i == 0 and j == 0 else 4
                 layer.append(
                     TimeCondResnetBlock(
-                        block_in, block_out, time_cond_dim, num_norm_in_groups=num_groups
+                        block_in,
+                        block_out,
+                        time_cond_dim,
+                        num_norm_in_groups=num_groups,
                     )
                 )
                 block_in = block_out
