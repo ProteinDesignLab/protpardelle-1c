@@ -90,9 +90,7 @@ def read_pdb(
         parser = PDBParser(QUIET=True)
 
     structure = parser.get_structure("protein", pdb_path)
-    logger.warning(
-        "PDB file contains multiple models, only the first one will be used."
-    )
+
     model = next(structure.get_models())
 
     atom_positions = []
