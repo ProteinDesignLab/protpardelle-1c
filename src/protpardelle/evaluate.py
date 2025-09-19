@@ -4,16 +4,98 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 from collections import defaultdict
+from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
 import torch
 
-import protpardelle.core.modules as modules
 from protpardelle.common import residue_constants
 from protpardelle.data.align import kabsch_align, tm_score
 from protpardelle.integrations.esmfold import predict_structures
 from protpardelle.integrations.protein_mpnn import design_sequence
+
+########################################
+# Adapted from https://github.com/aqlaboratory/openfold
+
+
+def permute_final_dims(x: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
+    """Permute the final dimensions of a tensor.
+
+    Args:
+        x (torch.Tensor): The input tensor.
+        indices (Sequence[int]): The indices to permute the final dimensions.
+
+    Returns:
+        torch.Tensor: The permuted tensor.
+    """
+
+    zero_index = -1 * len(indices)
+    first_inds = list(range(len(x.shape[:zero_index])))
+
+    return x.contiguous().permute(first_inds + [zero_index + i for i in indices])
+
+
+def lddt(
+    all_atom_pred_pos: torch.Tensor,
+    all_atom_positions: torch.Tensor,
+    all_atom_mask: torch.Tensor,
+    cutoff: float = 15.0,
+    eps: float = 1e-10,
+    per_residue: bool = True,
+) -> torch.Tensor:
+    """Compute the LDDT score.
+
+    Args:
+        all_atom_pred_pos (torch.Tensor): Predicted atom positions.
+        all_atom_positions (torch.Tensor): True atom positions.
+        all_atom_mask (torch.Tensor): Mask for valid atoms.
+        cutoff (float, optional): Distance cutoff for considering pairs. Defaults to 15.0.
+        eps (float, optional): Small value to avoid division by zero. Defaults to 1e-10.
+        per_residue (bool, optional): Whether to compute the score per residue. Defaults to True.
+
+    Returns:
+        torch.Tensor: The computed LDDT score.
+    """
+
+    n = all_atom_mask.shape[-2]
+    dmat_true = torch.sqrt(
+        eps
+        + torch.sum(
+            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3)) ** 2,
+            dim=-1,
+        )
+    )
+
+    dmat_pred = torch.sqrt(
+        eps
+        + torch.sum(
+            (all_atom_pred_pos.unsqueeze(-2) - all_atom_pred_pos.unsqueeze(-3)) ** 2,
+            dim=-1,
+        )
+    )
+    dists_to_score = (
+        (dmat_true < cutoff)
+        * all_atom_mask
+        * permute_final_dims(all_atom_mask, (1, 0))
+        * (1.0 - torch.eye(n, device=all_atom_mask.device))
+    )
+
+    dist_l1 = torch.abs(dmat_true - dmat_pred)
+
+    score = (
+        (dist_l1 < 0.5).type(dist_l1.dtype)
+        + (dist_l1 < 1.0).type(dist_l1.dtype)
+        + (dist_l1 < 2.0).type(dist_l1.dtype)
+        + (dist_l1 < 4.0).type(dist_l1.dtype)
+    )
+    score = score * 0.25
+
+    dims = (-1,) if per_residue else (-2, -1)
+    norm = 1.0 / (eps + torch.sum(dists_to_score, dim=dims))
+    score = norm * (eps + torch.sum(dists_to_score * score, dim=dims))
+
+    return score
 
 
 def compute_structure_metric(
@@ -76,13 +158,12 @@ def compute_structure_metric(
         return tm_score(aligned_coords1, coords2, mask=atom_mask)
     elif metric == "allatom_lddt":
         assert atom_mask is not None
-        lddt = modules.lddt(
+        return lddt(
             coords1.reshape(-1, 3),
             coords2.reshape(-1, 3),
             atom_mask.reshape(-1, 1),
             per_residue=False,
         )
-        return lddt
     else:
         raise NotImplementedError
 
