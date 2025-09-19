@@ -527,6 +527,7 @@ def generate(
 def sample(
     sampling_yaml_path: StrPath,
     motif_dir: StrPath | None = None,
+    motif_pdb: StrPath | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
@@ -542,6 +543,7 @@ def sample(
     Args:
         sampling_yaml_path (StrPath): Path to sampling config, see examples/sampling/*.yaml for examples
         motif_dir (StrPath | None, optional): Folder containing motifs to scaffold. Defaults to None.
+        motif_pdb (Path, optional): Overrides motif_dir, use by specifying the motifs inside sampling_yaml_path to null
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
@@ -599,7 +601,10 @@ def sample(
         )
     ):
         if motif_cfg is None:
-            motif_fps.append(motif_dir / f"{ri:03}_unconditional")
+            if motif_pdb is not None:
+                motif_fps.append(norm_path(motif_pdb))
+            else:
+                motif_fps.append(motif_dir / f"{ri:03}_unconditional")
         elif motif_cfg.endswith(".pdb") or motif_cfg.endswith(".cif"):
             motif_fps.append(motif_dir / motif_cfg)
         else:
@@ -1098,6 +1103,7 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
     motif_dir: str | None = typer.Option(None, help="Directory containing motif PDBs"),
+    motif_pdb: str | None = typer.Option(None, help="Single motif PDB file, overrides motif_dir"),
     project_name: str | None = typer.Option(None, help="wandb project name"),
     num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
@@ -1121,6 +1127,7 @@ def main(
         sampling_yaml_path=sampling_yaml_path,
         project_name=project_name,
         motif_dir=motif_dir,
+        motif_pdb=motif_pdb,
         num_samples=num_samples,
         num_mpnn_seqs=num_mpnn_seqs,
         batch_size=batch_size,
