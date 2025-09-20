@@ -20,7 +20,7 @@ from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
-from protpardelle.data.atom import dummy_fill
+from protpardelle.data.atom import dummy_fill_noise_coords
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.utils import get_logger, unsqueeze_trailing_dims
 
@@ -730,8 +730,8 @@ class PDBDataset(Dataset):
             )
 
         if self.dummy_fill_mode != "zero":
-            coords_in = dummy_fill(
-                coords_in, example["atom_mask"], mode=self.dummy_fill_mode
+            coords_in = dummy_fill_noise_coords(
+                coords_in, example["atom_mask"], dummy_fill_mode=self.dummy_fill_mode
             )
 
         orig_size = coords_in.shape[0]

@@ -22,9 +22,9 @@ from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
-from protpardelle.core import diffusion, modules
+from protpardelle.core import modules
 from protpardelle.core.models import Protpardelle
-from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.data.atom import atom37_mask_from_aatype, dummy_fill_noise_coords
 from protpardelle.data.dataset import (
     PDBDataset,
     StochasticMixedSampler,
@@ -407,7 +407,7 @@ class ProtpardelleTrainer:
             min=tol, max=1 - tol
         )
         noise_level = self.module.training_noise_schedule(timestep)
-        noised_coords = diffusion.noise_coords(
+        noised_coords = dummy_fill_noise_coords(
             atom_coords,
             atom_mask,
             noise_level=noise_level,

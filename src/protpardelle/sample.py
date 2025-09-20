@@ -356,7 +356,6 @@ def generate(
     hotspots=None,
     sse_cond=None,
     adj_cond=None,
-    run_name="",
     allatom=False,
 ):
 
@@ -807,7 +806,6 @@ def sample(
                 hotspots=hotspot,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
-                run_name=run_name,
                 allatom=allatom,
             )
 

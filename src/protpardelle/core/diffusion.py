@@ -8,9 +8,6 @@ from typing import Literal
 import torch
 from jaxtyping import Float
 
-from protpardelle.data.atom import dummy_fill
-from protpardelle.utils import unsqueeze_trailing_dims
-
 
 def compute_sampling_noise(
     timestep: Float[torch.Tensor, "..."],
@@ -93,34 +90,3 @@ def noise_schedule(
         raise ValueError(f"Unknown noise schedule function: {function}")
 
     return noise_level
-
-
-def noise_coords(
-    atom37_coords: Float[torch.Tensor, "B L 37 3"],
-    atom37_mask: Float[torch.Tensor, "B L 37"],
-    noise_level: Float[torch.Tensor, "B"],
-    dummy_fill_mode: Literal["CA", "zero"] = "zero",
-) -> Float[torch.Tensor, "B L 37 3"]:
-    """Applies noise to the coordinates.
-
-    Args:
-        atom37_coords (torch.Tensor): The input coordinates.
-        atom37_mask (torch.Tensor): The atom mask indicating which atoms are present.
-        noise_level (torch.Tensor): The noise level for each batch.
-        dummy_fill_mode (Literal["CA", "zero"], optional): The mode for filling in dummy atoms.
-            Defaults to "zero".
-
-    Returns:
-        torch.Tensor: The noisy coordinates.
-    """
-
-    atom37_coords = dummy_fill(
-        atom37_coords, atom37_mask, mode=dummy_fill_mode
-    )  # (B, L, 37, 3)
-
-    noise = torch.randn_like(atom37_coords) * unsqueeze_trailing_dims(
-        noise_level, target=atom37_coords
-    )
-    noisy_coords = atom37_coords + noise
-
-    return noisy_coords

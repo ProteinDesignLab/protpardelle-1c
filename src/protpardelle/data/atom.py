@@ -10,6 +10,7 @@ import torch
 from jaxtyping import Float, Int
 
 from protpardelle.common import residue_constants
+from protpardelle.utils import unsqueeze_trailing_dims
 
 
 def atom14_mask_from_aatype(
@@ -329,39 +330,60 @@ def fill_in_cbeta_for_atom37_coords(
     return updated_atom37_coords
 
 
-def dummy_fill(
-    atom37_coords: Float[torch.Tensor, "... 37 3"],
-    atom37_mask: Float[torch.Tensor, "... 37"],
-    mode: Literal["CA", "zero"] = "zero",
-) -> Float[torch.Tensor, "... 37 3"]:
-    """Fill in ghost side chain atoms with either the CA or CB atom value
-    for each residue, depending on the mode.
+def dummy_fill_noise_coords(
+    atom37_coords: Float[torch.Tensor, "B L 37 3"],
+    atom37_mask: Float[torch.Tensor, "B L 37"],
+    atom37_coords_to_use: Float[torch.Tensor, "B L 37 3"] | None = None,
+    noise_level: Float[torch.Tensor, "B"] | None = None,
+    mask_noise: bool = False,
+    dummy_fill_mode: Literal["CA", "zero"] = "zero",
+) -> Float[torch.Tensor, "B L 37 3"]:
+    """Applies noise to the coordinates.
 
     Args:
-        atom37_coords (torch.Tensor): Input coordinates.
-        atom37_mask (torch.Tensor): Atom mask.
-        mode (Literal["CA", "zero"], optional): Mode for filling in ghost atoms.
+        atom37_coords (torch.Tensor): The input coordinates.
+        atom37_mask (torch.Tensor): The atom mask indicating which atoms are present.
+        atom37_coords_to_use (torch.Tensor | None, optional): The coordinates to use for dummy filling. If None,
+            the input coordinates are used. Defaults to None.
+        noise_level (torch.Tensor | None, optional): The noise level to apply. If None,
+            no noise is added. Defaults to None.
+        mask_noise (bool, optional): Whether to mask the noise to only apply to dummy atoms.
+            Defaults to False.
+        dummy_fill_mode (Literal["CA", "zero"], optional): The mode for filling in dummy atoms.
             Defaults to "zero".
 
     Returns:
-        torch.Tensor: Filled coordinates.
+        torch.Tensor: The noisy coordinates.
     """
 
-    dummy_fill_mask: Float[torch.Tensor, "... 37"] = 1.0 - atom37_mask
+    if atom37_coords_to_use is None:
+        atom37_coords_to_use = atom37_coords
 
-    if mode == "CA":
-        dummy_fill_value = atom37_coords[..., 1:2, :]  # CA
-    elif mode == "CB":  # deprecated
-        dummy_fill_value = fill_in_cbeta_for_atom37_coords(atom37_coords)[
+    if dummy_fill_mode == "CA":
+        dummy_fill_value = atom37_coords_to_use[..., 1:2, :]  # CA
+    elif dummy_fill_mode == "CB":  # not used
+        dummy_fill_value = fill_in_cbeta_for_atom37_coords(atom37_coords_to_use)[
             ..., 3:4, :
         ]  # idealized CB
-    elif mode == "zero":
-        dummy_fill_value = torch.zeros_like(atom37_coords)
+    elif dummy_fill_mode == "zero":
+        dummy_fill_value = torch.zeros_like(atom37_coords_to_use)
     else:
-        raise ValueError(f"Unknown dummy fill mode: {mode}")
+        raise ValueError(f"Unknown dummy fill mode: {dummy_fill_mode}")
 
-    atom37_coords = atom37_coords * atom37_mask.unsqueeze(
-        -1
-    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
+    dummy_fill_mask: Float[torch.Tensor, "... 37"] = 1.0 - atom37_mask
+    atom37_coords = atom37_coords * atom37_mask.unsqueeze(-1)
+    atom37_coords = atom37_coords + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
+
+    if noise_level is None:
+        dummy_fill_noise = torch.zeros_like(atom37_coords)
+    else:
+        dummy_fill_noise = torch.randn_like(atom37_coords) * unsqueeze_trailing_dims(
+            noise_level, target=atom37_coords
+        )
+
+    if mask_noise:
+        atom37_coords = atom37_coords + dummy_fill_noise * dummy_fill_mask.unsqueeze(-1)
+    else:
+        atom37_coords = atom37_coords + dummy_fill_noise
 
     return atom37_coords

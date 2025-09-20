@@ -28,7 +28,11 @@ from tqdm.auto import tqdm
 from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
 from protpardelle.core import diffusion, modules
-from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
+from protpardelle.data.atom import (
+    atom37_mask_from_aatype,
+    atom73_mask_from_aatype,
+    dummy_fill_noise_coords,
+)
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import seq_to_aatype_batched
@@ -1322,7 +1326,7 @@ class Protpardelle(nn.Module):
                 pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
                 bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
                 bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
-                xt = diffusion.noise_coords(
+                xt = dummy_fill_noise_coords(
                     pd_coords,
                     bb_atom_mask,
                     noise_level=pd_noise_level,
@@ -1330,7 +1334,7 @@ class Protpardelle(nn.Module):
                 )
             else:
                 pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
-                xt = diffusion.noise_coords(
+                xt = dummy_fill_noise_coords(
                     pd_coords,
                     pd_atom_mask,
                     noise_level=pd_noise_level,
