@@ -168,7 +168,9 @@ def compute_structure_metric(
     if metric == "tm_score":
         return tm_score(aligned_coords1_ca, coords2[:, 1])
 
-    raise NotImplementedError(f"Metric {metric} not implemented.")
+    raise NotImplementedError(
+        f"Metric {metric} not implemented. Valid options are: 'ca_rmsd', 'tm_score'."
+    )
 
 
 def compute_allatom_structure_metric(
@@ -201,20 +203,21 @@ def compute_allatom_structure_metric(
             per_residue=False,
         )
 
-    atom_mask_bool = atom_mask.bool()
-    _, (R, t) = kabsch_align(coords1[atom_mask_bool], coords2[atom_mask_bool])
-    aligned_coords1 = coords1 - coords1[atom_mask_bool].mean(dim=0)
-    aligned_coords1 = aligned_coords1 @ R.t() + t
+    mask = atom_mask.bool()
+    _, (R, t) = kabsch_align(coords1[mask], coords2[mask])
+    coords1_masked_mean = coords1[mask].mean(dim=0)
+    aligned_coords1 = (coords1 - coords1_masked_mean) @ R.t() + t
 
     if metric == "allatom_rmsd":
-        aligned_coords1_masked = aligned_coords1 * atom_mask.unsqueeze(-1)
-        coords2_masked = coords2 * atom_mask.unsqueeze(-1)
+        aligned_coords1_masked = aligned_coords1[mask]
+        coords2_masked = coords2[mask]
         allatom_rmsd = torch.sqrt(
-            (aligned_coords1_masked - coords2_masked).square().sum(-1).sum()
-            / atom_mask.sum()
+            (aligned_coords1_masked - coords2_masked).square().sum() / mask.sum()
         )
         return allatom_rmsd
     if metric == "allatom_tm":
         return tm_score(aligned_coords1, coords2, atom_mask=atom_mask)
 
-    raise NotImplementedError(f"Metric {metric} not implemented.")
+    raise NotImplementedError(
+        f"Metric {metric} not implemented. Valid options are: 'allatom_rmsd', 'allatom_tm', 'allatom_lddt'."
+    )
