@@ -378,7 +378,7 @@ def dummy_fill_noise_coords(
         dummy_fill_noise = torch.zeros_like(atom37_coords)
     else:
         dummy_fill_noise = torch.randn_like(atom37_coords) * unsqueeze_trailing_dims(
-            noise_level, target=atom37_coords
+            noise_level, atom37_coords
         )
 
     if mask_noise:
