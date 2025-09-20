@@ -332,7 +332,7 @@ def fill_in_cbeta_for_atom37_coords(
 def dummy_fill(
     atom37_coords: Float[torch.Tensor, "... 37 3"],
     atom37_mask: Float[torch.Tensor, "... 37"],
-    mode: Literal["CA", "CB", "zero"] = "zero",
+    mode: Literal["CA", "zero"] = "zero",
 ) -> Float[torch.Tensor, "... 37 3"]:
     """Fill in ghost side chain atoms with either the CA or CB atom value
     for each residue, depending on the mode.
@@ -340,7 +340,7 @@ def dummy_fill(
     Args:
         atom37_coords (torch.Tensor): Input coordinates.
         atom37_mask (torch.Tensor): Atom mask.
-        mode (Literal["CA", "CB", "zero"], optional): Mode for filling in ghost atoms.
+        mode (Literal["CA", "zero"], optional): Mode for filling in ghost atoms.
             Defaults to "zero".
 
     Returns:
@@ -351,7 +351,7 @@ def dummy_fill(
 
     if mode == "CA":
         dummy_fill_value = atom37_coords[..., 1:2, :]  # CA
-    elif mode == "CB":
+    elif mode == "CB":  # deprecated
         dummy_fill_value = fill_in_cbeta_for_atom37_coords(atom37_coords)[
             ..., 3:4, :
         ]  # idealized CB

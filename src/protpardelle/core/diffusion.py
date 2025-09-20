@@ -99,7 +99,7 @@ def noise_coords(
     atom37_coords: Float[torch.Tensor, "B L 37 3"],
     atom37_mask: Float[torch.Tensor, "B L 37"],
     noise_level: Float[torch.Tensor, "B"],
-    dummy_fill_mode: Literal["CA", "CB", "zero"] = "zero",
+    dummy_fill_mode: Literal["CA", "zero"] = "zero",
 ) -> Float[torch.Tensor, "B L 37 3"]:
     """Applies noise to the coordinates.
 
@@ -107,7 +107,7 @@ def noise_coords(
         atom37_coords (torch.Tensor): The input coordinates.
         atom37_mask (torch.Tensor): The atom mask indicating which atoms are present.
         noise_level (torch.Tensor): The noise level for each batch.
-        dummy_fill_mode (Literal["CA", "CB", "zero"], optional): The mode for filling in dummy atoms.
+        dummy_fill_mode (Literal["CA", "zero"], optional): The mode for filling in dummy atoms.
             Defaults to "zero".
 
     Returns:

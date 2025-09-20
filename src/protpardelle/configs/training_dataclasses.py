@@ -76,7 +76,7 @@ class Data:
     auto_calc_sigma_data: bool
     n_examples_for_sigma_data: int
 
-    # dummy_fill_mode: Literal["zero", "CA", "CB"]
+    # dummy_fill_mode: Literal["zero", "CA"]
     dummy_fill_mode: str
     # subset: list[Literal["designable", "all"] | float]
     subset: list[str | float]

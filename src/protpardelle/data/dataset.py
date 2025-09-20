@@ -555,7 +555,7 @@ class PDBDataset(Dataset):
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
-        dummy_fill_mode: Literal["CA", "CB", "zero"] = "zero",
+        dummy_fill_mode: Literal["CA", "zero"] = "zero",
         subset: str | float = "",
     ) -> None:
         """Initialize the PDBDataset.
@@ -576,7 +576,7 @@ class PDBDataset(Dataset):
                 Defaults to 1.0.
             chain_residx_gap (int, optional): Offset added to residue indices to
                 separate chains. Defaults to 200.
-            dummy_fill_mode (Literal["CA", "CB", "zero"], optional): Strategy to fill coordinates
+            dummy_fill_mode (Literal["CA", "zero"], optional): Strategy to fill coordinates
                 for non-existing atoms. Defaults to "zero".
             subset (str | float, optional): Dataset-specific subset identifier to
                 train on; if a float in (0, 1], interpreted as a fraction of data
@@ -704,7 +704,7 @@ class PDBDataset(Dataset):
             )
         else:
             coords_mean = coords_in[:, 1:2].mean(-3, keepdim=True)
-            coords_in -= coords_mean
+            coords_in = coords_in - coords_mean
 
         ss_adj_dir = Path(self.pdb_path) / "ss_adj"
         sse_path = ss_adj_dir / f"{Path(data_file).stem}_ss.pt"
