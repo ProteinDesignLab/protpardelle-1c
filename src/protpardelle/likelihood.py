@@ -15,7 +15,12 @@ from tqdm.auto import tqdm
 from protpardelle.common import residue_constants
 from protpardelle.core import diffusion
 from protpardelle.core.models import load_model
-from protpardelle.data import dataset
+from protpardelle.data.atom import dummy_fill_noise_coords
+from protpardelle.data.dataset import (
+    apply_random_se3,
+    make_fixed_size_1d,
+    uniform_rand_rotation,
+)
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import (
     PROJECT_ROOT_DIR,
@@ -45,10 +50,10 @@ def batch_from_pdbs(list_of_pdbs):
         for k, v in feats.items():
             if k in ["atom_mask", "atom_positions", "residue_index", "chain_index"]:
                 if k == "atom_positions":
-                    v = dataset.apply_random_se3(
+                    v = apply_random_se3(
                         v, atom_mask=feats["atom_mask"], translation_scale=0
                     )
-                padded_feat, seq_mask = dataset.make_fixed_size_1d(v, max_len)
+                padded_feat, seq_mask = make_fixed_size_1d(v, max_len)
                 dict_of_lists.setdefault(k, []).append(padded_feat)
         dict_of_lists["seq_mask"].append(seq_mask)
     return {k: torch.stack(v) for k, v in dict_of_lists.items()}
@@ -96,7 +101,7 @@ def forward_ode(
         init_coords[..., 1:2, :], dim=-3, keepdim=True
     )
     random_rots = torch.stack(
-        [dataset.uniform_rand_rotation(1)[0].to(device) for _ in range(batch_size)]
+        [uniform_rand_rotation(1)[0].to(device) for _ in range(batch_size)]
     )
     init_coords = torch.einsum("bij,blnj->blni", random_rots, init_coords)
 
@@ -127,17 +132,14 @@ def forward_ode(
         # For allatom-nomask models, need to inject fresh Gaussian noise
         # at dummy atom dimensions at the current noise level
         if model.task == "ai-allatom-nomask":
-            dummy_fill_mask = 1 - atom_mask
-            if x0 is not None:
-                dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                ) + x0[:, :, 1:2, :]
-            else:
-                dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                ) + xt[:, :, 1:2, :]
-            xt = xt * atom_mask
-            xt = xt + dummy_fill_noise * dummy_fill_mask
+            xt = dummy_fill_noise_coords(
+                atom37_coords=xt,
+                atom37_mask=atom_mask.squeeze(-1),
+                atom37_coords_to_use=x0,
+                noise_level=sigma,
+                mask_noise=True,
+                dummy_fill_mode="CA",
+            )
 
         x0, _, _, _ = model.forward(
             noisy_coords=xt,
