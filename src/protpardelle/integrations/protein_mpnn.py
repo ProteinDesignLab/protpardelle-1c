@@ -34,10 +34,10 @@ import copy
 import itertools
 import json
 import os
-import shutil
 import subprocess
+import tempfile
 import time
-import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -89,6 +89,7 @@ def run_protein_mpnn(
     pdb_path="",
     pdb_path_chains="",
     model_name="v_48_020",
+    device: Device = None,
     seed: int | None = None,
     ca_only=False,
     out_folder="",
@@ -111,8 +112,10 @@ def run_protein_mpnn(
     pssm_log_odds_flag=False,
     pssm_bias_flag=False,
     write_output_files=False,
-):
+) -> list[str]:
 
+    if device is None:
+        device = get_default_device()
     if seed is not None:
         seed_everything(seed)
 
@@ -122,7 +125,6 @@ def run_protein_mpnn(
     omit_AAs_list = omit_AAs
     alphabet = "ACDEFGHIKLMNPQRSTVWYX"
     omit_AAs_np = np.array([AA in omit_AAs_list for AA in alphabet]).astype(np.float32)
-    device = get_default_device()
     if os.path.isfile(chain_id_jsonl):
         with open(chain_id_jsonl, "r") as json_file:
             json_list = list(json_file)
@@ -552,28 +554,21 @@ def make_fixed_pos_jsonl(
 
 def design_sequence(
     coords: torch.Tensor,
-    model: ProteinMPNN,
-    num_seqs=1,
-    disallow_aas=["C"],
-    tmp_prefix: str = "",
+    model_name: Literal["v_48_002", "v_48_010", "v_48_020", "v_48_030"] = "v_48_020",
+    num_seqs: int = 1,
+    disallow_aas: Sequence[str] = ["C"],
     chain_index: TensorType["n"] | None = None,
     input_aatype: TensorType["n"] | None = None,
     fixed_pos_mask: TensorType["n"] | None = None,
-):
+    device: Device = None,
+) -> list[str]:
     # Returns list of strs; seqs like 'MKRLLDS', not aatypes
+    if device is None:
+        device = get_default_device()
 
-    if isinstance(coords, str):
-        using_tmp_dir = False
-        pdb_fn = coords
-        fixed_pos_jsonl = None
-    else:
-        # Create a temporary directory for storing pdb file + fixed positions jsonl for ProteinMPNN design
-        unique_id = uuid.uuid4().hex  # unique ID for temp processing dir
-        tmp_dir = f"tmp-{unique_id}"
-        using_tmp_dir = True
-        Path(tmp_dir).mkdir(parents=True, exist_ok=True)
-
-        pdb_fn = f"{tmp_dir}/{tmp_prefix}_tmp.pdb"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        pdb_basename = "tmp.pdb"
+        pdb_fn = os.path.join(tmp_dir, pdb_basename)
 
         if input_aatype is None:
             # default to all glycine sequence
@@ -585,24 +580,26 @@ def design_sequence(
             fixed_pos_mask = torch.zeros_like(input_aatype)
 
         write_coords_to_pdb(
-            coords, pdb_fn, aatype=input_aatype, chain_index=chain_index
+            coords,
+            pdb_fn,
+            aatype=input_aatype,
+            chain_index=chain_index,
         )
 
         # make fixed pos jsonl
         fixed_pos_jsonl = make_fixed_pos_jsonl(chain_index, fixed_pos_mask, pdb_fn)
 
-    with torch.no_grad():
+        model = get_mpnn_model(model_name, device=device)
         designed_seqs = run_protein_mpnn(
             model=model,
             pdb_path=pdb_fn,
             num_seq_per_target=num_seqs,
             omit_AAs=disallow_aas,
             fixed_positions_jsonl=fixed_pos_jsonl,
+            device=device,
         )
 
-    if using_tmp_dir:
-        shutil.rmtree(tmp_dir)
-    return designed_seqs
+        return designed_seqs
 
 
 ########################################
@@ -886,7 +883,6 @@ def tied_featurize(
         visible_chains.sort()  # sort visible_chains
         all_chains = masked_chains + visible_chains
     for i, b in enumerate(batch):
-        a = 0
         x_chain_list = []
         chain_mask_list = []
         chain_seq_list = []
@@ -1798,7 +1794,7 @@ class ProteinMPNN(nn.Module):
         ca_only: bool = False,
         time_cond_dim: int | None = None,
         input_S_is_embeddings: bool = False,
-    ):
+    ) -> None:
         super().__init__()
 
         # Hyperparameters
@@ -2303,115 +2299,3 @@ class ProteinMPNN(nn.Module):
                     all_probs[:, t, :] = probs.float()
         output_dict = {"S": S, "probs": all_probs, "decoding_order": decoding_order}
         return output_dict
-
-    def conditional_probs(
-        self,
-        X,
-        S,
-        mask,
-        chain_M,
-        residue_idx,
-        chain_encoding_all,
-        randn,
-        backbone_only=False,
-    ):
-        """Graph-conditioned sequence model"""
-        device = X.device
-        # Prepare node and edge embeddings
-        E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
-        h_V_enc = torch.zeros((E.shape[0], E.shape[1], E.shape[-1]), device=E.device)
-        h_E = self.W_e(E)
-
-        # Encoder is unmasked self-attention
-        mask_attend = gather_nodes(mask.unsqueeze(-1), E_idx).squeeze(-1)
-        mask_attend = mask.unsqueeze(-1) * mask_attend
-        for layer in self.encoder_layers:
-            h_V_enc, h_E = layer(h_V_enc, h_E, E_idx, mask, mask_attend)
-
-        # Concatenate sequence embeddings for autoregressive decoder
-        h_S = self.W_s(S)
-        h_ES = cat_neighbors_nodes(h_S, h_E, E_idx)
-
-        # Build encoder embeddings
-        h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_S), h_E, E_idx)
-        h_EXV_encoder = cat_neighbors_nodes(h_V_enc, h_EX_encoder, E_idx)
-
-        chain_M = chain_M * mask  # update chain_M to include missing regions
-
-        chain_M_np = chain_M.cpu().numpy()
-        idx_to_loop = np.argwhere(chain_M_np[0, :] == 1)[:, 0]
-        log_conditional_probs = torch.zeros(
-            [X.shape[0], chain_M.shape[1], 21], device=device
-        ).float()
-
-        for idx in idx_to_loop:
-            h_V = torch.clone(h_V_enc)
-            order_mask = torch.zeros(chain_M.shape[1], device=device).float()
-            if backbone_only:
-                order_mask = torch.ones(chain_M.shape[1], device=device).float()
-                order_mask[idx] = 0.0
-            else:
-                order_mask = torch.zeros(chain_M.shape[1], device=device).float()
-                order_mask[idx] = 1.0
-            decoding_order = torch.argsort(
-                (order_mask[None,] + 0.0001) * (torch.abs(randn))
-            )  # [numbers will be smaller for places where chain_M = 0.0 and higher for places where chain_M = 1.0]
-            mask_size = E_idx.shape[1]
-            permutation_matrix_reverse = F.one_hot(
-                decoding_order, num_classes=mask_size
-            ).float()
-            order_mask_backward = torch.einsum(
-                "ij, biq, bjp->bqp",
-                (1 - torch.triu(torch.ones(mask_size, mask_size, device=device))),
-                permutation_matrix_reverse,
-                permutation_matrix_reverse,
-            )
-            mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
-            mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
-            mask_bw = mask_1D * mask_attend
-            mask_fw = mask_1D * (1.0 - mask_attend)
-
-            h_EXV_encoder_fw = mask_fw * h_EXV_encoder
-            for layer in self.decoder_layers:
-                # Masked positions attend to encoder information, unmasked see.
-                h_ESV = cat_neighbors_nodes(h_V, h_ES, E_idx)
-                h_ESV = mask_bw * h_ESV + h_EXV_encoder_fw
-                h_V = layer(h_V, h_ESV, mask)
-
-            logits = self.W_out(h_V)
-            log_probs = F.log_softmax(logits, dim=-1)
-            log_conditional_probs[:, idx, :] = log_probs[:, idx, :]
-        return log_conditional_probs
-
-    def unconditional_probs(self, X, mask, residue_idx, chain_encoding_all):
-        """Graph-conditioned sequence model"""
-        device = X.device
-        # Prepare node and edge embeddings
-        E, E_idx = self.features(X, mask, residue_idx, chain_encoding_all)
-        h_V = torch.zeros((E.shape[0], E.shape[1], E.shape[-1]), device=E.device)
-        h_E = self.W_e(E)
-
-        # Encoder is unmasked self-attention
-        mask_attend = gather_nodes(mask.unsqueeze(-1), E_idx).squeeze(-1)
-        mask_attend = mask.unsqueeze(-1) * mask_attend
-        for layer in self.encoder_layers:
-            h_V, h_E = layer(h_V, h_E, E_idx, mask, mask_attend)
-
-        # Build encoder embeddings
-        h_EX_encoder = cat_neighbors_nodes(torch.zeros_like(h_V), h_E, E_idx)
-        h_EXV_encoder = cat_neighbors_nodes(h_V, h_EX_encoder, E_idx)
-
-        order_mask_backward = torch.zeros(
-            [X.shape[0], X.shape[1], X.shape[1]], device=device
-        )
-        mask_attend = torch.gather(order_mask_backward, 2, E_idx).unsqueeze(-1)
-        mask_1D = mask.view([mask.size(0), mask.size(1), 1, 1])
-        mask_fw = mask_1D * (1.0 - mask_attend)
-
-        h_EXV_encoder_fw = mask_fw * h_EXV_encoder
-        for layer in self.decoder_layers:
-            h_V = layer(h_V, h_EXV_encoder_fw, mask)
-
-        logits = self.W_out(h_V)
-        log_probs = F.log_softmax(logits, dim=-1)
-        return log_probs

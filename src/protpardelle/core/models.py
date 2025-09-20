@@ -32,7 +32,7 @@ from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aat
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import seq_to_aatype_batched
-from protpardelle.integrations.protein_mpnn import design_sequence, get_mpnn_model
+from protpardelle.integrations.protein_mpnn import design_sequence
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
@@ -1250,7 +1250,6 @@ class Protpardelle(nn.Module):
                     designed_seqs.append(
                         design_sequence(
                             c[: seq_lens[i]],
-                            model=fullmpnn_model,
                             chain_index=chain_index[i, : seq_lens[i]].cpu(),
                             input_aatype=_input_aatype,
                             fixed_pos_mask=_fixed_pos_mask,
@@ -1260,7 +1259,6 @@ class Protpardelle(nn.Module):
                 designed_seqs = [
                     design_sequence(
                         c[: seq_lens[i]],
-                        model=fullmpnn_model,
                         chain_index=chain_index[i, : seq_lens[i]].cpu(),
                     )[0]
                     for i, c in enumerate(batched_coords)
@@ -1269,10 +1267,6 @@ class Protpardelle(nn.Module):
                 designed_seqs, max_len=seq_mask.shape[-1]
             )
             return designed_aatypes
-
-        # Initialize masks/features
-        if use_fullmpnn or use_fullmpnn_for_final:
-            fullmpnn_model = get_mpnn_model(model_name="v_48_020", device=self.device)
 
         # Initialize noise schedule/parameters
         s_t_min = s_t_min * self.sigma_data

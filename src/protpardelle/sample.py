@@ -44,7 +44,6 @@ from protpardelle.env import (
     PROTPARDELLE_RUNNING_CONFIGS,
 )
 from protpardelle.evaluate import compute_self_consistency
-from protpardelle.integrations.protein_mpnn import get_mpnn_model
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
@@ -67,13 +66,7 @@ class ProtpardelleSampler:
         device: Device,
         num_mpnn_seqs: int = 8,
     ):
-        self.model = model
-        self.device = device
-        self.num_mpnn_seqs = num_mpnn_seqs
-        if self.num_mpnn_seqs > 0:
-            self.mpnn_model = get_mpnn_model(model_name="v_48_020", device=self.device)
-        else:
-            self.mpnn_model = None
+        ...
 
 
 def save_samples(
@@ -366,11 +359,6 @@ def generate(
     run_name="",
     allatom=False,
 ):
-    device = get_default_device()
-    if num_mpnn_seqs > 0:
-        mpnn_model = get_mpnn_model(model_name="v_48_020", device=device)
-    else:
-        mpnn_model = None
 
     trimmed_coords = []
     trimmed_residue_index = []
@@ -502,13 +490,11 @@ def generate(
         sc_aux = compute_self_consistency(
             trimmed_coords,
             trimmed_chain_index=trimmed_chain_index,
-            mpnn_model=mpnn_model,
             num_seqs=num_mpnn_seqs,
             motif_idx=motif_idx,
             motif_coords=motif_coords,
             motif_aatypes=motif_aatypes,
             sampled_sequences=sampled_sequences,
-            tmp_prefix=run_name,
             allatom=allatom,
             atom_mask=atom_mask,
             motif_atom_mask=motif_atom_mask,

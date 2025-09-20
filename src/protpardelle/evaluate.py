@@ -4,193 +4,58 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 from collections import defaultdict
-from collections.abc import Sequence
-from typing import Literal
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
 from protpardelle.common import residue_constants
-from protpardelle.data.align import kabsch_align, tm_score
+from protpardelle.data.align import (
+    compute_allatom_structure_metric,
+    compute_structure_metric,
+)
 from protpardelle.integrations.esmfold import predict_structures
 from protpardelle.integrations.protein_mpnn import design_sequence
 
-########################################
-# Adapted from https://github.com/aqlaboratory/openfold
 
-
-def permute_final_dims(x: torch.Tensor, indices: Sequence[int]) -> torch.Tensor:
-    """Permute the final dimensions of a tensor.
-
-    Args:
-        x (torch.Tensor): The input tensor.
-        indices (Sequence[int]): The indices to permute the final dimensions.
-
-    Returns:
-        torch.Tensor: The permuted tensor.
-    """
-
-    zero_index = -1 * len(indices)
-    first_inds = list(range(len(x.shape[:zero_index])))
-
-    return x.contiguous().permute(first_inds + [zero_index + i for i in indices])
-
-
-def lddt(
-    all_atom_pred_pos: torch.Tensor,
-    all_atom_positions: torch.Tensor,
-    all_atom_mask: torch.Tensor,
-    cutoff: float = 15.0,
-    eps: float = 1e-10,
-    per_residue: bool = True,
-) -> torch.Tensor:
-    """Compute the LDDT score.
+def _insert_chain_gaps(
+    seq: str,
+    chain_mask: Float[torch.Tensor, "L"],
+) -> str:
+    """Insert gaps in the sequence at chain boundaries.
 
     Args:
-        all_atom_pred_pos (torch.Tensor): Predicted atom positions.
-        all_atom_positions (torch.Tensor): True atom positions.
-        all_atom_mask (torch.Tensor): Mask for valid atoms.
-        cutoff (float, optional): Distance cutoff for considering pairs. Defaults to 15.0.
-        eps (float, optional): Small value to avoid division by zero. Defaults to 1e-10.
-        per_residue (bool, optional): Whether to compute the score per residue. Defaults to True.
+        seq (str): The input sequence.
+        chain_mask (torch.Tensor): A mask indicating chain boundaries.
 
     Returns:
-        torch.Tensor: The computed LDDT score.
+        str: The modified sequence with gaps inserted.
     """
 
-    n = all_atom_mask.shape[-2]
-    dmat_true = torch.sqrt(
-        eps
-        + torch.sum(
-            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3)) ** 2,
-            dim=-1,
-        )
-    )
+    aa_list = [seq[0]]  # start with the first residue
+    for i in range(1, len(seq)):
+        if chain_mask[i] != chain_mask[i - 1]:  # detect chain boundary
+            aa_list.append(":")  # insert gap
+        aa_list.append(seq[i])  # append residue
+    new_seq = "".join(aa_list)
 
-    dmat_pred = torch.sqrt(
-        eps
-        + torch.sum(
-            (all_atom_pred_pos.unsqueeze(-2) - all_atom_pred_pos.unsqueeze(-3)) ** 2,
-            dim=-1,
-        )
-    )
-    dists_to_score = (
-        (dmat_true < cutoff)
-        * all_atom_mask
-        * permute_final_dims(all_atom_mask, (1, 0))
-        * (1.0 - torch.eye(n, device=all_atom_mask.device))
-    )
-
-    dist_l1 = torch.abs(dmat_true - dmat_pred)
-
-    score = (
-        (dist_l1 < 0.5).type(dist_l1.dtype)
-        + (dist_l1 < 1.0).type(dist_l1.dtype)
-        + (dist_l1 < 2.0).type(dist_l1.dtype)
-        + (dist_l1 < 4.0).type(dist_l1.dtype)
-    )
-    score = score * 0.25
-
-    dims = (-1,) if per_residue else (-2, -1)
-    norm = 1.0 / (eps + torch.sum(dists_to_score, dim=dims))
-    score = norm * (eps + torch.sum(dists_to_score * score, dim=dims))
-
-    return score
-
-
-def compute_structure_metric(
-    coords1: torch.Tensor,
-    coords2: torch.Tensor,
-    metric: Literal[
-        "ca_rmsd", "allatom_rmsd", "tm_score", "allatom_tm", "allatom_lddt"
-    ] = "ca_rmsd",
-    atom_mask: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Compute structure metric between two sets of coordinates.
-
-    Args:
-        coords1 (torch.Tensor): First set of coordinates.
-        coords2 (torch.Tensor): Second set of coordinates.
-        metric (Literal["ca_rmsd", "allatom_rmsd", "tm_score", "allatom_tm", "allatom_lddt"], optional): Metric to compute.
-            Defaults to "ca_rmsd".
-        atom_mask (torch.Tensor | None, optional): Mask to apply. Defaults to None.
-
-    Raises:
-        NotImplementedError: If the metric is not implemented.
-
-    Returns:
-        torch.Tensor: The computed structure metric.
-    """
-
-    aligned_coords1_ca, (R, t) = kabsch_align(coords1[:, 1], coords2[:, 1])
-    aligned_coords1_based_on_ca = coords1 - coords1[:, 1:2].mean(0, keepdim=True)
-    aligned_coords1_based_on_ca = aligned_coords1_based_on_ca @ R.t() + t
-
-    if "allatom" in metric:
-        atom_mask = atom_mask[: coords1.shape[0]].bool()
-        _, (R, t) = kabsch_align(coords1[atom_mask], coords2[atom_mask])
-        aligned_coords1 = coords1 - coords1[atom_mask].mean(0, keepdim=True)
-        aligned_coords1 = aligned_coords1 @ R.t() + t
-    else:
-        aligned_coords1 = aligned_coords1_based_on_ca
-
-    ca_rmsd = (aligned_coords1_ca - coords2[:, 1]).square().sum(-1).mean().sqrt()
-
-    if "allatom" in metric:
-        aligned_coords1_masked = aligned_coords1 * atom_mask.unsqueeze(-1)
-        coords2_masked = coords2 * atom_mask.unsqueeze(-1)
-        allatom_rmsd = torch.sqrt(
-            (aligned_coords1_masked - coords2_masked).square().sum(-1).sum()
-            / atom_mask.sum()
-        )
-
-    if metric == "ca_and_allatom_rmsd":
-        return ca_rmsd, allatom_rmsd
-    elif metric == "allatom_rmsd":
-        return allatom_rmsd
-    elif metric == "ca_rmsd":
-        return ca_rmsd
-    elif metric == "tm_score":
-        return tm_score(aligned_coords1_ca, coords2[:, 1])
-    elif metric == "allatom_tm":
-        # Align on Ca, compute allatom TM
-        assert atom_mask is not None
-        return tm_score(aligned_coords1, coords2, mask=atom_mask)
-    elif metric == "allatom_lddt":
-        assert atom_mask is not None
-        return lddt(
-            coords1.reshape(-1, 3),
-            coords2.reshape(-1, 3),
-            atom_mask.reshape(-1, 1),
-            per_residue=False,
-        )
-    else:
-        raise NotImplementedError
+    return new_seq
 
 
 def compute_self_consistency(
-    comparison_structures,  # can be sampled or ground truth
-    trimmed_chain_index=None,
-    sampled_sequences=None,
-    mpnn_model=None,
+    comparison_structures: list[torch.Tensor],  # can be sampled or ground truth
+    trimmed_chain_index: torch.Tensor | None = None,
+    sampled_sequences: list[str] | None = None,
     num_seqs: int = 1,
     motif_idx: list[list[int]] | None = None,
-    motif_coords=None,
-    motif_aatypes=None,
-    tmp_prefix: str = "",
+    motif_coords: torch.Tensor | None = None,
+    motif_aatypes: torch.Tensor | None = None,
     allatom: bool = False,
-    atom_mask=None,
-    motif_atom_mask=None,
+    atom_mask: torch.Tensor | None = None,
+    motif_atom_mask: torch.Tensor | None = None,
 ):
-    aux = defaultdict(list)
 
-    def insert_chain_gaps(sequence, chain_mask):
-        modified_sequence = sequence[0]  # Start with the first residue
-        for i in range(1, len(sequence)):
-            if chain_mask[i] != chain_mask[i - 1]:  # Detect chain boundary
-                modified_sequence += ":"  # Insert gap
-            modified_sequence += sequence[i]  # Append residue
-        return modified_sequence
+    aux = defaultdict(list)
 
     for i, coords in enumerate(comparison_structures):
         if sampled_sequences is None:
@@ -208,9 +73,7 @@ def compute_self_consistency(
 
             seqs_to_predict = design_sequence(
                 coords,
-                model=mpnn_model,
                 num_seqs=num_seqs,
-                tmp_prefix=tmp_prefix,
                 disallow_aas=["X"],
                 chain_index=trimmed_chain_index[i].cpu(),
                 input_aatype=input_aatype,
@@ -222,7 +85,7 @@ def compute_self_consistency(
         if trimmed_chain_index is not None:
             multichain_sequences = []
             for seq in seqs_to_predict:
-                modified_sequence = insert_chain_gaps(seq, trimmed_chain_index[i])
+                modified_sequence = _insert_chain_gaps(seq, trimmed_chain_index[i])
                 multichain_sequences.append(modified_sequence)
             seqs_to_predict = multichain_sequences
 
@@ -242,15 +105,19 @@ def compute_self_consistency(
                     coords.to(pred),
                     pred[:, :3],
                     metric="ca_rmsd",
-                    atom_mask=atom_mask[i],
                 )
                 ca_scaffold_scrmsds.append(ca_rmsd.item())
                 allatom_scaffold_scrmsds.append(999)
             else:
-                ca_rmsd, allatom_rmsd = compute_structure_metric(
+                ca_rmsd = compute_structure_metric(
                     coords.to(pred),
                     pred,
-                    metric="ca_and_allatom_rmsd",
+                    metric="ca_rmsd",
+                )
+                allatom_rmsd = compute_allatom_structure_metric(
+                    coords.to(pred),
+                    pred,
+                    metric="allatom_rmsd",
                     atom_mask=atom_mask[i],
                 )
                 ca_scaffold_scrmsds.append(ca_rmsd.item())
@@ -266,15 +133,19 @@ def compute_self_consistency(
                         motif_coords[i].to(pred),
                         coords[motif_idx[i], :3].to(pred),
                         metric="ca_rmsd",
-                        atom_mask=motif_atom_mask[i],
                     )
                     ca_motif_sample_rmsds.append(ca_rmsd.item())
                     allatom_motif_sample_rmsds.append(999)
                 else:
-                    ca_rmsd, allatom_rmsd = compute_structure_metric(
+                    ca_rmsd = compute_structure_metric(
                         motif_coords[i].to(pred),
                         coords[motif_idx[i]].to(pred),
-                        metric="ca_and_allatom_rmsd",
+                        metric="ca_rmsd",
+                    )
+                    allatom_rmsd = compute_allatom_structure_metric(
+                        motif_coords[i].to(pred),
+                        coords[motif_idx[i]].to(pred),
+                        metric="allatom_rmsd",
                         atom_mask=motif_atom_mask[i],
                     )
                     ca_motif_sample_rmsds.append(ca_rmsd.item())
@@ -288,10 +159,15 @@ def compute_self_consistency(
         allatom_motif_pred_rmsds = []
         if motif_idx is not None and motif_coords is not None:
             for pred in pred_coords:
-                ca_rmsd, allatom_rmsd = compute_structure_metric(
+                ca_rmsd = compute_structure_metric(
                     motif_coords[i].to(pred),
                     pred[motif_idx[i]],
-                    metric="ca_and_allatom_rmsd",
+                    metric="ca_rmsd",
+                )
+                allatom_rmsd = compute_allatom_structure_metric(
+                    motif_coords[i].to(pred),
+                    pred[motif_idx[i]],
+                    metric="allatom_rmsd",
                     atom_mask=motif_atom_mask[i],
                 )
                 ca_motif_pred_rmsds.append(ca_rmsd.item())
