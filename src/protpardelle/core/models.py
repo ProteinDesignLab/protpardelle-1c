@@ -1501,28 +1501,15 @@ class Protpardelle(nn.Module):
 
             if sidechain_mode and jump_steps:
                 # Fill in noise for masked positions since xt is initialized to zeros at each step
-                zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
-                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                if dummy_fill_mode == "CA":
-                    if x0 is not None:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + x0[:, :, 1:2, :]
-                        )
-                    else:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + xt[:, :, 1:2, :]
-                        )
-                else:
-                    dummy_fill_noise = torch.randn_like(xt) * unsqueeze_trailing_dims(
-                        sigma, xt
-                    )
-
-                xt = xt * zero_atom_mask.unsqueeze(-1)
-                xt = xt + dummy_fill_noise * dummy_fill_mask
-                atom_mask = zero_atom_mask
+                atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
+                xt = dummy_fill_noise_coords(
+                    atom37_coords=xt,
+                    atom37_mask=atom_mask,
+                    atom37_coords_to_use=x0,
+                    noise_level=sigma,
+                    mask_noise=True,
+                    dummy_fill_mode=dummy_fill_mode,
+                )
 
                 if self.config.model.task == "ai-allatom-hybrid":
                     xt = xt * bb_atom_mask.unsqueeze(-1)
@@ -1558,18 +1545,14 @@ class Protpardelle(nn.Module):
                     zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
 
                 if x0 is not None:
-                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                    if dummy_fill_mode == "zero":
-                        dummy_fill_noise = torch.randn_like(
-                            xt
-                        ) * unsqueeze_trailing_dims(sigma, xt)
-                    else:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + x0[:, :, 1:2, :]
-                        )
-                    xt = xt * zero_atom_mask.unsqueeze(-1)
-                    xt = xt + dummy_fill_noise * dummy_fill_mask
+                    xt = dummy_fill_noise_coords(
+                        atom37_coords=xt,
+                        atom37_mask=zero_atom_mask,
+                        atom37_coords_to_use=x0,
+                        noise_level=sigma,
+                        mask_noise=True,
+                        dummy_fill_mode=dummy_fill_mode,
+                    )
                 atom_mask = zero_atom_mask
             elif self.config.model.task == "ai-allatom-hybrid" and uniform_steps:
                 if i < (0.5 * num_steps):
@@ -1589,19 +1572,14 @@ class Protpardelle(nn.Module):
                         zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
 
                     if x0 is not None:
-                        dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                        if dummy_fill_mode == "zero":
-                            dummy_fill_noise = torch.randn_like(
-                                xt
-                            ) * unsqueeze_trailing_dims(sigma, xt)
-                        else:
-                            dummy_fill_noise = (
-                                torch.randn_like(xt)
-                                * unsqueeze_trailing_dims(sigma, xt)
-                                + x0[:, :, 1:2, :]
-                            )
-                        xt = xt * zero_atom_mask.unsqueeze(-1)
-                        xt = xt + dummy_fill_noise * dummy_fill_mask
+                        xt = dummy_fill_noise_coords(
+                            atom37_coords=xt,
+                            atom37_mask=zero_atom_mask,
+                            atom37_coords_to_use=x0,
+                            noise_level=sigma,
+                            mask_noise=True,
+                            dummy_fill_mode=dummy_fill_mode,
+                        )
                     atom_mask = zero_atom_mask
             elif self.config.model.task == "backbone":
                 xt = xt * bb_atom_mask.unsqueeze(-1)
@@ -1679,19 +1657,14 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                                if dummy_fill_mode == "zero":
-                                    dummy_fill_noise = torch.randn_like(
-                                        xt_hat
-                                    ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                else:
-                                    dummy_fill_noise = (
-                                        torch.randn_like(xt_hat)
-                                        * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                        + x0[:, :, 1:2, :]
-                                    )
-                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                xt_hat = dummy_fill_noise_coords(
+                                    atom37_coords=xt_hat,
+                                    atom37_mask=zero_atom_mask,
+                                    atom37_coords_to_use=x0,
+                                    noise_level=sigma_hat,
+                                    mask_noise=True,
+                                    dummy_fill_mode=dummy_fill_mode,
+                                )
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
@@ -1725,19 +1698,14 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                                    if dummy_fill_mode == "zero":
-                                        dummy_fill_noise = torch.randn_like(
-                                            xt_hat
-                                        ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                    else:
-                                        dummy_fill_noise = (
-                                            torch.randn_like(xt_hat)
-                                            * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                            + x0[:, :, 1:2, :]
-                                        )
-                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = dummy_fill_noise_coords(
+                                        atom37_coords=xt_hat,
+                                        atom37_mask=zero_atom_mask,
+                                        atom37_coords_to_use=x0,
+                                        noise_level=sigma_hat,
+                                        mask_noise=True,
+                                        dummy_fill_mode=dummy_fill_mode,
+                                    )
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
                             xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
@@ -1859,20 +1827,14 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                                if dummy_fill_mode == "zero":
-                                    dummy_fill_noise = torch.randn_like(
-                                        xt_hat
-                                    ) * unsqueeze_trailing_dims(sigma, xt_hat)
-                                else:
-                                    dummy_fill_noise = (
-                                        torch.randn_like(xt_hat)
-                                        * unsqueeze_trailing_dims(sigma, xt_hat)
-                                        + x0[:, :, 1:2, :]
-                                    )
-                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                xt_hat = dummy_fill_noise_coords(
+                                    atom37_coords=xt_hat,
+                                    atom37_mask=zero_atom_mask,
+                                    atom37_coords_to_use=x0,
+                                    noise_level=sigma,
+                                    mask_noise=True,
+                                    dummy_fill_mode=dummy_fill_mode,
+                                )
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
@@ -1905,20 +1867,14 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                                    if dummy_fill_mode == "zero":
-                                        dummy_fill_noise = torch.randn_like(
-                                            xt_hat
-                                        ) * unsqueeze_trailing_dims(sigma, xt_hat)
-                                    else:
-                                        dummy_fill_noise = (
-                                            torch.randn_like(xt_hat)
-                                            * unsqueeze_trailing_dims(sigma, xt_hat)
-                                            + x0[:, :, 1:2, :]
-                                        )
-                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = dummy_fill_noise_coords(
+                                        atom37_coords=xt_hat,
+                                        atom37_mask=zero_atom_mask,
+                                        atom37_coords_to_use=x0,
+                                        noise_level=sigma,
+                                        mask_noise=True,
+                                        dummy_fill_mode=dummy_fill_mode,
+                                    )
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
                             xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)

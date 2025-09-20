@@ -338,7 +338,7 @@ def dummy_fill_noise_coords(
     mask_noise: bool = False,
     dummy_fill_mode: Literal["CA", "zero"] = "zero",
 ) -> Float[torch.Tensor, "B L 37 3"]:
-    """Applies noise to the coordinates.
+    """Dummy fill and add noise to atom37 coordinates.
 
     Args:
         atom37_coords (torch.Tensor): The input coordinates.
