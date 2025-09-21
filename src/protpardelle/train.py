@@ -191,7 +191,7 @@ class ProtpardelleRunner:
         # Noise data
         # Sample time
         if timestep is None:
-            timestep = torch.rand(batch_size).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
+            timestep = torch.rand(bs).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
         noise_level = self.model.training_noise_schedule(timestep)
 
         noised_coords = diffusion.noise_coords(
