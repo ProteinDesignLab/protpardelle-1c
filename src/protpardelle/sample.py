@@ -65,8 +65,7 @@ class ProtpardelleSampler:
         model: Protpardelle,
         device: Device,
         num_mpnn_seqs: int = 8,
-    ):
-        ...
+    ): ...
 
 
 def save_samples(
@@ -179,6 +178,7 @@ def save_samples(
 
 def draw_samples(
     model: Protpardelle,
+    sampling_kwargs: dict[str, Any],
     seq_mask: TensorType["b n", float] | None = None,
     residue_index: TensorType["b n", float] | None = None,
     chain_index: TensorType["b n", int] | None = None,
@@ -188,7 +188,6 @@ def draw_samples(
     motif_placements_full: list[str] | None = None,
     num_samples: int | None = None,
     length_ranges_per_chain: list[tuple[int, int]] | None = None,
-    **sampling_kwargs,
 ) -> tuple[Any, Any, Any, Any, Any]:  # TODO: fix typing
     device = model.device
     if seq_mask is None and length_ranges_per_chain is not None:
@@ -197,11 +196,11 @@ def draw_samples(
         )
     chain_id_mapping = [None] * num_samples
     if sampling_kwargs["partial_diffusion"]["enabled"]:
-        pd_feats, pd_hetero_obj = load_feats_from_pdb(
+        pd_feats, _ = load_feats_from_pdb(
             sampling_kwargs["partial_diffusion"]["pdb_file_path"],
             include_pos_feats=True,
         )
-        # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
+        # Update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
         residue_index = torch.tile(
             pd_feats["residue_index"][None], (num_samples, 1)
         ).to(device)
@@ -427,6 +426,7 @@ def generate(
             samp_aux_bi,
         ) = draw_samples(
             model,
+            curr_sampling_config,
             num_samples=bs,
             seq_mask=seq_mask_input[si:ei] if seq_mask_input is not None else None,
             residue_index=(
@@ -444,7 +444,6 @@ def generate(
                 if motif_placements_full is not None
                 else None
             ),
-            **curr_sampling_config,
         )
         trimmed_coords.extend(trimmed_coords_bi)
         trimmed_residue_index.extend(trimmed_residue_index_bi)
@@ -520,9 +519,7 @@ def sample(
     seed: int | None = None,
     project_name: str | None = None,
     use_wandb: bool = False,
-    array_id: int | None = None,
-    num_arrays: int | None = None,
-) -> list[Path]:
+) -> None:
     """Sampling with Protpardelle-1c.
 
     Args:
@@ -535,8 +532,6 @@ def sample(
         seed (int | None, optional): Random seed. Defaults to None.
         project_name (str | None, optional): Name of project for wandb. Defaults to None.
         use_wandb (bool, optional): If True, use wandb to log results. Defaults to False.
-        array_id (int | None, optional): Slurm array id for parallelization. Defaults to None.
-        num_arrays (int | None, optional): Number of arrays for parallelization. Defaults to None.
     """
 
     sampling_yaml_path = norm_path(sampling_yaml_path)
@@ -601,11 +596,6 @@ def sample(
 
     # get all params, and optionally split into chunks for parallelization
     all_params = list(itertools.product(*search_space.values()))
-    if array_id is not None:
-        chunk_size = math.ceil(len(all_params) / num_arrays)
-        start_idx = array_id * chunk_size
-        end_idx = min(start_idx + chunk_size, len(all_params))
-        all_params = all_params[start_idx:end_idx]
 
     # for a given setting
     for curr_params in tqdm(all_params, "Evaluating search space"):
@@ -1078,8 +1068,6 @@ def sample(
         df_samp_info["fix_pos"] = all_fix_pos
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
 
-    return all_save_dirs
-
 
 @app.command()
 def main(
@@ -1087,7 +1075,9 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
     motif_dir: str | None = typer.Option(None, help="Directory containing motif PDBs"),
-    motif_pdb: str | None = typer.Option(None, help="Single motif PDB file, overrides motif_dir"),
+    motif_pdb: str | None = typer.Option(
+        None, help="Single motif PDB file, overrides motif_dir"
+    ),
     project_name: str | None = typer.Option(None, help="wandb project name"),
     num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
@@ -1099,12 +1089,6 @@ def main(
     ),
     seed: int | None = typer.Option(None, help="Random seed"),
     use_wandb: bool = typer.Option(False, help="Whether to use wandb"),
-    array_id: int | None = typer.Option(
-        None, help="Slurm array ID for parallelization"
-    ),
-    num_arrays: int | None = typer.Option(
-        None, help="Number of arrays for parallelization"
-    ),
 ) -> None:
     """Entrypoint for Protpardelle-1c sampling."""
     sample(
@@ -1118,8 +1102,6 @@ def main(
         save_shortname=save_shortname,
         seed=seed,
         use_wandb=use_wandb,
-        array_id=array_id,
-        num_arrays=num_arrays,
     )
 
 

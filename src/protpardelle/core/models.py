@@ -27,6 +27,10 @@ from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
+from protpardelle.configs.running_dataclasses import ConditionalCfg
+from protpardelle.configs.running_dataclasses import (
+    PartialDiffusion as PartialDiffusionCfg,
+)
 from protpardelle.core import diffusion, modules
 from protpardelle.data.atom import (
     atom37_mask_from_aatype,
@@ -951,8 +955,8 @@ class Protpardelle(nn.Module):
         dz: float | None = None,
         dummy_fill_mode: Literal["zero", "CA"] = "zero",
         xt_start: Float[torch.Tensor, "B L A 3"] | None = None,
-        partial_diffusion: DictConfig | None = None,
-        conditional_cfg: DictConfig | None = None,
+        partial_diffusion: PartialDiffusionCfg | None = None,
+        conditional_cfg: ConditionalCfg | None = None,
         motif_placements_full: list[str] | None = None,
         motif_all_atom_stage1: Float[torch.Tensor, "B L A 3"] | None = None,
         motif_idx_stage1: list[list[int]] | None = None,
