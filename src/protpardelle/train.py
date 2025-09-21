@@ -321,7 +321,7 @@ class ProtpardelleTrainer:
         )
 
         if self.config.data.auto_calc_sigma_data:
-            self.compute_sigma_data(dataset)
+            self.compute_sigma_data(dataset, num_workers=num_workers)
 
         return dataloader
 
@@ -485,7 +485,7 @@ class ProtpardelleTrainer:
             log_dict["struct_loss"] = struct_loss.detach().cpu().item()
 
         # Compute mpnn loss
-        if self.config.model.task in ["seqdes", "codesign"]:
+        if self.config.model.task in {"seqdes", "codesign"}:
             alpha = self.config.model.mpnn_model.label_smoothing
             aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
             target_oh = (1 - alpha) * aatype_oh + alpha / self.module.num_tokens

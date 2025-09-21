@@ -744,7 +744,7 @@ class Protpardelle(nn.Module):
         # Freeze unneeded modules
         if module_name == "mpnn_model":
             self.mpnn_model = module
-            if self.task not in ["codesign", "seqdes"]:
+            if self.task not in {"codesign", "seqdes"}:
                 for p in module.parameters():
                     p.requires_grad = False
         elif module_name == "struct_model":

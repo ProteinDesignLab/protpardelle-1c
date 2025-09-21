@@ -48,7 +48,7 @@ def batch_from_pdbs(list_of_pdbs):
     dict_of_lists = {"seq_mask": []}
     for feats in all_feats:
         for k, v in feats.items():
-            if k in ["atom_mask", "atom_positions", "residue_index", "chain_index"]:
+            if k in {"atom_mask", "atom_positions", "residue_index", "chain_index"}:
                 if k == "atom_positions":
                     v = apply_random_se3(
                         v, atom_mask=feats["atom_mask"], translation_scale=0

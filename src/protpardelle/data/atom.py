@@ -267,7 +267,7 @@ def atom37_coords_to_atom73_coords(
         aa1 = residue_constants.restypes[aa]
         for j, atom37_name in enumerate(residue_constants.atom_types):
             atom73_name = atom37_name
-            if atom73_name not in ["N", "CA", "C", "O", "CB"]:
+            if atom73_name not in {"N", "CA", "C", "O", "CB"}:
                 atom73_name = aa1 + atom73_name
             if atom73_name in residue_constants.atom73_names_to_idx:
                 atom73_idx = residue_constants.atom73_names_to_idx[atom73_name]
@@ -298,7 +298,7 @@ def atom73_coords_to_atom37_coords(
         aa1 = residue_constants.restypes[aa]
         for j, atom_type in enumerate(residue_constants.atom_types):
             atom73_name = atom_type
-            if atom73_name not in ["N", "CA", "C", "O", "CB"]:
+            if atom73_name not in {"N", "CA", "C", "O", "CB"}:
                 atom73_name = aa1 + atom73_name
             if atom73_name in residue_constants.atom73_names_to_idx:
                 atom73_idx = residue_constants.atom73_names_to_idx[atom73_name]

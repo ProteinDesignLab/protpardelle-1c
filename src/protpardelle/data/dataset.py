@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float
-from torch.utils.data import Dataset, RandomSampler, Sampler
+from torch.utils.data import DataLoader, Dataset, RandomSampler, Sampler
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -250,7 +250,7 @@ def calc_sigma_data(
         float: The estimated sigma_data.
     """
 
-    sigma_dataloader = torch.utils.data.DataLoader(
+    sigma_dataloader = DataLoader(
         dataset,
         batch_size=config.train.batch_size,
         num_workers=num_workers,
