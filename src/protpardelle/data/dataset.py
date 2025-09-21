@@ -278,8 +278,9 @@ def calc_sigma_data(
         atom_mask = inputs["atom_mask"]
 
         if config.train.crop_conditional:
+            crop_cond_vars = {k: v for k, v in vars(config.train.crop_cond).items() if not k.startswith('_')}
             coords, _, _ = make_crop_cond_mask_and_recenter_coords(
-                atom_coords=coords, atom_mask=atom_mask, **vars(config.train.crop_cond)
+                atom_coords=coords, atom_mask=atom_mask, **crop_cond_vars
             )
 
         collected_coords.append(coords)
