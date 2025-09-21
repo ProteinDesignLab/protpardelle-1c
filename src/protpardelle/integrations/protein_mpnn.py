@@ -46,8 +46,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops.layers.torch import Rearrange
+from jaxtyping import Int
 from torch.types import Device
-from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
 from protpardelle.common.protein import PDB_CHAIN_IDS, PDB_MAX_CHAINS
@@ -514,7 +514,9 @@ def run_protein_mpnn(
 
 
 def make_fixed_pos_jsonl(
-    chain_index: TensorType["n"], fixed_pos_mask: TensorType["n"], pdb_fn: str
+    chain_index: Int[torch.Tensor, "L"],
+    fixed_pos_mask: Float[torch.Tensor, "L"],
+    pdb_fn: str,
 ) -> str:
     """Create a temporary jsonl file for fixed positions.
 
@@ -557,9 +559,9 @@ def design_sequence(
     model_name: Literal["v_48_002", "v_48_010", "v_48_020", "v_48_030"] = "v_48_020",
     num_seqs: int = 1,
     disallow_aas: Sequence[str] = ["C"],
-    chain_index: TensorType["n"] | None = None,
-    input_aatype: TensorType["n"] | None = None,
-    fixed_pos_mask: TensorType["n"] | None = None,
+    chain_index: Int[torch.Tensor, "L"] | None = None,
+    input_aatype: Int[torch.Tensor, "L"] | None = None,
+    fixed_pos_mask: Float[torch.Tensor, "L"] | None = None,
     device: Device = None,
 ) -> list[str]:
     # Returns list of strs; seqs like 'MKRLLDS', not aatypes

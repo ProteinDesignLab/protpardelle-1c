@@ -16,7 +16,6 @@ from jaxtyping import Float, Int
 from torch import broadcast_tensors, einsum
 from torch.amp import autocast
 from torch.optim.lr_scheduler import LRScheduler
-from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
 from protpardelle.integrations.protein_mpnn import ProteinMPNN
@@ -142,8 +141,8 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 @autocast("cuda", enabled=False)
 def apply_rotary_emb(
-    freqs: TensorType["b n d"],
-    t: TensorType["b h n d"],
+    freqs: Float[torch.Tensor, "B L D"],
+    t: Float[torch.Tensor, "B H L D"],
     start_index: int = 0,
     scale: float = 1.0,
     seq_dim: int = -2,
@@ -260,12 +259,12 @@ class RotaryEmbedding(nn.Module):
     def get_seq_pos(
         self,
         seq_len: int,
-        residx: TensorType["b n", float],
+        residx: Float[torch.Tensor, "B L"],
         B: int,
         device,
         dtype,
         offset=0,
-    ) -> TensorType["b n", float]:
+    ) -> Float[torch.Tensor, "B L"]:
         """
         Get sequence position for rotary embeddings depending on whether residue index is used or not.
         - seq_len: length of the sequence (for if not using residue index)
@@ -281,9 +280,9 @@ class RotaryEmbedding(nn.Module):
 
     def rotate_queries_or_keys(
         self,
-        t: TensorType["b h n d"],
-        residx: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None,
+        t: Float[torch.Tensor, "B H L D"],
+        residx: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None,
         seq_dim=None,
         offset=0,
     ):
@@ -360,11 +359,11 @@ class RotaryEmbedding(nn.Module):
     @autocast("cuda", enabled=False)
     def forward(
         self,
-        t: TensorType["b n", float],  # sequence positions
-        chain_index: TensorType["b n", float] | None = None,
+        t: Float[torch.Tensor, "B L"],  # sequence positions
+        chain_index: Float[torch.Tensor, "B L"] | None = None,
         seq_len=None,
         offset=0,
-    ) -> TensorType["b n f", float]:
+    ) -> Float[torch.Tensor, "B L N"]:
         should_cache = (
             self.cache_if_possible
             and not self.learned_freq
@@ -655,7 +654,7 @@ class TimeCondAttention(nn.Module):
     def forward(
         self,
         x,
-        residx: TensorType["b n", float],
+        residx: Float[torch.Tensor, "B L"],
         context=None,
         time=None,
         motif=None,
@@ -919,7 +918,7 @@ class TimeCondTransformer(nn.Module):
 
     def forward(
         self,
-        x: TensorType["b n d", float],
+        x: Float[torch.Tensor, "B L D"],
         time=None,
         motif=None,
         attn_bias=None,
@@ -1111,7 +1110,7 @@ class TimeCondUViT(nn.Module):
 
     def forward(
         self,
-        coords: TensorType["b n a x", float],
+        coords: Float[torch.Tensor, "B L A 3"],
         time_cond,
         motif_cond=None,
         pair_bias=None,

@@ -22,7 +22,6 @@ from einops import rearrange, repeat
 from jaxtyping import Float, Int
 from omegaconf import DictConfig
 from torch.types import Device
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -774,18 +773,18 @@ class Protpardelle(nn.Module):
 
     def forward(
         self,
-        noisy_coords: TensorType["b n a x", float],
-        noise_level: TensorType["b n", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None = None,
-        hotspot_mask: TensorType["b n", int] | None = None,
-        struct_self_cond: TensorType["b n a x", float] | None = None,
-        struct_crop_cond: TensorType["b n a x", float] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
-        seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
-        seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
+        noisy_coords: Float[torch.Tensor, "B L A 3"],
+        noise_level: Float[torch.Tensor, "B L"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        struct_self_cond: Float[torch.Tensor, "B L A 3"] | None = None,
+        struct_crop_cond: Float[torch.Tensor, "B L A 3"] | None = None,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        seq_self_cond: Float[torch.Tensor, "B L V"] | None = None,  # logprobs
+        seq_crop_cond: Int[torch.Tensor, "B L"] | None = None,  # motif aatypes
         run_struct_model: bool = True,
         run_mpnn_model: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -847,15 +846,15 @@ class Protpardelle(nn.Module):
 
     def make_seq_mask_for_sampling(
         self,
-        prot_lens_per_chain: TensorType["b c", int] | None = None,
-        length_ranges_per_chain: TensorType["c 2", int] | None = None,
+        prot_lens_per_chain: Int[torch.Tensor, "B N"] | None = None,
+        length_ranges_per_chain: Int[torch.Tensor, "N 2"] | None = None,
         num_samples: int | None = None,
         chain_residx_gap: int | None = None,
     ) -> tuple[
-        TensorType["b n", float], TensorType["b n", float], TensorType["b n", int]
+        Float[torch.Tensor, "B L"], Float[torch.Tensor, "B L"], Int[torch.Tensor, "B L"]
     ]:
-        """Makes sequence mask, residue indices, and chain ids of varying protein lengths (only inputs required
-        to begin sampling).
+        """Makes sequence mask, residue indices, and chain ids of varying protein lengths
+        (only inputs required to begin sampling).
 
         Args:
         - prot_lens_per_chain: tensor of protein lengths for each chain (batch size, num_chains)

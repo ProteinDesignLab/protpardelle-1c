@@ -5,7 +5,6 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import copy
 import itertools
-import math
 import shutil
 import subprocess
 import time
@@ -22,9 +21,9 @@ import typer
 import wandb
 from Bio import SeqIO
 from hydra import compose, initialize_config_dir
+from jaxtyping import Float, Int
 from omegaconf import OmegaConf
 from torch.types import Device
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -179,12 +178,12 @@ def save_samples(
 def draw_samples(
     model: Protpardelle,
     sampling_kwargs: dict[str, Any],
-    seq_mask: TensorType["b n", float] | None = None,
-    residue_index: TensorType["b n", float] | None = None,
-    chain_index: TensorType["b n", int] | None = None,
+    seq_mask: Float[torch.Tensor, "B L"] | None = None,
+    residue_index: Float[torch.Tensor, "B L"] | None = None,
+    chain_index: Int[torch.Tensor, "B L"] | None = None,
     hotspots: str | list[str] | None = None,
-    sse_cond: TensorType["b n", int] | None = None,
-    adj_cond: TensorType["b n n", int] | None = None,
+    sse_cond: Int[torch.Tensor, "B L"] | None = None,
+    adj_cond: Int[torch.Tensor, "B L L"] | None = None,
     motif_placements_full: list[str] | None = None,
     num_samples: int | None = None,
     length_ranges_per_chain: list[tuple[int, int]] | None = None,
