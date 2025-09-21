@@ -1184,13 +1184,12 @@ class LinearWarmupCosineDecay(LRScheduler):
         min_lr: float = 1e-6,
         **kwargs,
     ):
-        super().__init__(optimizer, **kwargs)
-
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.warmup_steps = warmup_steps
         self.decay_steps = decay_steps
         self.total_steps = warmup_steps + decay_steps
+        super(LinearWarmupCosineDecay, self).__init__(optimizer, **kwargs)
 
     def get_lr(self) -> list[float]:
         """Compute the current learning rate for all param groups."""
