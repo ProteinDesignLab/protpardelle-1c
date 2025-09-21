@@ -4,16 +4,19 @@ Authors: Alex Chu, Zhaoyang Li, Tianyu Lu
 """
 
 import argparse
+import logging
 import os
 import random
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast, overload
 
 import numpy as np
 import torch
-import yaml
+from omegaconf import OmegaConf
+
+from protpardelle.configs import Config, RunningConfig, SamplingConfig, TrainingConfig
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
@@ -51,7 +54,7 @@ class DotDict(dict):
             ) from e
 
 
-def apply_dotdict_recursively(input_obj: Any) -> Any:
+def apply_dotdict_recursively(input_obj: dict[str, Any]) -> DotDict:
     """Convert dictionaries to DotDict instances recursively.
 
     Args:
@@ -63,16 +66,20 @@ def apply_dotdict_recursively(input_obj: Any) -> Any:
             Non-dictionary objects are returned unchanged.
     """
 
-    if input_obj is None:
-        return None
     if isinstance(input_obj, dict):
+        for key in input_obj:
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"Non-string key detected in dictionary: {key} (type: {type(key)})"
+                )
+            if key in dict.__dict__:
+                raise KeyError(
+                    f"Key '{key}' in dictionary shadows a built-in dict attribute."
+                )
         # Convert the current dictionary to a dotdict
         return DotDict({k: apply_dotdict_recursively(v) for k, v in input_obj.items()})
-    if isinstance(input_obj, list):
-        # Apply recursively to all elements in the list
-        return [apply_dotdict_recursively(item) for item in input_obj]
 
-    # Return the object as-is if it's neither a dict nor a list
+    # Return the object as-is for non-dicts (lists, scalars, etc.)
     return input_obj
 
 
@@ -123,17 +130,60 @@ def get_default_device() -> torch.device:
     return torch.device("cpu")
 
 
-def load_config(config_path: StrPath) -> argparse.Namespace:
-    """Load a YAML configuration file and convert it to a namespace."""
+def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+    """Get a logger with the specified name and level.
+
+    Args:
+        name (str): The name of the logger.
+        level (int, optional): The logging level. Defaults to logging.INFO (20).
+
+    Returns:
+        logging.Logger: The configured logger.
+    """
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    if not logger.hasHandlers():
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+    return logger
+
+
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[RunningConfig]
+) -> RunningConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[SamplingConfig]
+) -> SamplingConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[TrainingConfig]
+) -> TrainingConfig: ...
+def load_config(config_path: StrPath, config_dataclass: type[Config]) -> Config:
+    """Load a YAML file and merge it into the structured Config schema.
+
+    This function uses OmegaConf to load a YAML configuration file and merge it
+    with a structured dataclass schema. The resulting configuration is validated
+    against the schema, but is actually an OmegaConf DictConfig object.
+    """
     config_path = norm_path(config_path)
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_dict = yaml.safe_load(f)
-    config = dict_to_namespace(config_dict)
+    raw = OmegaConf.load(config_path)
+    base = OmegaConf.structured(config_dataclass)
+    merged = OmegaConf.merge(base, raw)
 
-    return config
+    return cast(Config, merged)
 
 
 def namespace_to_dict(namespace: argparse.Namespace) -> dict:
@@ -150,7 +200,6 @@ def namespace_to_dict(namespace: argparse.Namespace) -> dict:
 
 def norm_path(
     path: StrPath,
-    *,
     expandvars: bool = True,
     expanduser: bool = True,
     resolve: bool = True,
@@ -180,6 +229,8 @@ def norm_path(
 
 def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     """Set the seed for all random number generators.
+
+    Adapted from https://github.com/pyg-team/pytorch_geometric/blob/master/torch_geometric/seed.py
     Freeze CUDA for reproducibility if needed.
 
     Args:
@@ -190,6 +241,7 @@ def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     if freeze_cuda:
         # nonrandom CUDNN convolution algo, maybe slower
@@ -216,18 +268,19 @@ def unsqueeze_trailing_dims(
 
     Args:
         x (torch.Tensor): The input tensor.
-        target (torch.Tensor | None, optional): The target tensor to match dimensions with. Defaults to None.
-        add_ndims (int, optional): The number of dimensions to add. Defaults to 1.
+        target (torch.Tensor | None, optional): The target tensor to match dimensions with.
+            If None, add_ndims will be used. Defaults to None.
+        add_ndims (int, optional): The number of dimensions to add. Can be overridden by target.
+            Defaults to 1.
 
     Returns:
         torch.Tensor: The modified tensor with trailing dimensions unsqueezed.
     """
 
-    if target is None:
-        for _ in range(add_ndims):
-            x = x.unsqueeze(-1)
-    else:
-        while len(x.shape) < len(target.shape):
-            x = x.unsqueeze(-1)
+    if target is not None:
+        add_ndims = target.ndim - x.ndim
 
-    return x
+    if add_ndims > 0:
+        return x[(...,) + (None,) * add_ndims]
+
+    raise ValueError("Must add a positive number of dimensions.")

@@ -3,8 +3,6 @@
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
 """
 
-import argparse
-import logging
 import random
 import subprocess
 from contextlib import nullcontext
@@ -23,9 +21,10 @@ from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
-from protpardelle.core import diffusion, modules
+from protpardelle.configs import TrainingConfig
+from protpardelle.core import modules
 from protpardelle.core.models import Protpardelle
-from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.data.atom import atom37_mask_from_aatype, dummy_fill_noise_coords
 from protpardelle.data.dataset import (
     PDBDataset,
     StochasticMixedSampler,
@@ -35,6 +34,7 @@ from protpardelle.data.dataset import (
 from protpardelle.utils import (
     StrPath,
     get_default_device,
+    get_logger,
     load_config,
     namespace_to_dict,
     norm_path,
@@ -42,14 +42,16 @@ from protpardelle.utils import (
     unsqueeze_trailing_dims,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
 def masked_cross_entropy_loss(
-    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor, tol: float = 1e-7
+    logprobs: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked cross-entropy loss.
 
@@ -57,6 +59,7 @@ def masked_cross_entropy_loss(
         logprobs (torch.Tensor): Log probabilities of the predicted tokens.
         target (torch.Tensor): One-hot encoded target tokens.
         loss_mask (torch.Tensor): Mask to apply to the loss.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked cross-entropy loss.
@@ -74,7 +77,7 @@ def masked_mse_loss(
     y: torch.Tensor,
     mask: torch.Tensor,
     weights: torch.Tensor | None = None,
-    tol: float = 1e-7,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked mean squared error loss.
 
@@ -83,13 +86,13 @@ def masked_mse_loss(
         y (torch.Tensor): Target values.
         mask (torch.Tensor): Mask to apply to the loss.
         weights (torch.Tensor | None, optional): Weights to apply to the loss. Defaults to None.
-        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-7.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked mean squared error loss.
     """
 
-    data_dims = tuple(range(1, len(x.shape)))
+    data_dims = tuple(range(1, x.ndim))
     mse = (x - y).square() * mask
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
@@ -103,13 +106,13 @@ class ProtpardelleTrainer:
 
     def __init__(
         self,
-        config: argparse.Namespace,
+        config: TrainingConfig,
         device: Device,
     ) -> None:
         """Initialize the ProtpardelleTrainer.
 
         Args:
-            config (argparse.Namespace): The training configuration.
+            config (TrainingConfig): The training configuration.
             device (Device): The device to train on.
         """
 
@@ -191,10 +194,10 @@ class ProtpardelleTrainer:
         """
 
         checkpoint = {
-            "model_state_dict": self.module.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "scheduler_state_dict": self.scheduler.state_dict(),
-            "scaler_state_dict": self.scaler.state_dict(),
+            "model": self.module.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict(),
             "epoch": epoch,
             "total_steps": total_steps,
             "pytorch_version": torch.__version__,
@@ -211,18 +214,7 @@ class ProtpardelleTrainer:
         checkpoint_dir = norm_path(checkpoint_dir)
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        torch.save(
-            {
-                "model_state_dict": self.module.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "scheduler_state_dict": self.scheduler.state_dict(),
-                "scaler_state_dict": self.scaler.state_dict(),
-                "epoch": epoch,
-                "total_steps": total_steps,
-                "pytorch_version": torch.__version__,
-            },
-            checkpoint_dir / f"epoch{epoch}_training_state.pth",
-        )
+        torch.save(checkpoint, checkpoint_dir / f"epoch{epoch}_training_state.pth")
 
     def load_checkpoint(
         self,
@@ -294,7 +286,7 @@ class ProtpardelleTrainer:
         # sampling from the combined datasets according to specified mixing ratios.
         train_datasets = [
             PDBDataset(
-                pdb_path=self.config.data.pdb_paths[di],
+                pdb_path=pdb_path,
                 fixed_size=self.config.data.fixed_size,
                 mode="train",
                 overfit=overfit,
@@ -303,9 +295,11 @@ class ProtpardelleTrainer:
                 translation_scale=self.config.data.translation_scale,
                 chain_residx_gap=self.config.data.chain_residx_gap,
                 dummy_fill_mode=self.config.data.dummy_fill_mode,
-                subset=self.config.data.subset[di],
+                subset=subset,
             )
-            for di, _ in enumerate(self.config.data.pdb_paths)
+            for pdb_path, subset in zip(
+                self.config.data.pdb_paths, self.config.data.subset
+            )
         ]
         dataset: ConcatDataset[PDBDataset] = ConcatDataset(train_datasets)
 
@@ -354,12 +348,13 @@ class ProtpardelleTrainer:
         return sigma_data
 
     def compute_loss(
-        self, input_dict: dict[str, torch.Tensor]
+        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-9
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the loss for a given input batch.
 
         Args:
             input_dict (dict[str, torch.Tensor]): Input tensors for the model.
+            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-9.
 
         Raises:
             NotImplementedError: If the all atom loss computation is not implemented.
@@ -385,8 +380,8 @@ class ProtpardelleTrainer:
                 )
             atom_coords, crop_cond_mask, hotspot_mask = (
                 make_crop_cond_mask_and_recenter_coords(
-                    atom_mask,
-                    atom_coords,
+                    atom_coords=atom_coords,
+                    atom_mask=atom_mask,
                     aatype=aatype,
                     chain_index=chain_index,
                     **vars(self.config.train.crop_cond),
@@ -408,12 +403,14 @@ class ProtpardelleTrainer:
             adj_cond = None
 
         # Noise data
-        timestep = torch.rand(batch_size).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
+        timestep = torch.rand(batch_size, device=self.device).clamp(
+            min=tol, max=1 - tol
+        )
         noise_level = self.module.training_noise_schedule(timestep)
-        noised_coords = diffusion.noise_coords(
+        noised_coords = dummy_fill_noise_coords(
             atom_coords,
-            noise_level,
             atom_mask,
+            noise_level=noise_level,
             dummy_fill_mode=self.config.data.dummy_fill_mode,
         )
 
@@ -466,15 +463,18 @@ class ProtpardelleTrainer:
             "codesign",
         ]:
             if self.config.model.task == "backbone":
-                struct_loss_mask = torch.ones_like(atom_coords) * bb_atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * bb_atom_mask.unsqueeze(-1)
+            elif self.config.model.compute_loss_on_all_atoms:
+                # Compute loss on all 37 atoms
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
             else:
-                if self.config.model.compute_loss_on_all_atoms:
-                    # Compute loss on all 37 atoms
-                    struct_loss_mask = torch.ones_like(
-                        atom_coords
-                    ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
-                else:
-                    struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(
+                    -1
+                )
             loss_weight = (noise_level**2 + self.module.sigma_data**2) / (
                 (noise_level * self.module.sigma_data) ** 2
             )
@@ -488,7 +488,7 @@ class ProtpardelleTrainer:
         if self.config.model.task in ["seqdes", "codesign"]:
             alpha = self.config.model.mpnn_model.label_smoothing
             aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
-            target_oh = (1 - alpha) * aatype_oh + alpha / self.module.n_tokens
+            target_oh = (1 - alpha) * aatype_oh + alpha / self.module.num_tokens
             mpnn_loss = masked_cross_entropy_loss(
                 aatype_logprobs, target_oh, seq_mask
             ).mean()
@@ -621,7 +621,7 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
-    config = load_config(config_path)
+    config = load_config(config_path, TrainingConfig)
 
     if debug:
         logger.debug("Debug mode is enabled")

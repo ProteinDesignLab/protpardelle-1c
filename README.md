@@ -82,7 +82,7 @@ uv pip install -e . --no-deps
 
 ## Download model weights and configs
 
-Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
+Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights) and [LigandMPNN weights](https://github.com/dauparas/LigandMPNN). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
 
 We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running:
 
@@ -95,6 +95,7 @@ It takes some time to download all the files; you should see the following direc
 - `<project_root>/model_params/`
 - `<project_root>/model_params/ESMFold/`
 - `<project_root>/model_params/ProteinMPNN/vanilla_model_weights/`
+- `<project_root>/model_params/LigandMPNN/`
 - `<project_root>/model_params/configs/`
 - `<project_root>/model_params/weights/`
 
@@ -120,6 +121,9 @@ export ESMFOLD_PATH=/abs/path/to/ESMFold
 
 # ProteinMPNN weights (directory)
 export PROTEINMPNN_WEIGHTS=/abs/path/to/ProteinMPNN/vanilla_model_weights
+
+# LigandMPNN weights (directory)
+export LIGANDMPNN_WEIGHTS=/abs/path/to/LigandMPNN
 
 # Default output directory (optional; defaults to <project_root>/results)
 export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir

@@ -5,8 +5,6 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 import copy
 import itertools
-import logging
-import math
 import shutil
 import subprocess
 import time
@@ -23,12 +21,13 @@ import typer
 import wandb
 from Bio import SeqIO
 from hydra import compose, initialize_config_dir
+from jaxtyping import Float, Int
 from omegaconf import OmegaConf
 from torch.types import Device
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import RunningConfig, SamplingConfig, TrainingConfig
 from protpardelle.core.models import Protpardelle, load_model
 from protpardelle.data.atom import bb_coords_to_atom37_coords
 from protpardelle.data.dataset import make_fixed_size_1d
@@ -37,23 +36,24 @@ from protpardelle.data.pdb_io import load_feats_from_pdb, write_coords_to_pdb
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import (
     FOLDSEEK_BIN,
-    PACKAGE_ROOT_DIR,
-    PROTEINMPNN_WEIGHTS,
-    PROTPARDELLE_MODEL_PARAMS,
+    MINIMPNN_WEIGHTS,
+    PROTPARDELLE_MODEL_CONFIGS,
+    PROTPARDELLE_MODEL_WEIGHTS,
     PROTPARDELLE_OUTPUT_DIR,
+    PROTPARDELLE_RUNNING_CONFIGS,
 )
 from protpardelle.evaluate import compute_self_consistency
-from protpardelle.integrations import protein_mpnn
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
     get_default_device,
+    get_logger,
+    load_config,
     norm_path,
     seed_everything,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -64,17 +64,7 @@ class ProtpardelleSampler:
         model: Protpardelle,
         device: Device,
         num_mpnn_seqs: int = 8,
-    ):
-        self.model = model
-        self.device = device
-        self.num_mpnn_seqs = num_mpnn_seqs
-        if self.num_mpnn_seqs > 0:
-            self.mpnn_model = protein_mpnn.get_mpnn_model(
-                PROTEINMPNN_WEIGHTS,
-                device=self.device,
-            )
-        else:
-            self.mpnn_model = None
+    ): ...
 
 
 def save_samples(
@@ -187,16 +177,16 @@ def save_samples(
 
 def draw_samples(
     model: Protpardelle,
-    seq_mask: TensorType["b n", float] | None = None,
-    residue_index: TensorType["b n", float] | None = None,
-    chain_index: TensorType["b n", int] | None = None,
+    sampling_kwargs: dict[str, Any],
+    seq_mask: Float[torch.Tensor, "B L"] | None = None,
+    residue_index: Float[torch.Tensor, "B L"] | None = None,
+    chain_index: Int[torch.Tensor, "B L"] | None = None,
     hotspots: str | list[str] | None = None,
-    sse_cond: TensorType["b n", int] | None = None,
-    adj_cond: TensorType["b n n", int] | None = None,
+    sse_cond: Int[torch.Tensor, "B L"] | None = None,
+    adj_cond: Int[torch.Tensor, "B L L"] | None = None,
     motif_placements_full: list[str] | None = None,
     num_samples: int | None = None,
     length_ranges_per_chain: list[tuple[int, int]] | None = None,
-    **sampling_kwargs,
 ) -> tuple[Any, Any, Any, Any, Any]:  # TODO: fix typing
     device = model.device
     if seq_mask is None and length_ranges_per_chain is not None:
@@ -205,11 +195,11 @@ def draw_samples(
         )
     chain_id_mapping = [None] * num_samples
     if sampling_kwargs["partial_diffusion"]["enabled"]:
-        pd_feats, pd_hetero_obj = load_feats_from_pdb(
+        pd_feats, _ = load_feats_from_pdb(
             sampling_kwargs["partial_diffusion"]["pdb_file_path"],
             include_pos_feats=True,
         )
-        # update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
+        # Update residue index based on partial diffusion input PDB (chain breaks + multiple chains)
         residue_index = torch.tile(
             pd_feats["residue_index"][None], (num_samples, 1)
         ).to(device)
@@ -277,7 +267,7 @@ def draw_samples(
         sampling_kwargs["uniform_steps"] = True
 
         sampling_kwargs["partial_diffusion"]["enabled"] = True
-        sampling_kwargs["partial_diffusion"]["n_steps"] = rewind_steps
+        sampling_kwargs["partial_diffusion"]["num_steps"] = rewind_steps
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
             tmp_dir / f"stage1_{i}.pdb" for i in range(len(samp_coords))
         ]
@@ -364,17 +354,8 @@ def generate(
     hotspots=None,
     sse_cond=None,
     adj_cond=None,
-    run_name="",
     allatom=False,
 ):
-    device = get_default_device()
-    if num_mpnn_seqs > 0:
-        mpnn_model = protein_mpnn.get_mpnn_model(
-            PROTEINMPNN_WEIGHTS,
-            device=device,
-        )
-    else:
-        mpnn_model = None
 
     trimmed_coords = []
     trimmed_residue_index = []
@@ -444,6 +425,7 @@ def generate(
             samp_aux_bi,
         ) = draw_samples(
             model,
+            curr_sampling_config,
             num_samples=bs,
             seq_mask=seq_mask_input[si:ei] if seq_mask_input is not None else None,
             residue_index=(
@@ -461,7 +443,6 @@ def generate(
                 if motif_placements_full is not None
                 else None
             ),
-            **curr_sampling_config,
         )
         trimmed_coords.extend(trimmed_coords_bi)
         trimmed_residue_index.extend(trimmed_residue_index_bi)
@@ -506,13 +487,11 @@ def generate(
         sc_aux = compute_self_consistency(
             trimmed_coords,
             trimmed_chain_index=trimmed_chain_index,
-            mpnn_model=mpnn_model,
             num_seqs=num_mpnn_seqs,
             motif_idx=motif_idx,
             motif_coords=motif_coords,
             motif_aatypes=motif_aatypes,
             sampled_sequences=sampled_sequences,
-            tmp_prefix=run_name,
             allatom=allatom,
             atom_mask=atom_mask,
             motif_atom_mask=motif_atom_mask,
@@ -539,9 +518,7 @@ def sample(
     seed: int | None = None,
     project_name: str | None = None,
     use_wandb: bool = False,
-    array_id: int | None = None,
-    num_arrays: int | None = None,
-) -> list[Path]:
+) -> None:
     """Sampling with Protpardelle-1c.
 
     Args:
@@ -554,8 +531,6 @@ def sample(
         seed (int | None, optional): Random seed. Defaults to None.
         project_name (str | None, optional): Name of project for wandb. Defaults to None.
         use_wandb (bool, optional): If True, use wandb to log results. Defaults to False.
-        array_id (int | None, optional): Slurm array id for parallelization. Defaults to None.
-        num_arrays (int | None, optional): Number of arrays for parallelization. Defaults to None.
     """
 
     sampling_yaml_path = norm_path(sampling_yaml_path)
@@ -620,11 +595,6 @@ def sample(
 
     # get all params, and optionally split into chunks for parallelization
     all_params = list(itertools.product(*search_space.values()))
-    if array_id is not None:
-        chunk_size = math.ceil(len(all_params) / num_arrays)
-        start_idx = array_id * chunk_size
-        end_idx = min(start_idx + chunk_size, len(all_params))
-        all_params = all_params[start_idx:end_idx]
 
     # for a given setting
     for curr_params in tqdm(all_params, "Evaluating search space"):
@@ -653,7 +623,7 @@ def sample(
         per_config_save_dir.mkdir(exist_ok=True)
 
         with initialize_config_dir(
-            config_dir=str(PACKAGE_ROOT_DIR / "configs/sampling"),
+            config_dir=str(PROTPARDELLE_RUNNING_CONFIGS),
             version_base="1.3.2",
         ):
             sampling_config = compose(config_name=sampling_config_name)
@@ -699,11 +669,9 @@ def sample(
             per_motif_save_dir.mkdir(exist_ok=True)
             all_save_dirs.append(per_motif_save_dir)
 
-            config_path = str(
-                PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
-            )
+            config_path = str(PROTPARDELLE_MODEL_CONFIGS / f"{model_name}.yaml")
             checkpoint_path = str(
-                PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
+                PROTPARDELLE_MODEL_WEIGHTS / f"{model_name}_epoch{epoch}.pth"
             )
 
             sampling_config["sampling"]["step_scale"] = stepscale
@@ -716,7 +684,7 @@ def sample(
                 sampling_config["sampling"]["partial_diffusion"][
                     "pdb_file_path"
                 ] = motif_fp
-                sampling_config["sampling"]["partial_diffusion"]["n_steps"] = rs
+                sampling_config["sampling"]["partial_diffusion"]["num_steps"] = rs
                 sampling_config["sampling"]["motif_file_path"] = "test_dir/empty.pdb"
             else:
                 sampling_config["sampling"]["motif_file_path"] = motif_fp
@@ -796,10 +764,7 @@ def sample(
                 or sampling_config["sampling"]["allatom_cfg"]["uniform_steps"]
             )
             if allatom:
-                mpnn_ckpt_path = str(
-                    PROTPARDELLE_MODEL_PARAMS / "weights" / "cc58_epoch97_minimpnn.pth"
-                )
-                model.load_minimpnn(mpnn_ckpt_path=mpnn_ckpt_path)
+                model.load_minimpnn(MINIMPNN_WEIGHTS)
 
             sse_cond = None
             adj_cond = None
@@ -830,7 +795,6 @@ def sample(
                 hotspots=hotspot,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
-                run_name=run_name,
                 allatom=allatom,
             )
 
@@ -1103,8 +1067,6 @@ def sample(
         df_samp_info["fix_pos"] = all_fix_pos
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
 
-    return all_save_dirs
-
 
 @app.command()
 def main(
@@ -1112,7 +1074,9 @@ def main(
         ..., help="Path to sampling config YAML file"
     ),
     motif_dir: str | None = typer.Option(None, help="Directory containing motif PDBs"),
-    motif_pdb: str | None = typer.Option(None, help="Single motif PDB file, overrides motif_dir"),
+    motif_pdb: str | None = typer.Option(
+        None, help="Single motif PDB file, overrides motif_dir"
+    ),
     project_name: str | None = typer.Option(None, help="wandb project name"),
     num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
@@ -1124,12 +1088,6 @@ def main(
     ),
     seed: int | None = typer.Option(None, help="Random seed"),
     use_wandb: bool = typer.Option(False, help="Whether to use wandb"),
-    array_id: int | None = typer.Option(
-        None, help="Slurm array ID for parallelization"
-    ),
-    num_arrays: int | None = typer.Option(
-        None, help="Number of arrays for parallelization"
-    ),
 ) -> None:
     """Entrypoint for Protpardelle-1c sampling."""
     sample(
@@ -1143,8 +1101,6 @@ def main(
         save_shortname=save_shortname,
         seed=seed,
         use_wandb=use_wandb,
-        array_id=array_id,
-        num_arrays=num_arrays,
     )
 
 

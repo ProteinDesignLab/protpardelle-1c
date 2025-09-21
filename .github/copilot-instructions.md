@@ -50,7 +50,6 @@ Key invariants: ensure `residue_index` starts at 1 post normalization; apply `ad
 ### 5. Data & Tensor Conventions
 
 - Atom ordering fixed by `residue_constants.atom_order`; backbone indices stored in `bb_idxs` in `CoordinateDenoiser`.
-- For all-atom 37 representation; for backbone-only models, sometimes an extra dummy atom is added if convolution branch requires even channel counts (`if self.use_conv and n_atoms == 37: n_atoms += 1`). Preserve this logic when altering architecture.
 - Chain indices are integer (0-based) while chain IDs in PDB are letters. The mapping is reversible via `chain_id_mapping` passed into writers.
 - Masking: `atom_mask` shape `(N, 37)`; when absent, reconstructed from aatype (`atom37_mask_from_aatype`). Sequence mask denotes which residues are designable / present.
 

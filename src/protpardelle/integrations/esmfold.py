@@ -13,11 +13,12 @@ from tqdm.auto import tqdm
 from transformers import EsmForProteinFolding
 
 from protpardelle.common import residue_constants
-from protpardelle.data import atom
+from protpardelle.data.atom import atom14_coords_to_atom37_coords_batched
 from protpardelle.data.sequence import seq_to_aatype
 from protpardelle.env import ESMFOLD_PATH
 from protpardelle.utils import clean_gpu_cache, get_default_device
 
+# Suppress extensive logging from transformers library
 logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
 
 
@@ -286,7 +287,7 @@ def predict_structures(
     aatype = torch.stack(
         [seq_to_aatype(seqs.replace(":", "")).to(device) for seqs in seqs_list]
     )  # (B, L)
-    atom37_coords = atom.atom14_coords_to_atom37_coords_batched(
+    atom37_coords = atom14_coords_to_atom37_coords_batched(
         positions, aatype
     )  # (B, L, 37, 3)
     all_atom_plddt = plddt.clone()  # (B, L, 37)

@@ -3,30 +3,28 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
-import argparse
 import math
 from collections.abc import Sequence
 from itertools import accumulate
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from jaxtyping import Float
 from torch.utils.data import Dataset, RandomSampler, Sampler
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
-import protpardelle.data.pdb_io
-import protpardelle.utils
-from protpardelle.common.residue_constants import (
-    RFDIFFUSION_BENCHMARK_TIP_ATOMS,
-    atom_order,
-    order_restype,
-    restype_1to3,
-)
-from protpardelle.data import atom
+from protpardelle.common import residue_constants
+from protpardelle.configs import TrainingConfig
+from protpardelle.data.atom import dummy_fill_noise_coords
+from protpardelle.data.pdb_io import load_feats_from_pdb
+from protpardelle.utils import get_logger, unsqueeze_trailing_dims
+
+logger = get_logger(__name__)
 
 FEATURES_1D = (
     "coords_in",
@@ -56,18 +54,18 @@ FEATURES_LONG = ("aatype", "residue_index", "chain_index", "orig_size", "sse", "
 
 
 def make_fixed_size_1d(
-    data: torch.Tensor, fixed_size: int = 128
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pads or crops a 1D tensor (L, ...) to (fixed_size, ...).
+    data: Float[torch.Tensor, "L ..."], fixed_size: int = 128
+) -> tuple[Float[torch.Tensor, "N ..."], Float[torch.Tensor, "N"]]:
+    """Pads or crops a 1D tensor.
 
     Args:
-        data (torch.Tensor): Input tensor of shape (L, ...).
+        data (torch.Tensor): Input tensor.
         fixed_size (int): Desired length.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor]: A tuple containing:
-            new_data (torch.Tensor): Tensor of shape (fixed_size, ...).
-            mask (torch.Tensor): Binary mask of shape (fixed_size) indicating valid data.
+            new_data (torch.Tensor): New tensor.
+            mask (torch.Tensor): Binary mask indicating valid data.
     """
 
     data_len = data.shape[0]
@@ -93,18 +91,18 @@ def make_fixed_size_1d(
 
 
 def make_fixed_size_2d(
-    data: torch.Tensor, fixed_size: int = 128
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Pads or crops a 2D tensor (H, W, ...) to (fixed_size, fixed_size, ...).
+    data: Float[torch.Tensor, "H W ..."], fixed_size: int = 128
+) -> tuple[Float[torch.Tensor, "N N ..."], Float[torch.Tensor, "N N"]]:
+    """Pads or crops a 2D tensor.
 
     Args:
-        data (torch.Tensor): Input tensor of shape (H, W, ...).
+        data (torch.Tensor): Input tensor.
         fixed_size (int, optional): Desired height and width. Defaults to 128.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor]: A tuple containing:
-            new_data (torch.Tensor): Tensor of shape (fixed_size, fixed_size, ...).
-            mask (torch.Tensor): Binary mask of shape (fixed_size, fixed_size) indicating valid data.
+            new_data (torch.Tensor): New tensor.
+            mask (torch.Tensor): Binary mask indicating valid data.
     """
 
     H, W, *extra_shapes = data.shape
@@ -143,85 +141,176 @@ def make_fixed_size_2d(
     )
 
     new_data = F.pad(cropped, pad_dims)
+
+    # Mask is 2D (H, W), so pad with 4 values only (W then H).
     valid = torch.ones((h_len, w_len), device=device)
-    mask = F.pad(valid, pad_dims)
+    pad_dims_mask = (0, pad_w, 0, pad_h)
+    mask = F.pad(valid, pad_dims_mask)
 
     return new_data, mask
 
 
 def apply_random_se3(
-    coords_in, atom_mask=None, translation_scale=1.0, return_rot: bool = False
-):
-    # unbatched. center on the mean of CA coords
-    coords_mean = coords_in[:, 1:2].mean(-3, keepdim=True)
-    coords_in -= coords_mean
+    atom_coords: Float[torch.Tensor, "L A 3"],
+    atom_mask: Float[torch.Tensor, "L A"] | None = None,
+    translation_scale: float = 1.0,
+) -> Float[torch.Tensor, "L A 3"]:
+    """Applies a random rotation and translation to the coordinates.
+
+    Not batched.
+
+    Args:
+        atom_coords (torch.Tensor): Input coordinates.
+        atom_mask (torch.Tensor | None, optional): Atom mask.
+        translation_scale (float, optional): Scale for translation. Defaults to 1.0.
+
+    Returns:
+        torch.Tensor: Transformed coordinates.
+    """
+
+    coords_mean = atom_coords[:, 1:2].mean(dim=-3, keepdim=True)
+    atom_coords = atom_coords - coords_mean
+
     random_rot = uniform_rand_rotation(1).squeeze(0)
-    coords_in = coords_in @ random_rot
+    atom_coords = atom_coords @ random_rot
     random_trans = torch.randn_like(coords_mean) * translation_scale
-    coords_in += random_trans
+    atom_coords = atom_coords + random_trans
+
     if atom_mask is not None:
-        coords_in = coords_in * atom_mask.unsqueeze(-1)
-    if return_rot:
-        return coords_in, random_rot
-    else:
-        return coords_in
+        atom_coords = atom_coords * atom_mask.unsqueeze(-1)
+    return atom_coords
 
 
-def uniform_rand_rotation(batch_size):
+def uniform_rand_rotation(
+    batch_size: int, seed: int | None = None
+) -> Float[torch.Tensor, "B 3 3"]:
+    """Creates a rotation matrix uniformly at random in SO(3).
+
+    Uses quaternionic multiplication to generate independent rotation matrices for each batch.
+
+    Args:
+        batch_size (int): The number of rotation matrices to generate.
+        seed (int | None, optional): Random seed for reproducibility. Defaults to None.
+
+    Returns:
+        torch.Tensor: The generated rotation matrices.
     """
-    Creates a shape (batch_size, 3, 3) rotation matrix uniformly at random in SO(3)
-    Uses quaternionic multiplication to generate independent rotation matrices for each batch
 
-    Credit: Steven Dunne
-    """
-    q = torch.randn(batch_size, 4)
-    q /= torch.norm(q, dim=1, keepdim=True)
-    rotation = torch.zeros(batch_size, 3, 3).to(q)
+    rng = torch.Generator().manual_seed(seed) if seed is not None else None
+    q = torch.randn(batch_size, 4, generator=rng)
+    q = q / torch.norm(q, dim=1, keepdim=True)
+    rotation = torch.zeros(batch_size, 3, 3)
+
     a, b, c, d = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
     rotation[:, 0, :] = torch.stack(
         [2 * a**2 - 1 + 2 * b**2, 2 * b * c - 2 * a * d, 2 * b * d + 2 * a * c]
-    ).T
+    ).t()
     rotation[:, 1, :] = torch.stack(
         [2 * b * c + 2 * a * d, 2 * a**2 - 1 + 2 * c**2, 2 * c * d - 2 * a * b]
-    ).T
+    ).t()
     rotation[:, 2, :] = torch.stack(
         [2 * b * d - 2 * a * c, 2 * c * d + 2 * a * b, 2 * a**2 - 1 + 2 * d**2]
-    ).T
+    ).t()
+
     return rotation
 
 
-def dummy_fill(
-    coords_in: TensorType["n a 3"], atom_mask: TensorType["n a"], mode: str
-) -> TensorType["n a 3"]:
+def get_masked_coords_array(
+    atom_coords: Float[torch.Tensor, "L A 3"],
+    atom_mask: Float[torch.Tensor, "L A"],
+) -> np.ma.MaskedArray:
+    """Create a masked array from atom coordinates and mask.
+
+    Args:
+        atom_coords (torch.Tensor): Atom coordinates.
+        atom_mask (torch.Tensor): Atom mask.
+
+    Returns:
+        np.ma.MaskedArray: Masked array of atom coordinates.
     """
-    Fill in ghost side chain atoms with either the CA or CB atom value for each residue, depending on the mode.
 
-    Default to zeros if mode is not "CA" or "CB"
-    """
-    assert mode in ["CA", "CB"], f"Invalid dummy fill mode: {mode}"
-    dummy_fill_mask = 1 - atom_mask
-    if mode == "CA":
-        dummy_fill_value = coords_in[..., 1:2, :]  # CA
-    elif mode == "CB":
-        dummy_fill_value = atom.fill_in_cbeta_for_atom37_coords(coords_in)[
-            ..., 3:4, :
-        ]  # idealized CB
-    else:
-        dummy_fill_value = 0
-    coords_in = coords_in * atom_mask.unsqueeze(
-        -1
-    ) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
-    return coords_in
-
-
-def get_masked_coords_array(coords, atom_mask):
     ma_mask = repeat(1 - atom_mask.unsqueeze(-1).cpu().numpy(), "... 1 -> ... 3")
-    return np.ma.array(coords.cpu().numpy(), mask=ma_mask)
+
+    return np.ma.array(atom_coords.cpu().numpy(), mask=ma_mask)
+
+
+def calc_sigma_data(
+    dataset: Dataset,
+    config: TrainingConfig,
+    num_workers: int,
+) -> float:
+    """Given a dataset and the model training config, estimate sigma_data.
+
+    Args:
+        dataset (Dataset): The dataset to use for estimation.
+        config (TrainingConfig): The training configuration.
+        num_workers (int): The number of workers to use for data loading.
+
+    Returns:
+        float: The estimated sigma_data.
+    """
+
+    sigma_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=config.train.batch_size,
+        num_workers=num_workers,
+        pin_memory=False,
+        shuffle=True,
+        drop_last=False,
+    )
+
+    collected_coords = []
+    collected_atom_masks = []
+    collected_seq_masks = []
+
+    num_batches = math.ceil(
+        config.data.n_examples_for_sigma_data / config.train.batch_size
+    )
+    for i, inputs in tqdm(
+        enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
+    ):
+        # Stop collecting once we've reached enough examples
+        if i == num_batches:
+            break
+
+        seq_mask = inputs["seq_mask"]
+        coords = inputs["coords_in"]
+        atom_mask = inputs["atom_mask"]
+
+        if config.train.crop_conditional:
+            coords, _, _ = make_crop_cond_mask_and_recenter_coords(
+                atom_coords=coords, atom_mask=atom_mask, **vars(config.train.crop_cond)
+            )
+
+        collected_coords.append(coords)
+        collected_atom_masks.append(atom_mask)
+        collected_seq_masks.append(seq_mask)
+
+    # Convert collected data lists to tensors
+    coords = torch.cat(collected_coords, dim=0)[: config.data.n_examples_for_sigma_data]
+    atom_mask = torch.cat(collected_atom_masks, dim=0)[
+        : config.data.n_examples_for_sigma_data
+    ]
+    seq_mask = torch.cat(collected_seq_masks, dim=0)[
+        : config.data.n_examples_for_sigma_data
+    ]
+
+    if config.model.compute_loss_on_all_atoms:
+        # Compute sigma_data on all 37 atoms for each residue
+        atom_mask = torch.ones_like(atom_mask) * unsqueeze_trailing_dims(
+            seq_mask, atom_mask
+        )
+
+    # Estimate sigma_data
+    masked_coords = get_masked_coords_array(coords, atom_mask)
+    sigma_data = float(masked_coords.std())
+
+    return sigma_data
 
 
 def make_crop_cond_mask_and_recenter_coords(
-    atom_mask: torch.Tensor,
     atom_coords: torch.Tensor,
+    atom_mask: torch.Tensor,
     aatype: torch.Tensor | None = None,
     chain_index: torch.Tensor | None = None,
     contiguous_prob: float = 0.05,
@@ -298,11 +387,11 @@ def make_crop_cond_mask_and_recenter_coords(
     b, n, a = atom_mask.shape
     device = atom_mask.device
     seq_mask = atom_mask[..., 1]
-    n_res = seq_mask.sum(-1)
+    num_res = seq_mask.sum(-1)
     masks = []
     all_hotspot_masks = torch.zeros((b, n), device=device)
 
-    for i, nr in enumerate(n_res):
+    for i, nr in enumerate(num_res):
         nr = nr.int().item()
         mask = torch.zeros((n, a), device=device)
         if chain_index is not None and chain_index[i].sum(-1) > 0:
@@ -351,19 +440,19 @@ def make_crop_cond_mask_and_recenter_coords(
             random_residue = torch.randint(0, nr, (1,), device=device).squeeze()
             cb_dist_i = cb_distances[random_residue] + 1e3 * (1 - seq_mask[i])
             close_mask = cb_dist_i <= dist_threshold
-            n_neighbors = close_mask.sum().int()
+            num_neighbors = close_mask.sum().int()
 
             # pick how many neighbors (up to 10)
-            n_sele = torch.randint(
+            num_sele = torch.randint(
                 2,
-                n_neighbors.clamp(min=3, max=max_discontiguous_res + 1),
+                num_neighbors.clamp(min=3, max=max_discontiguous_res + 1),
                 (1,),
                 device=device,
             )
 
             # Select the indices of CB atoms that are close together
             idxs = torch.arange(n, device=device)[close_mask.bool()]
-            idxs = idxs[torch.randperm(len(idxs))[:n_sele]]
+            idxs = idxs[torch.randperm(len(idxs))[:num_sele]]
 
             if len(idxs) > 0:
                 mask[idxs] = 1
@@ -413,12 +502,17 @@ def make_crop_cond_mask_and_recenter_coords(
                 motif_idx = torch.nonzero(mask.sum(-1)).flatten()
                 for mi in motif_idx:
                     aatype_int = aatype[i][mi]
-                    motif_aatype_str = restype_1to3[order_restype[aatype_int.item()]]
+                    motif_aatype_str = residue_constants.restype_1to3[
+                        residue_constants.order_restype[aatype_int.item()]
+                    ]
 
                     # Original Protpardelle tip atom definition, also used in La-Proteina
-                    tip_atomtypes = RFDIFFUSION_BENCHMARK_TIP_ATOMS[motif_aatype_str]
+                    tip_atomtypes = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
+                        motif_aatype_str
+                    ]
                     tip_atom_idx_atom37 = [
-                        atom_order.get(atype) for atype in tip_atomtypes
+                        residue_constants.atom_order.get(atype)
+                        for atype in tip_atomtypes
                     ]
 
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)
@@ -461,7 +555,7 @@ class PDBDataset(Dataset):
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
-        dummy_fill_mode: str = "zero",
+        dummy_fill_mode: Literal["CA", "zero"] = "zero",
         subset: str | float = "",
     ) -> None:
         """Initialize the PDBDataset.
@@ -482,8 +576,8 @@ class PDBDataset(Dataset):
                 Defaults to 1.0.
             chain_residx_gap (int, optional): Offset added to residue indices to
                 separate chains. Defaults to 200.
-            dummy_fill_mode (str, optional): Strategy to fill coordinates for
-                non-existing atoms (e.g., "zero"). Defaults to "zero".
+            dummy_fill_mode (Literal["CA", "zero"], optional): Strategy to fill coordinates
+                for non-existing atoms. Defaults to "zero".
             subset (str | float, optional): Dataset-specific subset identifier to
                 train on; if a float in (0, 1], interpreted as a fraction of data
                 to sample. Defaults to "".
@@ -527,8 +621,12 @@ class PDBDataset(Dataset):
                     ~self.cif_df["homodimer"]
                 ]  # filter out homodimers
                 new_size = len(self.cif_df)
-                print(
-                    f"Filtering by resolution better than {subset}A and total length less than {self.fixed_size} residues. Removed {orig_size - new_size} examples, will train on {new_size} examples."
+                logger.info(
+                    "Filtering by resolution better than %sA and total length less than %s residues. Removed %s examples, will train on %s examples.",
+                    subset,
+                    self.fixed_size,
+                    orig_size - new_size,
+                    new_size,
                 )
             self.pdb_keys = list(
                 set(
@@ -537,20 +635,17 @@ class PDBDataset(Dataset):
                 )
             )
         else:
-            with open(f"{self.pdb_path}/{mode}_{subset}pdb_keys.list", "r") as f:
+            with open(f"{self.pdb_path}/{mode}_{subset}_pdb_keys.list", "r") as f:
                 self.pdb_keys = np.array(f.read().split("\n")[:-1])
 
         if overfit > 0:
-            n_data = len(self.pdb_keys)
+            num_data = len(self.pdb_keys)
             self.pdb_keys = np.random.choice(
-                self.pdb_keys, min(n_data, overfit), replace=False
-            ).repeat(n_data // overfit)
+                self.pdb_keys, min(num_data, overfit), replace=False
+            ).repeat(num_data // overfit)
 
     def __len__(self):
-        if self.short_epoch:
-            return min(len(self.pdb_keys), 256)
-        else:
-            return len(self.pdb_keys)
+        return min(len(self.pdb_keys), 256) if self.short_epoch else len(self.pdb_keys)
 
     def __getitem__(self, idx):
         pdb_key = self.pdb_keys[idx]
@@ -592,25 +687,24 @@ class PDBDataset(Dataset):
             raise ValueError("Invalid pdb path.")
 
         try:
-            example, _ = protpardelle.data.pdb_io.load_feats_from_pdb(
+            example, _ = load_feats_from_pdb(
                 data_file, chain_residx_gap=self.chain_residx_gap, chain_id=chain_id
             )
             coords_in = example["atom_positions"]
         except Exception as e:
-            print(f"File {data_file} throws {e}")
+            logger.error("Error loading PDB %s: %s", data_file, str(e))
             return
 
         # Apply data augmentation
         if self.se3_data_augment:
-            coords_in, random_rot = apply_random_se3(
+            coords_in = apply_random_se3(
                 coords_in,
                 atom_mask=example["atom_mask"],
                 translation_scale=self.translation_scale,
-                return_rot=True,
             )
         else:
             coords_mean = coords_in[:, 1:2].mean(-3, keepdim=True)
-            coords_in -= coords_mean
+            coords_in = coords_in - coords_mean
 
         ss_adj_dir = Path(self.pdb_path) / "ss_adj"
         sse_path = ss_adj_dir / f"{Path(data_file).stem}_ss.pt"
@@ -636,8 +730,8 @@ class PDBDataset(Dataset):
             )
 
         if self.dummy_fill_mode != "zero":
-            coords_in = dummy_fill(
-                coords_in, example["atom_mask"], mode=self.dummy_fill_mode
+            coords_in = dummy_fill_noise_coords(
+                coords_in, example["atom_mask"], dummy_fill_mode=self.dummy_fill_mode
             )
 
         orig_size = coords_in.shape[0]
@@ -706,29 +800,31 @@ class StochasticMixedSampler(Sampler):
     provided mixing ratios, but we are guaranteed to draw a fixed number of samples from the
     primary dataset (equal to int(batch_size * mixing_ratios[0])).
 
-    Parameters:
-    - datasets (list[Dataset]): A list of datasets to sample from. The first dataset is considered
-                                the primary dataset that will be sampled without replacement.
-    - mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
-                                   The sum of all ratios should be equal to 1. The length of this list
-                                   should be equal to the number of datasets.
-    - batch_size (int): The batch size for which samples need to be drawn.
-
     Attributes:
-    - primary_dataset_length (int): The length of the primary dataset.
-    - primary_samples_per_batch (int): The number of primary dataset examples we draw per batch.
-    - offsets (list[int]): The accumulated offset of each dataset when all datasets are concatenated.
-    - samplers (list[Sampler]): List of samplers for each dataset. The primary dataset uses a
-                                RandomSampler without replacement while all others use a RandomSampler with replacement.
-
-    Methods:
-    - __iter__: Returns an iterator that provides indices to draw samples from the combined dataset.
-    - __len__: Returns the approximate length of indices that will be drawn in total.
+        primary_dataset_length (int): The length of the primary dataset.
+        primary_samples_per_batch (int): The number of primary dataset examples we draw per batch.
+        offsets (list[int]): The accumulated offset of each dataset when all datasets are concatenated.
+        samplers (list[Sampler]): A list of samplers for each dataset. The primary dataset uses a
+            RandomSampler without replacement while all others use a RandomSampler with replacement.
     """
 
     def __init__(
-        self, datasets: Sequence[Dataset], mixing_ratios: list[float], batch_size: int
-    ):
+        self,
+        datasets: Sequence[PDBDataset],
+        mixing_ratios: list[float],
+        batch_size: int,
+    ) -> None:
+        """Stochastic Mixed Sampler.
+
+        Args:
+            datasets (Sequence[PDBDataset]): A list of datasets to sample from. The first dataset
+                is considered the primary dataset that will be sampled without replacement.
+            mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
+                The sum of all ratios should be equal to 1. The length of this list should be equal
+                to the number of datasets.
+            batch_size (int): The batch size for which samples need to be drawn.
+        """
+
         self.datasets = datasets
         self.mixing_ratios = np.array(mixing_ratios)
         self.batch_size = batch_size
@@ -783,75 +879,8 @@ class StochasticMixedSampler(Sampler):
             # Yield the indices for this batch
             yield from batch_indices
 
-    def __len__(self):
+    def __len__(self) -> int:
         return (
             int(np.ceil(len(self.datasets[0]) / self.primary_samples_per_batch))
             * self.batch_size
         )
-
-
-def calc_sigma_data(
-    dataset: Dataset,
-    config: argparse.Namespace,
-    num_workers: int,
-) -> float:
-    """
-    Given a dataset and the model training config, estimate sigma_data.
-    """
-
-    sigma_dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=config.train.batch_size,
-        num_workers=num_workers,
-        pin_memory=False,
-        shuffle=True,
-        drop_last=False,
-    )
-
-    collected_coords = []
-    collected_atom_masks = []
-    collected_seq_masks = []
-
-    num_batches = math.ceil(
-        config.data.n_examples_for_sigma_data / config.train.batch_size
-    )
-    for i, inputs in tqdm(
-        enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
-    ):
-        # Stop collecting once we've reached enough examples
-        if i == num_batches:
-            break
-
-        seq_mask = inputs["seq_mask"]
-        coords = inputs["coords_in"]
-        atom_mask = inputs["atom_mask"]
-
-        if config.train.crop_conditional:
-            coords, _, _ = make_crop_cond_mask_and_recenter_coords(
-                atom_mask, coords, **vars(config.train.crop_cond)
-            )
-
-        collected_coords.append(coords)
-        collected_atom_masks.append(atom_mask)
-        collected_seq_masks.append(seq_mask)
-
-    # Convert collected data lists to tensors
-    coords = torch.cat(collected_coords, dim=0)[: config.data.n_examples_for_sigma_data]
-    atom_mask = torch.cat(collected_atom_masks, dim=0)[
-        : config.data.n_examples_for_sigma_data
-    ]
-    seq_mask = torch.cat(collected_seq_masks, dim=0)[
-        : config.data.n_examples_for_sigma_data
-    ]
-
-    if config.model.compute_loss_on_all_atoms:
-        # Compute sigma_data on all 37 atoms for each residue
-        atom_mask = torch.ones_like(
-            atom_mask
-        ) * protpardelle.utils.unsqueeze_trailing_dims(seq_mask, atom_mask)
-
-    # Estimate sigma_data
-    masked_coords = get_masked_coords_array(coords, atom_mask)
-    sigma_data = round(float(masked_coords.std()), 2)
-    print(f"mean={masked_coords.mean():.2f}, sigma_data={sigma_data}")
-    return sigma_data

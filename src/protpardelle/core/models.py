@@ -7,9 +7,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 
 from __future__ import annotations
 
-import argparse
 import copy
-import logging
 import re
 from collections import defaultdict
 from collections.abc import Callable
@@ -21,142 +19,263 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
-from omegaconf import DictConfig
+from jaxtyping import Float, Int
 from torch.types import Device
-from torchtyping import TensorType
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
+from protpardelle.configs import TrainingConfig
+from protpardelle.configs.running_dataclasses import ConditionalCfg
+from protpardelle.configs.running_dataclasses import (
+    PartialDiffusion as PartialDiffusionCfg,
+)
 from protpardelle.core import diffusion, modules
-from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
+from protpardelle.data.atom import (
+    atom37_mask_from_aatype,
+    atom73_mask_from_aatype,
+    dummy_fill_noise_coords,
+)
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import seq_to_aatype_batched
-from protpardelle.env import PROTEINMPNN_WEIGHTS
-from protpardelle.evaluate import design_sequence
-from protpardelle.integrations import protein_mpnn
+from protpardelle.integrations.protein_mpnn import design_sequence
 from protpardelle.utils import (
     StrPath,
     apply_dotdict_recursively,
     get_default_device,
+    get_logger,
     load_config,
     norm_path,
     unsqueeze_trailing_dims,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def fill_motif_seq(
-    s_hat: TensorType["b n", int],
+    s_hat: Int[torch.Tensor, "B L"],
     motif_idx: list[list[int]],
     motif_aatype: list[list[int]],
 ) -> torch.Tensor:
-    batch_size, seq_length = s_hat.shape
-    for bi in range(batch_size):
-        ii = 0
-        for mi in range(seq_length):
-            if mi in motif_idx[bi]:
-                s_hat[bi, mi] = motif_aatype[bi][ii]
-                ii += 1
+    """Fill in the motif sequence in the predicted sequence.
+
+    Args:
+        s_hat (torch.Tensor): The predicted sequence.
+        motif_idx (list[list[int]]): The indices of the motif positions.
+        motif_aatype (list[list[int]]): The amino acid types of the motifs.
+
+    Returns:
+        torch.Tensor: The filled-in predicted sequence.
+    """
+
+    B, L = s_hat.shape
+    for b in range(B):
+        i = 0
+        for l in range(L):
+            if l in motif_idx[b]:
+                s_hat[b, l] = motif_aatype[b][i]
+                i += 1
+
     return s_hat
 
 
-def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
-    # remove heteroatoms from motif_aatype
+def apply_crop_cond_strategy(
+    coords: Float[torch.Tensor, "B L 37 3"],
+    motif_idx: list[list[int]],
+    motif_aatype: list[list[str]],
+    strategy: Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"],
+) -> Float[torch.Tensor, "B L 37 3"]:
+    """Apply crop-conditioning by zeroing out non-conditioned atoms.
+
+    Strategies:
+        - "backbone": keep N, CA, C, O globally; zero CB and all sidechain atoms.
+        - "sidechain": keep sidechain atoms globally; zero backbone (N, CA, C, O).
+        - "sidechain-tip": like "sidechain", but for motif residues only keep curated
+            tip atoms for the residue type (others set to 0) to encourage guidance on tips.
+        - "backbone-sidechain": keep everything (no masking).
+
+    Args:
+        coords (torch.Tensor): The input coordinates.
+        motif_idx (list[list[int]]): A list of length B, each a list[int] for motif residue indices.
+        motif_aatype (list[list[str]]): A list of length B, each a list[str] for motif amino acid types.
+        strategy (Literal["backbone", "sidechain", "sidechain-tip", "backbone-sidechain"]):
+            The cropping strategy to apply.
+
+    Raises:
+        ValueError: If an unknown strategy is provided.
+
+    Returns:
+        torch.Tensor: The cropped coordinates.
+    """
+
+    # Remove heteroatom entries from motif_aatype if present
     motif_aatype = [
         [ma for ma in mab if ma in residue_constants.restype_3to1]
         for mab in motif_aatype
     ]
     crop_cond_coords = coords.clone()
-    if strategy is None:
-        strategy = "backbone"
-    if "backbone" in strategy and "sidechain" not in strategy:
-        crop_cond_coords[:, :, 3, :] = 0
-        crop_cond_coords[:, :, 5:, :] = 0
-    elif "sidechain" in strategy:
-        if "sidechain-tip" in strategy:
-            for bi, _ in enumerate(motif_idx):
-                for mi, aa3 in enumerate(motif_aatype[bi]):
-                    if aa3 in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS:
-                        atom_idx = [
-                            residue_constants.atom_order.get(at)
-                            for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[
-                                aa3
-                            ]
-                        ]
-                        inv_atom_idx = np.delete(np.arange(37), atom_idx)
-                        crop_cond_coords[bi, motif_idx[bi][mi], inv_atom_idx, :] = 0
-        if "backbone" not in strategy:  # given sc, not given bb
-            crop_cond_coords[:, :, (0, 1, 2, 4), :] = 0
+
+    # Indices: backbone atoms are [0, 1, 2, 4]; sidechain is complement (3 and 5:)
+    backbone_idxs = [0, 1, 2, 4]
+    sidechain_idxs = [3] + list(range(5, 37))
+
+    if strategy == "backbone":
+        # Zero all sidechain atoms globally
+        crop_cond_coords[:, :, sidechain_idxs] = 0
+    elif strategy == "sidechain":
+        # Zero backbone atoms globally
+        crop_cond_coords[:, :, backbone_idxs] = 0
+    elif strategy == "sidechain-tip":
+        # Zero backbone atoms globally
+        crop_cond_coords[:, :, backbone_idxs] = 0
+
+        # For motif residues, keep only tip atoms for that residue type
+        for b, (idxs, aatypes) in enumerate(zip(motif_idx, motif_aatype)):
+            for idx, aatype in zip(idxs, aatypes):
+                if aatype not in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS:
+                    continue
+                tip_atoms = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aatype]
+                keep_idxs = [residue_constants.atom_order[atom] for atom in tip_atoms]
+                crop_idxs = np.delete(np.arange(37), keep_idxs)
+                crop_cond_coords[b, idx, crop_idxs] = 0
+    elif strategy == "backbone-sidechain":
+        # Keep everything
+        pass
+    else:
+        raise ValueError(f"Unknown crop conditioning strategy: {strategy}")
 
     return crop_cond_coords
 
 
 def get_time_dependent_scale(
-    schedule: str, w: float, curr_step: int, n_steps: int, stage2: bool = False
+    schedule: Literal["constant", "cubic", "quadratic", "custom"],
+    w: float,
+    curr_step: int,
+    num_steps: int,
+    stage2: bool = False,
 ) -> float:
+    """Get a time-dependent scaling factor.
+
+    Schedules supported:
+        - constant: always 1.0
+        - cubic: (t/T)^3
+        - quadratic: (t/T)^2
+        - custom (stage / non-stage): piecewise warmup (or stage2 variant) used
+            when schedule is not one of the above
+
+    The returned value is multiplied by guidance weight w.
+
+    Args:
+        schedule (Literal["constant", "cubic", "quadratic", "custom"]):
+            The scheduling strategy to use.
+        w (float): The base weight to scale.
+        curr_step (int): The current step in the process.
+        num_steps (int): The total number of steps.
+        stage2 (bool, optional): Whether we are in stage 2. Defaults to False.
+
+    Returns:
+        float: The scaled weight.
+    """
+
+    # Normalize potential out-of-range values
+    num_steps = max(1, num_steps)
+
     if schedule == "constant":
         scale = 1.0
     elif schedule == "cubic":
-        scale = (curr_step / n_steps) ** 3
-    elif schedule == "custom-stepscale":
-        if curr_step < 250:
-            scale = 0.67
-        elif curr_step < 400:
-            scale = 0.8
-        elif curr_step < 450:
-            scale = 0.9
-        else:
-            scale = 1.0
+        scale = (curr_step / num_steps) ** 3
     elif schedule == "quadratic":
-        scale = (curr_step / n_steps) ** 2
-    elif stage2:
-        if curr_step < 25:
-            scale = 0.01
-        elif curr_step < 40:
-            scale = 0.1
-        elif curr_step < 45:
-            scale = 0.5
+        scale = (curr_step / num_steps) ** 2
+    elif schedule == "custom":
+        if stage2:
+            if curr_step < 25:
+                scale = 0.01
+            elif curr_step < 40:
+                scale = 0.1
+            elif curr_step < 45:
+                scale = 0.5
+            else:
+                scale = 1.0
         else:
-            scale = 1.0
-    elif curr_step < 250:
-        scale = 0.01
-    elif curr_step < 400:
-        scale = 0.1
-    elif curr_step < 450:
-        scale = 0.5
+            if curr_step < 250:
+                scale = 0.01
+            elif curr_step < 400:
+                scale = 0.1
+            elif curr_step < 450:
+                scale = 0.5
+            else:
+                scale = 1.0
     else:
-        scale = 1.0
+        raise ValueError(f"Unknown schedule: {schedule}")
+
     return w * scale
 
 
-def motif_loss(x0_in, motif_idx, motif_coords, atom_mask) -> torch.Tensor:
-    batch_size = x0_in.shape[0]
-    losses = torch.zeros(
-        batch_size,
-    ).to(x0_in)
-    for bi in range(batch_size):
-        loss = (x0_in[bi, motif_idx[bi], :, :] - motif_coords[bi]).square().sum(-1)
-        losses[bi] = (loss * atom_mask[bi, motif_idx[bi]]).sum()
+def motif_loss(
+    x: Float[torch.Tensor, "B L 37 3"],
+    motif_idx: list[list[int]],
+    motif_coords: Float[torch.Tensor, "B M 37 3"],
+    atom_mask: Float[torch.Tensor, "B L 37"],
+) -> Float[torch.Tensor, "B"]:
+    """Compute the motif loss.
+
+    Args:
+        x (torch.Tensor): The input tensor.
+        motif_idx (list[list[int]]): The motif indices. A list of length B,
+            each a list[int] for motif residue indices.
+        motif_coords (torch.Tensor): The motif coordinates. Each batch shares the same
+            motif length.
+        atom_mask (torch.Tensor): The atom mask.
+
+    Returns:
+        torch.Tensor: The computed motif loss.
+    """
+
+    batch_size = x.shape[0]
+    loss_list: list[Float[torch.Tensor, ""]] = []
+    for b in range(batch_size):
+        loss = (x[b, motif_idx[b]] - motif_coords[b]).square().sum(-1)
+        loss_list.append(torch.sum(loss * atom_mask[b, motif_idx[b]]))
+    losses = torch.stack(loss_list)
+
     return losses
 
 
-def group_consecutive_idx(nums):
+def group_consecutive_idx(nums: list[int]) -> list[list[int]]:
+    """Group consecutive indices in a list of integers.
 
-    nums = np.array(nums)
+    Args:
+        nums (list[int]): The input list of integers.
+
+    Returns:
+        list[list[int]]: A list of lists, where each sublist contains
+        consecutive integers from the input list.
+    """
+
+    nums_array = np.array(nums)
+
     # Find the indices where the difference between consecutive elements is greater than 1
-    breaks = np.where(np.diff(nums) != 1)[0] + 1
+    breaks = np.where(np.diff(nums_array) != 1)[0] + 1
 
     # Split the array at those indices
-    result = np.split(nums, breaks)
+    result = np.split(nums_array, breaks)
 
     # Convert the subarrays to lists
     return [sublist.tolist() for sublist in result]
 
 
 def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
+    """Convert a list of contiguous integer ranges to a list of indices.
+
+    Args:
+        contig (list[list[int]]): A list of lists, where each sublist contains
+            contiguous integers.
+
+    Returns:
+        list[list[int]]: A list of lists, where each sublist contains the
+            corresponding indices for the contiguous ranges.
+    """
+
     result = []
     start_idx = 0
     for c in contig:
@@ -169,79 +288,104 @@ def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
 class MiniMPNN(nn.Module):
     """Wrapper for ProteinMPNN network to predict sequence from structure."""
 
-    def __init__(self, config: argparse.Namespace):
+    def __init__(self, config: TrainingConfig) -> None:
+        """Initialize the MiniMPNN model.
+
+        Args:
+            config (TrainingConfig): The training configuration.
+        """
+
         super().__init__()
         self.config = config
-        self.model_config = cfg = config.model.mpnn_model
-        self.n_tokens = config.data.n_aatype_tokens
-        self.seq_emb_dim = cfg.n_channel
-        time_cond_dim = cfg.n_channel * cfg.noise_cond_mult
 
-        self.noise_block = modules.NoiseConditioningBlock(cfg.n_channel, time_cond_dim)
-        self.token_embedding = nn.Linear(self.n_tokens, self.seq_emb_dim)
+        self.mpnn_config = config.model.mpnn_model
+        self.num_tokens = config.data.n_aatype_tokens
+        self.seq_emb_dim = self.mpnn_config.n_channel
+        time_cond_dim = self.mpnn_config.n_channel * self.mpnn_config.noise_cond_mult
+
+        self.noise_block = modules.NoiseConditioningBlock(
+            self.mpnn_config.n_channel, time_cond_dim
+        )
+        self.token_embedding = nn.Linear(self.num_tokens, self.seq_emb_dim)
         self.mpnn_net = modules.NoiseConditionalProteinMPNN(
-            n_channel=cfg.n_channel,
-            n_layers=cfg.n_layers,
-            n_neighbors=cfg.n_neighbors,
-            time_cond_dim=time_cond_dim,
+            num_channels=self.mpnn_config.n_channel,
+            num_layers=self.mpnn_config.n_layers,
+            num_neighbors=self.mpnn_config.n_neighbors,
             vocab_size=config.data.n_aatype_tokens,
+            time_cond_dim=time_cond_dim,
             input_S_is_embeddings=True,
         )
-        self.proj_out = nn.Linear(cfg.n_channel, self.n_tokens)
+        self.proj_out = nn.Linear(self.mpnn_config.n_channel, self.num_tokens)
 
     def forward(
         self,
-        denoised_coords: TensorType["b n a x", float],
-        coords_noise_level: TensorType["b", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
-        seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
-        return_embeddings: bool = False,
-    ):
+        denoised_coords: Float[torch.Tensor, "B L 37 3"],
+        coords_noise_level: Float[torch.Tensor, "B"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        seq_self_cond: Float[torch.Tensor, "B L V"] | None = None,  # logprobs
+        seq_crop_cond: Int[torch.Tensor, "B L"] | None = None,  # motif aatypes
+    ) -> Float[torch.Tensor, "B L V"]:
+        """Predict sequence log-probabilities from denoised coordinates.
+
+        Args:
+            denoised_coords (torch.Tensor): The denoised coordinates.
+            coords_noise_level (torch.Tensor): The noise level of the coordinates.
+            seq_mask (torch.Tensor): The sequence mask.
+            residue_index (torch.Tensor): The residue index.
+            seq_self_cond (torch.Tensor | None, optional): The self-conditioning input.
+                Defaults to None.
+            seq_crop_cond (torch.Tensor | None, optional): The crop-conditioning input.
+                Defaults to None.
+
+        Returns:
+            torch.Tensor: The predicted sequence log-probabilities.
+        """
+
         coords_noise_level_scaled = 0.25 * torch.log(coords_noise_level)
         noise_cond = self.noise_block(coords_noise_level_scaled)
 
-        b, n, _, _ = denoised_coords.shape
-        if seq_self_cond is None or not self.model_config.use_self_conditioning:
-            seq_emb_in = torch.zeros(b, n, self.seq_emb_dim).to(denoised_coords)
+        B, L = denoised_coords.shape[:2]
+        device = denoised_coords.device
+        if (seq_self_cond is None) or (not self.mpnn_config.use_self_conditioning):
+            seq_emb_in = torch.zeros(B, L, self.seq_emb_dim, device=device)
         else:
-            seq_emb_in = self.token_embedding(seq_self_cond.exp())
+            seq_emb_in = self.token_embedding(torch.exp(seq_self_cond))
 
         if seq_crop_cond is not None:
             seq_emb_in = seq_emb_in + self.token_embedding(seq_crop_cond.float())
 
-        node_embs, encoder_embs = self.mpnn_net(
+        node_embs, _ = self.mpnn_net(
             denoised_coords, seq_emb_in, seq_mask, residue_index, noise_cond
         )
 
         logits = self.proj_out(node_embs)
         pred_logprobs = F.log_softmax(logits, -1)
 
-        if return_embeddings:
-            return pred_logprobs, node_embs, encoder_embs
         return pred_logprobs
 
 
 class CoordinateDenoiser(nn.Module):
     """Wrapper for U-ViT/DiT module to denoise structure coordinates."""
 
-    def __init__(self, config: argparse.Namespace):
+    def __init__(self, config: TrainingConfig) -> None:
+        """Initialize the CoordinateDenoiser.
+
+        Args:
+            config (TrainingConfig): The training configuration.
+        """
+
         super().__init__()
         self.config = config
 
-        # Configuration
+        self.struct_config = config.model.struct_model
         self.sigma_data = config.data.sigma_data
-        m_cfg = config.model.struct_model
-        nc = m_cfg.n_channel
-        bb_atoms = ["N", "CA", "C", "O"]
-        n_atoms = config.model.struct_model.n_atoms
-        self.use_conv = len(m_cfg.uvit.n_filt_per_layer) > 0
-        if self.use_conv and n_atoms == 37:
-            n_atoms += 1  # make it an even number
-        self.n_atoms = n_atoms
-        self.bb_idxs = [residue_constants.atom_order.get(a) for a in bb_atoms]
-        n_xyz = (
+        self.num_atoms = config.model.struct_model.n_atoms
+
+        self.bb_idxs = [
+            residue_constants.atom_order[atom] for atom in ["N", "CA", "C", "O"]
+        ]
+        num_xyz = (
             9
             if config.model.crop_conditional
             and "concat" in config.model.conditioning_style
@@ -251,36 +395,37 @@ class CoordinateDenoiser(nn.Module):
             config.model.crop_conditional
             and "hotspot" in config.model.conditioning_style
         ):
-            n_xyz += 1
+            num_xyz += 1
         if config.model.crop_conditional and "ssadj" in config.model.conditioning_style:
-            n_xyz += 3  # one-hot encoding [helix, strand, loop]
+            num_xyz += 3  # one-hot encoding [helix, strand, loop]
 
-        # Neural networks
-        n_noise_channel = nc * m_cfg.noise_cond_mult
-        n_motif_channel = (
-            nc * m_cfg.motif_cond_mult
+        num_channels = self.struct_config.n_channel
+        num_noise_channels = num_channels * self.struct_config.noise_cond_mult
+        num_motif_channels = (
+            num_channels * self.struct_config.motif_cond_mult
             if (
-                "motif_cond_mult" in m_cfg
+                "motif_cond_mult" in self.struct_config
                 and "conditioning_style" in config.model
                 and "separate_motif_track" in config.model.conditioning_style
             )
             else None
         )
+
         self.net = modules.TimeCondUViT(
             seq_len=config.data.fixed_size,
-            patch_size=m_cfg.uvit.patch_size,
-            dim=nc,
-            depth=m_cfg.uvit.n_layers,
-            n_filt_per_layer=m_cfg.uvit.n_filt_per_layer,
-            heads=m_cfg.uvit.n_heads,
-            dim_head=m_cfg.uvit.dim_head,
-            conv_skip_connection=m_cfg.uvit.conv_skip_connection,
-            n_atoms=n_atoms,
-            channels_per_atom=n_xyz,
-            time_cond_dim=n_noise_channel,
-            motif_cond_dim=n_motif_channel,
-            position_embedding_type=m_cfg.uvit.position_embedding_type,
-            position_embedding_max=m_cfg.uvit.position_embedding_max,
+            patch_size=self.struct_config.uvit.patch_size,
+            dim=num_channels,
+            depth=self.struct_config.uvit.n_layers,
+            num_filt_per_layer=self.struct_config.uvit.n_filt_per_layer,
+            heads=self.struct_config.uvit.n_heads,
+            dim_head=self.struct_config.uvit.dim_head,
+            conv_skip_connection=self.struct_config.uvit.conv_skip_connection,
+            num_atoms=self.num_atoms,
+            channels_per_atom=num_xyz,
+            time_cond_dim=num_noise_channels,
+            motif_cond_dim=num_motif_channels,
+            position_embedding_type=self.struct_config.uvit.position_embedding_type,
+            position_embedding_max=self.struct_config.uvit.position_embedding_max,
             noise_residual=config.model.crop_conditional
             and "conditioning_style" in config.model
             and "noise_residual" in config.model.conditioning_style,
@@ -288,29 +433,60 @@ class CoordinateDenoiser(nn.Module):
             and "conditioning_style" in config.model
             and "ssadj" in config.model.conditioning_style,
             attn_dropout=(
-                m_cfg.uvit.attn_dropout if "attn_dropout" in m_cfg.uvit else 0.0
+                self.struct_config.uvit.attn_dropout
+                if "attn_dropout" in self.struct_config.uvit
+                else 0.0
             ),
-            out_dropout=m_cfg.uvit.out_dropout if "out_dropout" in m_cfg.uvit else 0.0,
-            ff_dropout=m_cfg.uvit.ff_dropout if "ff_dropout" in m_cfg.uvit else 0.1,
-            dit=m_cfg.arch == "dit",
+            out_dropout=(
+                self.struct_config.uvit.out_dropout
+                if "out_dropout" in self.struct_config.uvit
+                else 0.0
+            ),
+            ff_dropout=(
+                self.struct_config.uvit.ff_dropout
+                if "ff_dropout" in self.struct_config.uvit
+                else 0.1
+            ),
+            dit=self.struct_config.arch == "dit",
         )
-        self.noise_block = modules.NoiseConditioningBlock(nc, n_noise_channel)
+        self.noise_block = modules.NoiseConditioningBlock(
+            num_channels, num_noise_channels
+        )
 
     def forward(
         self,
-        noisy_coords: TensorType["b n a x", float],
-        noise_level: TensorType["b n", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int] | None = None,
-        chain_index: TensorType["b n", int] | None = None,
-        hotspot_mask: TensorType["b n", int] | None = None,
-        struct_self_cond: TensorType["b n a x", float] | None = None,
-        struct_crop_cond: TensorType["b n a x", float] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
+        noisy_coords: Float[torch.Tensor, "B L 37 3"],
+        noise_level: Float[torch.Tensor, "B L"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"] | None = None,
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        struct_self_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
+        struct_crop_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        tol: float = 1e-6,
     ) -> torch.Tensor:
+        """Predict denoised coordinates from noisy coordinates.
 
-        noise_level = noise_level.clamp(min=1e-6)
+        Args:
+            noisy_coords (torch.Tensor): The noisy coordinates to denoise.
+            noise_level (torch.Tensor): The level of noise in the coordinates.
+            seq_mask (torch.Tensor): A mask indicating valid sequence elements.
+            residue_index (torch.Tensor | None, optional): The residue indices for each sequence element. Defaults to None.
+            chain_index (torch.Tensor | None, optional): The chain indices for each sequence element. Defaults to None.
+            hotspot_mask (torch.Tensor | None, optional): A mask indicating hotspot regions. Defaults to None.
+            struct_self_cond (torch.Tensor | None, optional): The self-conditioning features. Defaults to None.
+            struct_crop_cond (torch.Tensor | None, optional): The crop-conditioning features. Defaults to None.
+            sse_cond (torch.Tensor | None, optional): The secondary structure elements. Defaults to None.
+            adj_cond (torch.Tensor | None, optional): The adjacency conditioning features. Defaults to None.
+            tol (float, optional): A tolerance value for numerical stability. Defaults to 1e-6.
+
+        Returns:
+            torch.Tensor: The predicted denoised coordinates.
+        """
+
+        noise_level = noise_level.clamp(min=tol)
 
         # Prep inputs and time conditioning
         actual_var_data = self.sigma_data**2
@@ -326,7 +502,7 @@ class CoordinateDenoiser(nn.Module):
         if struct_self_cond is None:
             struct_self_cond = torch.zeros_like(noisy_coords)
         if sse_cond is None:
-            sse_cond = torch.zeros_like(residue_index).long()
+            sse_cond = torch.zeros_like(residue_index, dtype=torch.long)
 
         if self.config.model.crop_conditional:
             if (
@@ -366,7 +542,7 @@ class CoordinateDenoiser(nn.Module):
             ):
                 if struct_crop_cond is None:
                     struct_crop_cond = torch.zeros_like(noisy_coords)
-                struct_crop_cond = rearrange(struct_crop_cond, "b n a c -> b c n a")
+                struct_crop_cond = rearrange(struct_crop_cond, "b l a c -> b c l a")
                 motif_cond = self.net.cond_to_patch_embedding(
                     struct_crop_cond
                 )  # spacing info is leaked
@@ -418,17 +594,18 @@ class CoordinateDenoiser(nn.Module):
 def parse_fixed_pos_str(
     fixed_pos_str: str,
     chain_id_mapping: dict[str, int],
-    residue_index: TensorType["n", int],
-    chain_index: TensorType["n", int],
+    residue_index: Int[torch.Tensor, "L"],
+    chain_index: Int[torch.Tensor, "L"],
 ) -> list[int]:
-    """Parse a string of fixed positions in the format "A1, A10-25" and
-    return the corresponding list of absolute indices.
+    """Parse a string of fixed positions.
+
+    In the format of "A1, A10-25" and return the corresponding list of absolute indices.
 
     Args:
         fixed_pos_list (str): Comma-separated string representing fixed positions (e.g., "A1,A10-25").
         chain_id_mapping (dict[str, int]): Mapping of chain letter to chain index (e.g., {'A': 0, 'B': 1}).
-        residue_index (torch.Tensor): Tensor of residue indices. (N,)
-        chain_index (torch.Tensor): Tensor of chain indices. (N,)
+        residue_index (torch.Tensor): Tensor of residue indices.
+        chain_index (torch.Tensor): Tensor of chain indices.
 
     Returns:
         list[int]: The absolute indices of the fixed positions.
@@ -448,9 +625,9 @@ def parse_fixed_pos_str(
         if not match:
             raise ValueError(f"Invalid position format: {pos}")
 
-        chain_letter = match.group(1)
-        start_residue = int(match.group(2))
-        end_residue = int(match.group(3)) if match.group(3) else start_residue
+        chain_letter = match[1]
+        start_residue = int(match[2])
+        end_residue = int(match[3]) if match[3] else start_residue
 
         if chain_letter not in chain_id_mapping:
             raise ValueError(f"Chain ID {chain_letter} not found in mapping.")
@@ -498,26 +675,24 @@ class Protpardelle(nn.Module):
         'codesign': train both an allatom denoiser and MiniMPNN at once.
     """
 
-    def __init__(self, config: argparse.Namespace, device: Device = None):
+    def __init__(self, config: TrainingConfig, device: Device = None):
         super().__init__()
 
         self.config = config
         self.task = config.model.task
-        self.n_tokens = config.data.n_aatype_tokens
+        self.num_tokens = config.data.n_aatype_tokens
 
-        self.use_mpnn_model = self.task in ["seqdes", "codesign"]
+        self.use_mpnn_model = self.task in {"seqdes", "codesign"}
 
         # Modules
-        self.bb_idxs = [0, 1, 2, 4]
-        self.n_atoms = 37
         self.struct_model = CoordinateDenoiser(config)
-
-        self.bb_idxs = self.struct_model.bb_idxs
-        self.n_atoms = self.struct_model.n_atoms
-        self.chain_residx_gap = config.data.chain_residx_gap
 
         if self.use_mpnn_model:
             self.mpnn_model = MiniMPNN(config)
+
+        self.bb_idxs = self.struct_model.bb_idxs
+        self.num_atoms = self.struct_model.num_atoms
+        self.chain_residx_gap = config.data.chain_residx_gap
 
         # Load any pretrained modules
         for module_name in self.config.model.pretrained_modules:
@@ -531,12 +706,6 @@ class Protpardelle(nn.Module):
             **vars(config.diffusion.training),
         )
         self.sampling_noise_schedule_default = self.make_sampling_noise_schedule()
-        self.sampling_noise_schedule_bb = partial(
-            diffusion.noise_schedule, function="backbone"
-        )
-        self.sampling_noise_schedule_sc = partial(
-            diffusion.noise_schedule, function="sidechain"
-        )
 
         if device is None:
             device = get_default_device()
@@ -547,13 +716,17 @@ class Protpardelle(nn.Module):
         """Return the device on which the model is loaded."""
         return next(self.parameters()).device
 
-    def load_pretrained_module(self, module_name: str, ckpt_path: str | None = None):
+    def load_pretrained_module(
+        self,
+        module_name: Literal["struct_model", "mpnn_model"],
+        ckpt_path: StrPath | None = None,
+    ):
         """Load pretrained weights for a given module name."""
-        assert module_name in ["struct_model", "mpnn_model"], module_name
 
         # Load pretrained checkpoint
         if ckpt_path is None:
             ckpt_path = getattr(self.config.model, f"{module_name}_checkpoint")
+
         ckpt_dict = torch.load(ckpt_path, weights_only=False, map_location=self.device)
         model_state_dict = ckpt_dict["model_state_dict"]
 
@@ -569,54 +742,48 @@ class Protpardelle(nn.Module):
         module.load_state_dict(submodule_state_dict)
 
         # Freeze unneeded modules
-        if module_name == "struct_model":
-            self.struct_model = module
-            if self.task == "seqdes":
-                for p in module.parameters():
-                    p.requires_grad = False
         if module_name == "mpnn_model":
             self.mpnn_model = module
             if self.task not in ["codesign", "seqdes"]:
                 for p in module.parameters():
                     p.requires_grad = False
+        elif module_name == "struct_model":
+            self.struct_model = module
+            if self.task == "seqdes":
+                for p in module.parameters():
+                    p.requires_grad = False
+        else:
+            raise ValueError(f"Unknown module name: {module_name}")
 
         return module
 
-    def load_minimpnn(self, mpnn_ckpt_path: str | None = None):
+    def load_minimpnn(self, mpnn_ckpt_path: StrPath) -> None:
         """Convert an allatom model to a codesign model."""
-        if mpnn_ckpt_path is None:
-            mpnn_ckpt_path = "checkpoints/minimpnn_state_dict.pth"
         self.mpnn_model = MiniMPNN(self.config).to(self.device)
         self.load_pretrained_module("mpnn_model", ckpt_path=mpnn_ckpt_path)
         self.use_mpnn_model = True
 
-    def remove_minimpnn(self):
-        """Revert a codesign model to an allatom model."""
-        self.use_mpnn_model = False
-        self.mpnn_model = None
-
     def make_sampling_noise_schedule(self, **noise_kwargs):
         """Make the default sampling noise schedule function."""
         noise_schedule_kwargs = vars(self.config.diffusion.sampling)
-        if len(noise_kwargs) > 0:
-            noise_schedule_kwargs.update(noise_kwargs)
+        if noise_kwargs:
+            noise_schedule_kwargs |= noise_kwargs
         return partial(diffusion.noise_schedule, **noise_schedule_kwargs)
 
     def forward(
         self,
-        *,
-        noisy_coords: TensorType["b n a x", float],
-        noise_level: TensorType["b n", float],
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None = None,
-        hotspot_mask: TensorType["b n", int] | None = None,
-        struct_self_cond: TensorType["b n a x", float] | None = None,
-        struct_crop_cond: TensorType["b n a x", float] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
-        seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
-        seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
+        noisy_coords: Float[torch.Tensor, "B L A 3"],
+        noise_level: Float[torch.Tensor, "B L"],
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        struct_self_cond: Float[torch.Tensor, "B L A 3"] | None = None,
+        struct_crop_cond: Float[torch.Tensor, "B L A 3"] | None = None,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        seq_self_cond: Float[torch.Tensor, "B L V"] | None = None,  # logprobs
+        seq_crop_cond: Int[torch.Tensor, "B L"] | None = None,  # motif aatypes
         run_struct_model: bool = True,
         run_mpnn_model: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -663,11 +830,10 @@ class Protpardelle(nn.Module):
                 residue_index,
                 seq_self_cond=seq_self_cond,
                 seq_crop_cond=seq_crop_cond,
-                return_embeddings=False,
             )
             aatype_logprobs = aatype_logprobs * seq_mask.unsqueeze(-1)
         else:
-            aatype_logprobs = repeat(seq_mask, "b n -> b n t", t=self.n_tokens)
+            aatype_logprobs = repeat(seq_mask, "b l -> b l v", v=self.num_tokens)
             aatype_logprobs = torch.ones_like(aatype_logprobs)
             aatype_logprobs = F.log_softmax(aatype_logprobs, -1)
 
@@ -679,15 +845,15 @@ class Protpardelle(nn.Module):
 
     def make_seq_mask_for_sampling(
         self,
-        prot_lens_per_chain: TensorType["b c", int] | None = None,
-        length_ranges_per_chain: TensorType["c 2", int] | None = None,
+        prot_lens_per_chain: Int[torch.Tensor, "B N"] | None = None,
+        length_ranges_per_chain: Int[torch.Tensor, "N 2"] | None = None,
         num_samples: int | None = None,
         chain_residx_gap: int | None = None,
     ) -> tuple[
-        TensorType["b n", float], TensorType["b n", float], TensorType["b n", int]
+        Float[torch.Tensor, "B L"], Float[torch.Tensor, "B L"], Int[torch.Tensor, "B L"]
     ]:
-        """Makes sequence mask, residue indices, and chain ids of varying protein lengths (only inputs required
-        to begin sampling).
+        """Makes sequence mask, residue indices, and chain ids of varying protein lengths
+        (only inputs required to begin sampling).
 
         Args:
         - prot_lens_per_chain: tensor of protein lengths for each chain (batch size, num_chains)
@@ -709,7 +875,7 @@ class Protpardelle(nn.Module):
         if length_ranges_per_chain is not None:
             assert (
                 num_samples is not None
-            ), f"Must provide num_samples if providing length_ranges_per_chain"
+            ), "Must provide num_samples if providing length_ranges_per_chain"
             prot_lens_per_chain = torch.stack(
                 [
                     torch.randint(low=start, high=end + 1, size=(num_samples,))
@@ -756,15 +922,14 @@ class Protpardelle(nn.Module):
 
     def sample(
         self,
-        *,
-        seq_mask: TensorType["b n", float],
-        residue_index: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None = None,
+        seq_mask: Float[torch.Tensor, "B L"],
+        residue_index: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
         hotspots: str | list[str] | None = None,
-        sse_cond: TensorType["b n", int] | None = None,
-        adj_cond: TensorType["b n n", int] | None = None,
-        gt_aatype: TensorType["b n", int] | None = None,
-        n_steps: int = 200,
+        sse_cond: Int[torch.Tensor, "B L"] | None = None,
+        adj_cond: Int[torch.Tensor, "B L L"] | None = None,
+        gt_aatype: Int[torch.Tensor, "B L"] | None = None,
+        num_steps: int = 200,
         step_scale: float = 1.2,
         s_churn: float = 50.0,
         noise_scale: float = 1.0,
@@ -787,11 +952,11 @@ class Protpardelle(nn.Module):
         dy: float | None = None,
         dz: float | None = None,
         dummy_fill_mode: Literal["zero", "CA"] = "zero",
-        xt_start: TensorType["b n a x", float] | None = None,
-        partial_diffusion: DictConfig | None = None,
-        conditional_cfg: DictConfig | None = None,
+        xt_start: Float[torch.Tensor, "B L A 3"] | None = None,
+        partial_diffusion: PartialDiffusionCfg | None = None,
+        conditional_cfg: ConditionalCfg | None = None,
         motif_placements_full: list[str] | None = None,
-        motif_all_atom_stage1: TensorType["b n a x", float] | None = None,
+        motif_all_atom_stage1: Float[torch.Tensor, "B L A 3"] | None = None,
         motif_idx_stage1: list[list[int]] | None = None,
         stage2: bool = False,
         tip_atom_conditioning: bool = False,
@@ -809,11 +974,11 @@ class Protpardelle(nn.Module):
             (if gt_coords is not provided).
         gt_cond_atom_mask: mask identifying atoms to apply gt_coords.
         gt_aatype: conditioning information for sequence.
-        n_steps: number of denoising steps (ODE discretizations).
+        num_steps: number of denoising steps (ODE discretizations).
         step_scale: scale to apply to the score.
-        s_churn: gamma = s_churn / n_steps describes the additional noise to add
+        s_churn: gamma = s_churn / num_steps describes the additional noise to add
             relatively at each denoising step. Use 0.0 for deterministic sampling or
-            0.2 * n_steps as a rough default for stochastic sampling.
+            0.2 * num_steps as a rough default for stochastic sampling.
         noise_scale: scale to apply to gamma.
         s_t_min: don't apply s_churn below this noise level.
         s_t_max: don't apply s_churn above this noise level.
@@ -829,8 +994,6 @@ class Protpardelle(nn.Module):
         use_fullmpnn_for_final: use "full" ProteinMPNN at the final step.
         noise_schedule: specify the noise level timesteps for sampling.
         tqdm_pbar: progress bar in interactive contexts.
-        return_last: return only the sampled structure and sequence.
-        return_aux: return a dict of everything associated with the sampling run.
         jump_steps: use superposition scheme for sampling.
         uniform_steps: allatom denoising with same noise level changes at each step, not superposition scheme
         motif_file_path: path to .pdb structure containing motif info, possibly containing additional unused residues
@@ -877,11 +1040,10 @@ class Protpardelle(nn.Module):
             motif_feats, hetero_obj = load_feats_from_pdb(
                 motif_file_path, include_pos_feats=True
             )
-            het_atom_pos = torch.from_numpy(
-                np.array(
-                    [pos for res in hetero_obj.hetero_atom_positions for pos in res]
-                )
-            ).to(seq_mask.device)
+            het_atom_pos = torch.tensor(
+                [pos for res in hetero_obj.hetero_atom_positions for pos in res],
+                device=seq_mask.device,
+            )
             all_motif_feats.append(motif_feats)
             all_het_atom_pos.append(het_atom_pos)
 
@@ -912,11 +1074,8 @@ class Protpardelle(nn.Module):
                 self.device
             )  # [num_res, 37, 3]
 
-        if cc.enabled:
             if motif_placements_full is not None:
-
                 all_motif_feats = []
-
                 for mp_chains in motif_placements_full:
                     chain_motif_feats = defaultdict(list)
                     prev_motif_segments = 0
@@ -984,23 +1143,25 @@ class Protpardelle(nn.Module):
                     ]
                 )
                 motif_all_atom = torch.einsum(
-                    "bij,blnj->blni", random_rots, motif_all_atom
+                    "bij,blaj->blai", random_rots, motif_all_atom
                 )
                 motif_all_atom = motif_all_atom * motif_atom_mask.unsqueeze(-1).to(
                     motif_all_atom
                 )
 
             motif_size = motif_all_atom.shape[-3]
-            print(
-                f"Using motif from {motif_file_path} with {motif_size} motif residues."
+            logger.info(
+                "Using motif from %s with %d motif residues.",
+                motif_file_path,
+                motif_size,
             )
 
             # translate the motif
-            if dx is not None and dx != "":
+            if dx is not None:
                 motif_all_atom[..., 0] = motif_all_atom[..., 0] + dx
-            if dy is not None and dy != "":
+            if dy is not None:
                 motif_all_atom[..., 1] = motif_all_atom[..., 1] + dy
-            if dz is not None and dz != "":
+            if dz is not None:
                 motif_all_atom[..., 2] = motif_all_atom[..., 2] + dz
 
         def ode_step(
@@ -1021,8 +1182,8 @@ class Protpardelle(nn.Module):
 
             # reconstruction guidance
             recon_on = curr_step >= (
-                cc.reconstruction_guidance.start * n_steps
-            ) and curr_step < (cc.reconstruction_guidance.end * n_steps)
+                cc.reconstruction_guidance.start * num_steps
+            ) and curr_step < (cc.reconstruction_guidance.end * num_steps)
             if (
                 cc.enabled
                 and cc.reconstruction_guidance.enabled
@@ -1035,7 +1196,7 @@ class Protpardelle(nn.Module):
                     cc.reconstruction_guidance.schedule,
                     cc.reconstruction_guidance.max_scale,
                     curr_step,
-                    n_steps,
+                    num_steps,
                     stage2=stage2,
                 )
                 score = score + guidance * guidance_scale
@@ -1095,7 +1256,6 @@ class Protpardelle(nn.Module):
                     designed_seqs.append(
                         design_sequence(
                             c[: seq_lens[i]],
-                            model=fullmpnn_model,
                             chain_index=chain_index[i, : seq_lens[i]].cpu(),
                             input_aatype=_input_aatype,
                             fixed_pos_mask=_fixed_pos_mask,
@@ -1105,7 +1265,6 @@ class Protpardelle(nn.Module):
                 designed_seqs = [
                     design_sequence(
                         c[: seq_lens[i]],
-                        model=fullmpnn_model,
                         chain_index=chain_index[i, : seq_lens[i]].cpu(),
                     )[0]
                     for i, c in enumerate(batched_coords)
@@ -1114,12 +1273,6 @@ class Protpardelle(nn.Module):
                 designed_seqs, max_len=seq_mask.shape[-1]
             )
             return designed_aatypes
-
-        # Initialize masks/features
-        if use_fullmpnn or use_fullmpnn_for_final:
-            fullmpnn_model = protein_mpnn.get_mpnn_model(
-                PROTEINMPNN_WEIGHTS, device=self.device
-            )
 
         # Initialize noise schedule/parameters
         s_t_min = s_t_min * self.sigma_data
@@ -1130,16 +1283,16 @@ class Protpardelle(nn.Module):
 
         sigma = sigma_float = noise_schedule(1)
 
-        timesteps = torch.linspace(1, 0, n_steps + 1)
+        timesteps = torch.linspace(1, 0, num_steps + 1)
 
         crop_cond_coords = None
 
-        coords_shape = seq_mask.shape + (self.n_atoms, 3)
+        coords_shape = seq_mask.shape + (self.num_atoms, 3)
         if xt_start is not None:
-            print(f"Using supplied xt to start diffusion")
+            logger.info("Using supplied xt to start diffusion")
             xt = xt_start
         elif partial_diffusion is not None and pd.enabled:
-            pd_step = n_steps - pd.n_steps
+            pd_step = num_steps - pd.num_steps
             pd_timestep = timesteps[pd_step]
             if not isinstance(pd.pdb_file_path, list):
                 pd.pdb_file_path = [pd.pdb_file_path] * batch_size
@@ -1175,22 +1328,24 @@ class Protpardelle(nn.Module):
                 pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
                 bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
                 bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
-                xt = diffusion.noise_coords(
+                xt = dummy_fill_noise_coords(
                     pd_coords,
-                    pd_noise_level,
-                    atom_mask=bb_atom_mask,
+                    bb_atom_mask,
+                    noise_level=pd_noise_level,
                     dummy_fill_mode=dummy_fill_mode,
                 )
             else:
                 pd_atom_mask = atom37_mask_from_aatype(pd_motif_aatype, seq_mask)
-                xt = diffusion.noise_coords(
+                xt = dummy_fill_noise_coords(
                     pd_coords,
-                    pd_noise_level,
-                    atom_mask=pd_atom_mask,
+                    pd_atom_mask,
+                    noise_level=pd_noise_level,
                     dummy_fill_mode=dummy_fill_mode,
                 )
-            print(
-                f"Partial diffusion, going back to step {pd_step}, T={(pd_step / n_steps):.2f}"
+            logger.info(
+                "Partial diffusion, going back to step %d, T=%.2f",
+                pd_step,
+                pd_step / num_steps,
             )
         else:
             xt = torch.randn(*coords_shape).to(self.device)
@@ -1201,7 +1356,7 @@ class Protpardelle(nn.Module):
         if not pd.enabled:
             if jump_steps or uniform_steps:
                 if gt_aatype is None:
-                    fake_logits = repeat(seq_mask, "b n -> b n t", t=self.n_tokens)
+                    fake_logits = repeat(seq_mask, "b l -> b l v", v=self.num_tokens)
                     s_hat = (sample_aatype(fake_logits) * seq_mask).long()
                 else:
                     s_hat = gt_aatype
@@ -1231,7 +1386,7 @@ class Protpardelle(nn.Module):
             mask37 = atom37_mask_from_aatype(s_hat, seq_mask).bool()
             mask73 = atom73_mask_from_aatype(s_hat, seq_mask).bool()
 
-        begin_mpnn_step = int(n_steps * skip_mpnn_proportion)
+        begin_mpnn_step = int(num_steps * skip_mpnn_proportion)
 
         # Prepare to run sampling trajectory
         sigma = torch.full((seq_mask.shape[0],), sigma, device=self.device)
@@ -1298,7 +1453,7 @@ class Protpardelle(nn.Module):
             "minimpnn_seqcond" in cc.crop_conditional_guidance
             and cc.crop_conditional_guidance.minimpnn_seqcond
         ):
-            crop_cond_seq_oh = torch.zeros(batch_size, seq_length, self.n_tokens).to(
+            crop_cond_seq_oh = torch.zeros(batch_size, seq_length, self.num_tokens).to(
                 xt.device
             )
             # fill in with motif aatype at the current motif_idx
@@ -1330,11 +1485,11 @@ class Protpardelle(nn.Module):
             # Set up noise levels
             sigma_next = sigma_next_float = noise_schedule(t)
 
-            if i == n_steps - 1:
+            if i == num_steps - 1:
                 sigma_next *= 0
                 sigma_next_float *= 0
             gamma = (
-                s_churn / n_steps
+                s_churn / num_steps
                 if (sigma_next >= s_t_min and sigma_next <= s_t_max)
                 else 0.0
             )
@@ -1348,28 +1503,15 @@ class Protpardelle(nn.Module):
 
             if sidechain_mode and jump_steps:
                 # Fill in noise for masked positions since xt is initialized to zeros at each step
-                zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
-                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                if dummy_fill_mode == "CA":
-                    if x0 is not None:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + x0[:, :, 1:2, :]
-                        )
-                    else:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + xt[:, :, 1:2, :]
-                        )
-                else:
-                    dummy_fill_noise = torch.randn_like(xt) * unsqueeze_trailing_dims(
-                        sigma, xt
-                    )
-
-                xt = xt * zero_atom_mask.unsqueeze(-1)
-                xt = xt + dummy_fill_noise * dummy_fill_mask
-                atom_mask = zero_atom_mask
+                atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
+                xt = dummy_fill_noise_coords(
+                    atom37_coords=xt,
+                    atom37_mask=atom_mask,
+                    atom37_coords_to_use=x0,
+                    noise_level=sigma,
+                    mask_noise=True,
+                    dummy_fill_mode=dummy_fill_mode,
+                )
 
                 if self.config.model.task == "ai-allatom-hybrid":
                     xt = xt * bb_atom_mask.unsqueeze(-1)
@@ -1405,21 +1547,17 @@ class Protpardelle(nn.Module):
                     zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
 
                 if x0 is not None:
-                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                    if dummy_fill_mode == "zero":
-                        dummy_fill_noise = torch.randn_like(
-                            xt
-                        ) * unsqueeze_trailing_dims(sigma, xt)
-                    else:
-                        dummy_fill_noise = (
-                            torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                            + x0[:, :, 1:2, :]
-                        )
-                    xt = xt * zero_atom_mask.unsqueeze(-1)
-                    xt = xt + dummy_fill_noise * dummy_fill_mask
+                    xt = dummy_fill_noise_coords(
+                        atom37_coords=xt,
+                        atom37_mask=zero_atom_mask,
+                        atom37_coords_to_use=x0,
+                        noise_level=sigma,
+                        mask_noise=True,
+                        dummy_fill_mode=dummy_fill_mode,
+                    )
                 atom_mask = zero_atom_mask
             elif self.config.model.task == "ai-allatom-hybrid" and uniform_steps:
-                if i < (0.5 * n_steps):
+                if i < (0.5 * num_steps):
                     xt = xt * bb_atom_mask.unsqueeze(-1)
                     atom_mask = bb_atom_mask
                 else:
@@ -1436,19 +1574,14 @@ class Protpardelle(nn.Module):
                         zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
 
                     if x0 is not None:
-                        dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                        if dummy_fill_mode == "zero":
-                            dummy_fill_noise = torch.randn_like(
-                                xt
-                            ) * unsqueeze_trailing_dims(sigma, xt)
-                        else:
-                            dummy_fill_noise = (
-                                torch.randn_like(xt)
-                                * unsqueeze_trailing_dims(sigma, xt)
-                                + x0[:, :, 1:2, :]
-                            )
-                        xt = xt * zero_atom_mask.unsqueeze(-1)
-                        xt = xt + dummy_fill_noise * dummy_fill_mask
+                        xt = dummy_fill_noise_coords(
+                            atom37_coords=xt,
+                            atom37_mask=zero_atom_mask,
+                            atom37_coords_to_use=x0,
+                            noise_level=sigma,
+                            mask_noise=True,
+                            dummy_fill_mode=dummy_fill_mode,
+                        )
                     atom_mask = zero_atom_mask
             elif self.config.model.task == "backbone":
                 xt = xt * bb_atom_mask.unsqueeze(-1)
@@ -1526,25 +1659,20 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                                if dummy_fill_mode == "zero":
-                                    dummy_fill_noise = torch.randn_like(
-                                        xt_hat
-                                    ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                else:
-                                    dummy_fill_noise = (
-                                        torch.randn_like(xt_hat)
-                                        * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                        + x0[:, :, 1:2, :]
-                                    )
-                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                xt_hat = dummy_fill_noise_coords(
+                                    atom37_coords=xt_hat,
+                                    atom37_mask=zero_atom_mask,
+                                    atom37_coords_to_use=x0,
+                                    noise_level=sigma_hat,
+                                    mask_noise=True,
+                                    dummy_fill_mode=dummy_fill_mode,
+                                )
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
-                            if i < (0.5 * n_steps):
+                            if i < (0.5 * num_steps):
                                 xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
@@ -1572,19 +1700,14 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-                                    if dummy_fill_mode == "zero":
-                                        dummy_fill_noise = torch.randn_like(
-                                            xt_hat
-                                        ) * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                    else:
-                                        dummy_fill_noise = (
-                                            torch.randn_like(xt_hat)
-                                            * unsqueeze_trailing_dims(sigma_hat, xt_hat)
-                                            + x0[:, :, 1:2, :]
-                                        )
-                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = dummy_fill_noise_coords(
+                                        atom37_coords=xt_hat,
+                                        atom37_mask=zero_atom_mask,
+                                        atom37_coords_to_use=x0,
+                                        noise_level=sigma_hat,
+                                        mask_noise=True,
+                                        dummy_fill_mode=dummy_fill_mode,
+                                    )
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
                             xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
@@ -1593,8 +1716,8 @@ class Protpardelle(nn.Module):
                         xt_rep = xt_hat.clone()
                         if cc.enabled and (
                             cc.replacement_guidance.enabled
-                            and i >= (cc.replacement_guidance.start * n_steps)
-                            and i < (cc.replacement_guidance.end * n_steps)
+                            and i >= (cc.replacement_guidance.start * num_steps)
+                            and i < (cc.replacement_guidance.end * num_steps)
                         ):
                             for bi, _ in enumerate(motif_idx):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
@@ -1614,8 +1737,8 @@ class Protpardelle(nn.Module):
                                             motif_aatype_str
                                         ]
                                         replacement_idx = [
-                                            residue_constants.atom_order.get(atype)
-                                            for atype in tip_atomtypes
+                                            residue_constants.atom_order[atom]
+                                            for atom in tip_atomtypes
                                         ]
                                     xt_rep[bi, mi, replacement_idx] = motif_all_atom[
                                         bi, raw_mi, replacement_idx
@@ -1706,26 +1829,20 @@ class Protpardelle(nn.Module):
                                 )
 
                             if x0 is not None:
-                                dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                                if dummy_fill_mode == "zero":
-                                    dummy_fill_noise = torch.randn_like(
-                                        xt
-                                    ) * unsqueeze_trailing_dims(sigma, xt)
-                                else:
-                                    dummy_fill_noise = (
-                                        torch.randn_like(xt)
-                                        * unsqueeze_trailing_dims(sigma, xt)
-                                        + x0[:, :, 1:2, :]
-                                    )
-                                xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                xt_hat = dummy_fill_noise_coords(
+                                    atom37_coords=xt_hat,
+                                    atom37_mask=zero_atom_mask,
+                                    atom37_coords_to_use=x0,
+                                    noise_level=sigma,
+                                    mask_noise=True,
+                                    dummy_fill_mode=dummy_fill_mode,
+                                )
                             atom_mask = zero_atom_mask
                         elif (
                             self.config.model.task == "ai-allatom-hybrid"
                             and uniform_steps
                         ):
-                            if i < (0.5 * n_steps):
+                            if i < (0.5 * num_steps):
                                 xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
                                 atom_mask = bb_atom_mask
                             else:
@@ -1752,20 +1869,14 @@ class Protpardelle(nn.Module):
                                     )
 
                                 if x0 is not None:
-                                    dummy_fill_mask = 1 - zero_atom_mask.unsqueeze(-1)
-
-                                    if dummy_fill_mode == "zero":
-                                        dummy_fill_noise = torch.randn_like(
-                                            xt
-                                        ) * unsqueeze_trailing_dims(sigma, xt)
-                                    else:
-                                        dummy_fill_noise = (
-                                            torch.randn_like(xt)
-                                            * unsqueeze_trailing_dims(sigma, xt)
-                                            + x0[:, :, 1:2, :]
-                                        )
-                                    xt_hat = xt_hat * zero_atom_mask.unsqueeze(-1)
-                                    xt_hat = xt_hat + dummy_fill_noise * dummy_fill_mask
+                                    xt_hat = dummy_fill_noise_coords(
+                                        atom37_coords=xt_hat,
+                                        atom37_mask=zero_atom_mask,
+                                        atom37_coords_to_use=x0,
+                                        noise_level=sigma,
+                                        mask_noise=True,
+                                        dummy_fill_mode=dummy_fill_mode,
+                                    )
                                 atom_mask = zero_atom_mask
                         elif self.config.model.task == "backbone":
                             xt_hat = xt_hat * bb_atom_mask.unsqueeze(-1)
@@ -1774,8 +1885,8 @@ class Protpardelle(nn.Module):
                         xt_rep = xt_hat.clone()
                         if cc.enabled and (
                             cc.replacement_guidance.enabled
-                            and i >= (cc.replacement_guidance.start * n_steps)
-                            and i < (cc.replacement_guidance.end * n_steps)
+                            and i >= (cc.replacement_guidance.start * num_steps)
+                            and i < (cc.replacement_guidance.end * num_steps)
                         ):
                             for bi, _ in enumerate(motif_idx):
                                 for raw_mi, mi in enumerate(motif_idx[bi]):
@@ -1795,8 +1906,8 @@ class Protpardelle(nn.Module):
                                             motif_aatype_str
                                         ]
                                         replacement_idx = [
-                                            residue_constants.atom_order.get(atype)
-                                            for atype in tip_atomtypes
+                                            residue_constants.atom_order[atom]
+                                            for atom in tip_atomtypes
                                         ]
                                     xt_rep[bi, mi, replacement_idx] = motif_all_atom[
                                         bi, raw_mi, replacement_idx
@@ -1850,8 +1961,8 @@ class Protpardelle(nn.Module):
                                         motif_aatype_str
                                     ]
                                     tip_idx = [
-                                        residue_constants.atom_order.get(atype)
-                                        for atype in tip_atomtypes
+                                        residue_constants.atom_order[atom]
+                                        for atom in tip_atomtypes
                                     ]
                                     nontip_idx = tuple(
                                         [
@@ -1862,9 +1973,10 @@ class Protpardelle(nn.Module):
                                     )
                                     loss_mask37[bi, mi, nontip_idx] = 0
 
-                        loss = torch.sum(
-                            motif_loss(x0, motif_idx, motif_all_atom, loss_mask37)
-                        )
+                        loss = motif_loss(
+                            x0, motif_idx, motif_all_atom, loss_mask37
+                        ).sum()
+
                         loss = loss_weights.motif * loss
 
                         guidance = torch.autograd.grad(loss, xt_hat)[0]
@@ -1875,7 +1987,7 @@ class Protpardelle(nn.Module):
                         # Determine sequence resampling probability
                         if anneal_seq_resampling_rate is not None:
                             step_time = 1 - (i - begin_mpnn_step) / max(
-                                1, n_steps - begin_mpnn_step
+                                1, num_steps - begin_mpnn_step
                             )
                             if anneal_seq_resampling_rate == "linear":
                                 resampling_rate = step_time
@@ -1888,7 +2000,7 @@ class Protpardelle(nn.Module):
 
                         # Resample sequence or design with full ProteinMPNN
                         if gt_aatype is None and not pd.enabled:
-                            if i == n_steps - 1 and use_fullmpnn_for_final:
+                            if i == num_steps - 1 and use_fullmpnn_for_final:
                                 s_hat = design_with_fullmpnn(
                                     x0,
                                     seq_mask,
@@ -2037,15 +2149,15 @@ def load_model(
     """Load a Protpardelle model from a configuration file and a checkpoint."""
     if device is None:
         device = get_default_device()
-    assert isinstance(device, torch.device)  # for mypy
-    config = load_config(config_path)
+
+    config = load_config(config_path, TrainingConfig)
 
     checkpoint_path = norm_path(checkpoint_path)
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
     state_dict = torch.load(
         checkpoint_path,
-        map_location=device,
+        map_location=device,  # type: ignore
         weights_only=False,
     )["model_state_dict"]
 

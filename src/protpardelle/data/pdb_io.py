@@ -3,7 +3,6 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -21,10 +20,9 @@ from protpardelle.common.protein import (
     to_pdb,
 )
 from protpardelle.data.atom import atom37_mask_from_aatype
-from protpardelle.utils import StrPath, norm_path, tensor_to_ndarray
+from protpardelle.utils import StrPath, get_logger, norm_path, tensor_to_ndarray
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def add_chain_gap(

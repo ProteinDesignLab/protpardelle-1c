@@ -1,10 +1,9 @@
 """Neural network modules.
 
-Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu
+Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import copy
-from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
@@ -13,83 +12,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
+from jaxtyping import Float, Int
 from torch import broadcast_tensors, einsum
 from torch.amp import autocast
-from torchtyping import TensorType
+from torch.optim.lr_scheduler import LRScheduler
 
-from protpardelle import utils
 from protpardelle.common import residue_constants
-from protpardelle.integrations import protein_mpnn
+from protpardelle.integrations.protein_mpnn import ProteinMPNN
+from protpardelle.utils import get_logger, unsqueeze_trailing_dims
 
-########################################
-# Adapted from https://github.com/ermongroup/ddim
-
-
-def downsample(x):
-    return F.avg_pool2d(x, 2, 2, ceil_mode=True)
-
-
-def upsample_coords(x, shape):
-    new_l, new_w = shape
-    return F.interpolate(x, size=(new_l, new_w), mode="nearest")
-
-
-########################################
-# Adapted from https://github.com/aqlaboratory/openfold
-
-
-def permute_final_dims(tensor: torch.Tensor, inds: Sequence[int]):
-    zero_index = -1 * len(inds)
-    first_inds = list(range(len(tensor.shape[:zero_index])))
-    return tensor.contiguous().permute(first_inds + [zero_index + i for i in inds])
-
-
-def lddt(
-    all_atom_pred_pos: torch.Tensor,
-    all_atom_positions: torch.Tensor,
-    all_atom_mask: torch.Tensor,
-    cutoff: float = 15.0,
-    eps: float = 1e-10,
-    per_residue: bool = True,
-) -> torch.Tensor:
-    n = all_atom_mask.shape[-2]
-    dmat_true = torch.sqrt(
-        eps
-        + torch.sum(
-            (all_atom_positions.unsqueeze(-2) - all_atom_positions.unsqueeze(-3)) ** 2,
-            dim=-1,
-        )
-    )
-
-    dmat_pred = torch.sqrt(
-        eps
-        + torch.sum(
-            (all_atom_pred_pos.unsqueeze(-2) - all_atom_pred_pos.unsqueeze(-3)) ** 2,
-            dim=-1,
-        )
-    )
-    dists_to_score = (
-        (dmat_true < cutoff)
-        * all_atom_mask
-        * permute_final_dims(all_atom_mask, (1, 0))
-        * (1.0 - torch.eye(n, device=all_atom_mask.device))
-    )
-
-    dist_l1 = torch.abs(dmat_true - dmat_pred)
-
-    score = (
-        (dist_l1 < 0.5).type(dist_l1.dtype)
-        + (dist_l1 < 1.0).type(dist_l1.dtype)
-        + (dist_l1 < 2.0).type(dist_l1.dtype)
-        + (dist_l1 < 4.0).type(dist_l1.dtype)
-    )
-    score = score * 0.25
-
-    dims = (-1,) if per_residue else (-2, -1)
-    norm = 1.0 / (eps + torch.sum(dists_to_score, dim=dims))
-    score = norm * (eps + torch.sum(dists_to_score * score, dim=dims))
-
-    return score
+logger = get_logger(__name__)
 
 
 def circular_relpos(
@@ -153,14 +85,28 @@ class RelativePositionalEncoding(nn.Module):
         cyclic: bool = False,
     ) -> None:
         super().__init__()
+
         self.max_rel_idx = max_rel_idx
-        self.n_rel_pos = 2 * self.max_rel_idx + 1
-        self.linear = nn.Linear(self.n_rel_pos, attn_dim)
+        self.num_relpos = 2 * self.max_rel_idx + 1
+        self.linear = nn.Linear(self.num_relpos, attn_dim)
         self.relchain = relchain
         self.cyclic = cyclic
 
     def forward(self, index: torch.Tensor) -> torch.Tensor:
+        """Compute relative positional encodings.
+
+        Args:
+            index (torch.Tensor): Absolute positions. (B, L)
+
+        Returns:
+            torch.Tensor: Relative positional encodings. (B, L, L, C)
+        """
+
         if self.relchain:
+            if self.cyclic:
+                logger.warning(
+                    "Cyclic relative positions are only supported for residues; will be ignored here."
+                )
             d_ij = (index.unsqueeze(-1) != index.unsqueeze(-2)).float()
         elif self.cyclic:
             d_ij = circular_relpos(index)
@@ -168,29 +114,39 @@ class RelativePositionalEncoding(nn.Module):
             d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
         device = d_ij.device
 
-        v_bins = torch.arange(self.n_rel_pos, device=device) - self.max_rel_idx
+        v_bins = torch.arange(self.num_relpos, device=device) - self.max_rel_idx
         idxs = torch.abs(d_ij.unsqueeze(-1) - v_bins[None, None]).argmin(-1)
-        p_ij = F.one_hot(idxs, num_classes=self.n_rel_pos).float()
+        p_ij = F.one_hot(idxs, num_classes=self.num_relpos).float()
         embeddings = self.linear(p_ij)
 
         return embeddings
 
 
-def rotate_half(x):
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate half the hidden dims of the input.
+
+    Args:
+        x (torch.Tensor): Input tensor where r=2. (..., D*R)
+
+    Returns:
+        torch.Tensor: Rotated tensor where r=2. (..., D*R)
+    """
+
     x = rearrange(x, "... (d r) -> ... d r", r=2)
     x1, x2 = x.unbind(dim=-1)
     x = torch.stack((-x2, x1), dim=-1)
+
     return rearrange(x, "... d r -> ... (d r)")
 
 
 @autocast("cuda", enabled=False)
 def apply_rotary_emb(
-    freqs: TensorType["b n d"],
-    t: TensorType["b h n d"],
-    start_index=0,
-    scale=1.0,
-    seq_dim=-2,
-):
+    freqs: Float[torch.Tensor, "B L D"],
+    t: Float[torch.Tensor, "B H L D"],
+    start_index: int = 0,
+    scale: float = 1.0,
+    seq_dim: int = -2,
+) -> torch.Tensor:
     if t.ndim == 3:
         seq_len = t.shape[seq_dim]
         freqs = freqs[:, -seq_len:].to(t)
@@ -209,6 +165,7 @@ def apply_rotary_emb(
         t[..., end_index:],
     )
     t = (t * freqs.cos() * scale) + (rotate_half(t) * freqs.sin() * scale)
+
     return torch.cat((t_left, t, t_right), dim=-1)
 
 
@@ -302,12 +259,12 @@ class RotaryEmbedding(nn.Module):
     def get_seq_pos(
         self,
         seq_len: int,
-        residx: TensorType["b n", float],
+        residx: Float[torch.Tensor, "B L"],
         B: int,
         device,
         dtype,
         offset=0,
-    ) -> TensorType["b n", float]:
+    ) -> Float[torch.Tensor, "B L"]:
         """
         Get sequence position for rotary embeddings depending on whether residue index is used or not.
         - seq_len: length of the sequence (for if not using residue index)
@@ -323,9 +280,9 @@ class RotaryEmbedding(nn.Module):
 
     def rotate_queries_or_keys(
         self,
-        t: TensorType["b h n d"],
-        residx: TensorType["b n", int],
-        chain_index: TensorType["b n", int] | None,
+        t: Float[torch.Tensor, "B H L D"],
+        residx: Int[torch.Tensor, "B L"],
+        chain_index: Int[torch.Tensor, "B L"] | None,
         seq_dim=None,
         offset=0,
     ):
@@ -354,47 +311,6 @@ class RotaryEmbedding(nn.Module):
             freqs = rearrange(freqs, "b n d -> b n 1 d")
 
         return apply_rotary_emb(freqs, t, seq_dim=seq_dim)
-
-    def rotate_queries_with_cached_keys(self, q, k, seq_dim=None, offset=0):
-        seq_dim = default(seq_dim, self.default_seq_dim)
-
-        q_len, k_len = q.shape[seq_dim], k.shape[seq_dim]
-        assert q_len <= k_len
-
-        rotated_q = self.rotate_queries_or_keys(
-            q, seq_dim=seq_dim, offset=k_len - q_len + offset
-        )
-        rotated_k = self.rotate_queries_or_keys(k, seq_dim=seq_dim, offset=offset)
-
-        rotated_q = rotated_q.type(q.dtype)
-        rotated_k = rotated_k.type(k.dtype)
-
-        return rotated_q, rotated_k
-
-    def rotate_queries_and_keys(
-        self, q, k, residx: TensorType["b n", float], seq_dim=None
-    ):
-        seq_dim = default(seq_dim, self.default_seq_dim)
-
-        assert self.use_xpos
-        device, dtype, seq_len = q.device, q.dtype, q.shape[seq_dim]
-
-        seq = self.get_seq_pos(seq_len, residx, dtype=dtype, device=device)
-
-        freqs = self.forward(seq, seq_len=seq_len)
-        scale = self.get_scale(seq, seq_len=seq_len).to(dtype)
-
-        if seq_dim == -3:
-            freqs = rearrange(freqs, "n d -> n 1 d")
-            scale = rearrange(scale, "n d -> n 1 d")
-
-        rotated_q = apply_rotary_emb(freqs, q, scale=scale, seq_dim=seq_dim)
-        rotated_k = apply_rotary_emb(freqs, k, scale=scale**-1, seq_dim=seq_dim)
-
-        rotated_q = rotated_q.type(q.dtype)
-        rotated_k = rotated_k.type(k.dtype)
-
-        return rotated_q, rotated_k
 
     def get_scale(self, t: torch.Tensor, seq_len: int | None = None, offset=0):
         assert self.use_xpos
@@ -443,11 +359,11 @@ class RotaryEmbedding(nn.Module):
     @autocast("cuda", enabled=False)
     def forward(
         self,
-        t: TensorType["b n", float],  # sequence positions
-        chain_index: TensorType["b n", float] | None = None,
+        t: Float[torch.Tensor, "B L"],  # sequence positions
+        chain_index: Float[torch.Tensor, "B L"] | None = None,
         seq_len=None,
         offset=0,
-    ) -> TensorType["b n f", float]:
+    ) -> Float[torch.Tensor, "B L N"]:
         should_cache = (
             self.cache_if_possible
             and not self.learned_freq
@@ -494,28 +410,51 @@ class RotaryEmbedding(nn.Module):
 # Adapted from https://github.com/NVlabs/edm
 
 
-class Noise_Embedding(nn.Module):
+class NoiseEmbedding(nn.Module):
+    """Noise embedding layer."""
+
     def __init__(
         self, num_channels: int, max_positions: int = 10000, endpoint: bool = False
     ) -> None:
+        """Noise embedding layer.
+
+        Args:
+            num_channels (int): Number of channels in the input.
+            max_positions (int, optional): Maximum number of positions. Defaults to 10000.
+            endpoint (bool, optional): Whether to include endpoint. Defaults to False.
+        """
+
         super().__init__()
+
         self.num_channels = num_channels
         self.max_positions = max_positions
         self.endpoint = endpoint
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass for noise embedding.
+
+        Args:
+            x (torch.Tensor): Input tensor. (B, N)
+
+        Returns:
+            torch.Tensor: Output tensor. (B, N, C)
+        """
+
+        device = x.device
         freqs = torch.arange(
-            start=0, end=self.num_channels // 2, dtype=torch.float, device=x.device
+            start=0, end=self.num_channels // 2, dtype=torch.float, device=device
         )
-        freqs = freqs / (self.num_channels // 2 - (1 if self.endpoint else 0))
+        freqs = freqs / (self.num_channels // 2 - self.endpoint)
         freqs = (1 / self.max_positions) ** freqs
-        if len(x.shape) == 1:
+
+        if x.ndim == 1:
             x = x.outer(freqs.to(x.dtype))
         else:
             b, l = x.shape
             d = freqs.shape[0]
             x = x.flatten().outer(freqs.to(x.dtype)).view(b, l, d)
         x = torch.cat([x.cos(), x.sin()], dim=-1)
+
         return x
 
 
@@ -535,37 +474,49 @@ def default(val, d):
     return d() if callable(d) else d
 
 
-def posemb_sincos_1d(patches, temperature=10000, residue_index=None):
-    _, n, dim, device, dtype = *patches.shape, patches.device, patches.dtype
+def posemb_sincos_1d(
+    patches: torch.Tensor,
+    temperature: float = 10000.0,
+    residue_index: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """1D sine-cosine positional embedding."""
 
-    n = torch.arange(n, device=device) if residue_index is None else residue_index
-    assert (dim % 2) == 0, "feature dimension must be multiple of 2 for sincos emb"
-    omega = torch.arange(dim // 2, device=device) / (dim // 2 - 1)
+    B, L, C = patches.shape
+    device = patches.device
+
+    if residue_index is None:
+        residue_index = torch.arange(L, device=device)
+
+    if C % 2 != 0:
+        raise ValueError("feature dimension must be multiple of 2 for sincos emb")
+
+    omega = torch.arange(C // 2, device=device) / (C // 2 - 1)
     omega = 1.0 / (temperature**omega)
 
-    n = n.unsqueeze(-1) * omega
-    pe = torch.cat((n.sin(), n.cos()), dim=-1)
-    return pe.type(dtype)
+    residue_index = residue_index.unsqueeze(-1) * omega
+    posemb = torch.cat((residue_index.sin(), residue_index.cos()), dim=-1)
+
+    return posemb
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim: int) -> None:
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(dim))
         self.register_buffer("beta", torch.zeros(dim))
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
 
 
 class NoiseConditioningBlock(nn.Module):
-    def __init__(self, n_in_channel, n_out_channel):
+    def __init__(self, num_in_channels: int, num_out_channels: int) -> None:
         super().__init__()
         self.block = nn.Sequential(
-            Noise_Embedding(n_in_channel),
-            nn.Linear(n_in_channel, n_out_channel),
+            NoiseEmbedding(num_in_channels),
+            nn.Linear(num_in_channels, num_out_channels),
             nn.SiLU(),
-            nn.Linear(n_out_channel, n_out_channel),
+            nn.Linear(num_out_channels, num_out_channels),
         )
 
     def forward(self, noise_level):
@@ -577,11 +528,11 @@ class NoiseConditioningBlock(nn.Module):
 
 class TimeCondResnetBlock(nn.Module):
     def __init__(
-        self, nic, noc, cond_nc, conv_layer=nn.Conv2d, dropout=0.1, n_norm_in_groups=4
+        self, nic, noc, cond_nc, conv_layer=nn.Conv2d, dropout=0.1, num_norm_in_groups=4
     ):
         super().__init__()
         self.block1 = nn.Sequential(
-            nn.GroupNorm(num_groups=nic // n_norm_in_groups, num_channels=nic),
+            nn.GroupNorm(num_groups=nic // num_norm_in_groups, num_channels=nic),
             nn.SiLU(),
             conv_layer(nic, noc, 3, 1, 1),
         )
@@ -604,9 +555,9 @@ class TimeCondResnetBlock(nn.Module):
         if time is not None:
             h = self.mid_norm(h)
             scale, shift = self.cond_proj(time).chunk(2, dim=-1)
-            h = (
-                h * (utils.unsqueeze_trailing_dims(scale, h) + 1)
-            ) + utils.unsqueeze_trailing_dims(shift, h)
+            h = (h * (unsqueeze_trailing_dims(scale, h) + 1)) + unsqueeze_trailing_dims(
+                shift, h
+            )
 
         if self.dropout is not None:
             h = self.dropout(h)
@@ -635,7 +586,7 @@ class TimeCondAttention(nn.Module):
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         dit: bool = False,
-    ):
+    ) -> None:
         super().__init__()
         hidden_dim = dim_head * heads
         dim_context = default(dim_context, dim)
@@ -703,7 +654,7 @@ class TimeCondAttention(nn.Module):
     def forward(
         self,
         x,
-        residx: TensorType["b n", float],
+        residx: Float[torch.Tensor, "B L"],
         context=None,
         time=None,
         motif=None,
@@ -716,9 +667,6 @@ class TimeCondAttention(nn.Module):
         has_context = exists(context)
 
         context = default(context, x)
-
-        if x.shape[-1] != self.norm.gamma.shape[-1]:
-            print(context.shape, x.shape, self.norm.gamma.shape)
 
         x = self.norm(x)
 
@@ -923,7 +871,7 @@ class TimeCondTransformer(nn.Module):
         if "rotary" in position_embedding_type:
             self.rope = RotaryEmbedding(
                 dim=(dim // heads), use_residx=True, cache_if_possible=False
-            )  # Changed to use residx
+            )  # changed to use residx
         if "relative" in position_embedding_type:
             self.relpos = nn.Sequential(
                 RelativePositionalEncoding(
@@ -970,7 +918,7 @@ class TimeCondTransformer(nn.Module):
 
     def forward(
         self,
-        x: TensorType["b n d", float],
+        x: Float[torch.Tensor, "B L D"],
         time=None,
         motif=None,
         attn_bias=None,
@@ -1023,16 +971,15 @@ class TimeCondTransformer(nn.Module):
 class TimeCondUViT(nn.Module):
     def __init__(
         self,
-        *,
         seq_len: int,
         dim: int,
         patch_size: int = 1,
         depth: int = 6,
         heads: int = 8,
         dim_head: int = 32,
-        n_filt_per_layer: list[int] = [],  # TODO: tuple
-        n_blocks_per_layer: int = 2,
-        n_atoms: int = 37,
+        num_filt_per_layer: list[int] = [],  # TODO: tuple
+        num_blocks_per_layer: int = 2,
+        num_atoms: int = 37,
         channels_per_atom: int = 6,
         attn_bias_dim: int | None = None,
         time_cond_dim: int | None = None,
@@ -1053,40 +1000,42 @@ class TimeCondUViT(nn.Module):
         # Initialize configuration params
         if time_cond_dim is None:
             time_cond_dim = dim * 4
-        # if motif_cond_dim is None:
-        #     motif_cond_dim = dim * 4
+
         self.position_embedding_type = position_embedding_type
         channels = channels_per_atom
-        self.n_conv_layers = n_conv_layers = len(n_filt_per_layer)
-        if n_conv_layers > 0:
-            post_conv_filt = n_filt_per_layer[-1]
-        self.conv_skip_connection = conv_skip_connection and n_conv_layers == 1
-        transformer_seq_len = seq_len // (2**n_conv_layers)
+        self.num_conv_layers = num_conv_layers = len(num_filt_per_layer)
+        if num_conv_layers > 0:
+            post_conv_filt = num_filt_per_layer[-1]
+        self.conv_skip_connection = conv_skip_connection and num_conv_layers == 1
+        transformer_seq_len = seq_len // (2**num_conv_layers)
         assert transformer_seq_len % patch_size == 0
 
-        dim_a = post_conv_atom_dim = max(1, n_atoms // (2 ** (n_conv_layers - 1)))
-        if n_conv_layers == 0:
-            patch_dim = patch_size * n_atoms * channels_per_atom
-            patch_dim_out = patch_size * n_atoms * 3
-            dim_a = n_atoms
-        elif conv_skip_connection and n_conv_layers == 1:
+        dim_a = post_conv_atom_dim = max(1, num_atoms // (2 ** (num_conv_layers - 1)))
+        if num_conv_layers == 0:
+            patch_dim = patch_size * num_atoms * channels_per_atom
+            patch_dim_out = patch_size * num_atoms * 3
+            dim_a = num_atoms
+        elif conv_skip_connection and num_conv_layers == 1:
             patch_dim = patch_size * (channels + post_conv_filt) * post_conv_atom_dim
             patch_dim_out = patch_size * post_conv_filt * post_conv_atom_dim
-        elif n_conv_layers > 0:
+        elif num_conv_layers > 0:
             patch_dim = patch_dim_out = patch_size * post_conv_filt * post_conv_atom_dim
 
         # Make downsampling conv
-        # Downsamples n-1 times where n is n_conv_layers
+        # Downsamples n-1 times where n is num_conv_layers
         down_conv = []
         block_in = channels
-        for i, nf in enumerate(n_filt_per_layer):
+        for i, nf in enumerate(num_filt_per_layer):
             block_out = nf
             layer = []
-            for j in range(n_blocks_per_layer):
-                n_groups = 2 if i == 0 and j == 0 else 4
+            for j in range(num_blocks_per_layer):
+                num_groups = 2 if i == 0 and j == 0 else 4
                 layer.append(
                     TimeCondResnetBlock(
-                        block_in, block_out, time_cond_dim, n_norm_in_groups=n_groups
+                        block_in,
+                        block_out,
+                        time_cond_dim,
+                        num_norm_in_groups=num_groups,
                     )
                 )
                 block_in = block_out
@@ -1101,7 +1050,7 @@ class TimeCondUViT(nn.Module):
         )
         self.cond_to_patch_embedding = nn.Sequential(
             Rearrange("b c (n p) a -> b n (p c a)", p=patch_size),
-            nn.Linear(patch_size * n_atoms * 3, time_cond_dim),
+            nn.Linear(patch_size * num_atoms * 3, time_cond_dim),
             LayerNorm(time_cond_dim),
         )
 
@@ -1139,11 +1088,11 @@ class TimeCondUViT(nn.Module):
 
         # Make upsampling conv
         up_conv = []
-        for i, nf in enumerate(reversed(n_filt_per_layer)):
+        for i, nf in enumerate(reversed(num_filt_per_layer)):
             skip_in = nf
             block_out = nf
             layer = []
-            for _ in range(n_blocks_per_layer):
+            for _ in range(num_blocks_per_layer):
                 layer.append(
                     TimeCondResnetBlock(block_in + skip_in, block_out, time_cond_dim)
                 )
@@ -1152,7 +1101,7 @@ class TimeCondUViT(nn.Module):
         self.up_conv = nn.ModuleList(up_conv)
 
         # Conv out
-        if n_conv_layers > 0:
+        if num_conv_layers > 0:
             self.conv_out = nn.Sequential(
                 nn.GroupNorm(num_groups=block_out // 4, num_channels=block_out),
                 nn.SiLU(),
@@ -1161,7 +1110,7 @@ class TimeCondUViT(nn.Module):
 
     def forward(
         self,
-        coords: TensorType["b n a x", float],
+        coords: Float[torch.Tensor, "B L A 3"],
         time_cond,
         motif_cond=None,
         pair_bias=None,
@@ -1170,17 +1119,17 @@ class TimeCondUViT(nn.Module):
         chain_index=None,
     ) -> torch.Tensor:
 
-        if self.n_conv_layers > 0:  # pad up to even dims
+        if self.num_conv_layers > 0:  # pad up to even dims
             coords = F.pad(coords, (0, 0, 0, 0, 0, 1, 0, 0))
 
         x = rearr_coords = rearrange(coords, "b n a c -> b c n a")
-        hiddens = []
+        hidden_states = []
         for i, layer in enumerate(self.down_conv):
             for block in layer:
                 x = block(x, time=time_cond)
-                hiddens.append(x)
-            if i != self.n_conv_layers - 1:
-                x = downsample(x)
+                hidden_states.append(x)
+            if i != self.num_conv_layers - 1:
+                x = F.avg_pool2d(x, kernel_size=2, stride=2, ceil_mode=True)
 
         if self.conv_skip_connection:
             x = torch.cat([x, rearr_coords], 1)
@@ -1188,7 +1137,7 @@ class TimeCondUViT(nn.Module):
         x = self.to_patch_embedding(x)
 
         if seq_mask is not None and x.shape[1] == seq_mask.shape[1]:
-            x = x * utils.unsqueeze_trailing_dims(seq_mask, x)
+            x = x * unsqueeze_trailing_dims(seq_mask, x)
 
         attn_bias = None
         if pair_bias is not None:
@@ -1208,12 +1157,12 @@ class TimeCondUViT(nn.Module):
 
         for i, layer in enumerate(self.up_conv):
             for block in layer:
-                x = torch.cat([x, hiddens.pop()], 1)
+                x = torch.cat([x, hidden_states.pop()], 1)
                 x = block(x, time=time_cond)
-            if i != self.n_conv_layers - 1:
-                x = upsample_coords(x, hiddens[-1].shape[2:])
+            if i != self.num_conv_layers - 1:
+                x = F.interpolate(x, size=hidden_states[-1].shape[2:], mode="nearest")
 
-        if self.n_conv_layers > 0:
+        if self.num_conv_layers > 0:
             x = self.conv_out(x)
             x = x[..., :-1, :]  # drop even-dims padding
 
@@ -1225,68 +1174,78 @@ class TimeCondUViT(nn.Module):
 ########################################
 
 
-class LinearWarmupCosineDecay(torch.optim.lr_scheduler._LRScheduler):
+class LinearWarmupCosineDecay(LRScheduler):
     def __init__(
         self,
-        optimizer,
-        max_lr,
-        warmup_steps=1000,
-        decay_steps=int(1e6),
-        min_lr=1e-6,
+        optimizer: torch.optim.Optimizer,
+        max_lr: float,
+        warmup_steps: int = 1000,
+        decay_steps: int = 1000000,
+        min_lr: float = 1e-6,
         **kwargs,
     ):
+        super().__init__(optimizer, **kwargs)
+
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.warmup_steps = warmup_steps
         self.decay_steps = decay_steps
         self.total_steps = warmup_steps + decay_steps
-        super(LinearWarmupCosineDecay, self).__init__(optimizer, **kwargs)
 
-    def get_lr(self):
-        # TODO double check for off-by-one errors
-        if self.last_epoch < self.warmup_steps:
-            curr_lr = self.last_epoch / self.warmup_steps * self.max_lr
-            return [curr_lr for group in self.optimizer.param_groups]
-        elif self.last_epoch < self.total_steps:
-            time = (self.last_epoch - self.warmup_steps) / self.decay_steps * np.pi
-            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
-                1 + np.cos(time)
+    def get_lr(self) -> list[float]:
+        """Compute the current learning rate for all param groups."""
+
+        # Handle warmup (if any)
+        if (self.warmup_steps > 0) and (self.last_epoch < self.warmup_steps):
+            progress = self.last_epoch / max(1, self.warmup_steps)
+            curr_lr = progress * self.max_lr
+        # Cosine decay phase
+        elif (self.decay_steps > 0) and (self.last_epoch < self.total_steps):
+            # Fraction of decay completed (0 at start of decay, 1 at end)
+            decay_progress = (self.last_epoch - self.warmup_steps) / max(
+                1, self.decay_steps
             )
-            return [curr_lr for group in self.optimizer.param_groups]
+            time = decay_progress * np.pi
+            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
+                1.0 + float(np.cos(time))
+            )
         else:
-            return [self.min_lr for group in self.optimizer.param_groups]
+            curr_lr = self.min_lr
+
+        # Return LR for each param group
+        return [curr_lr for _ in self.optimizer.param_groups]
 
 
 class NoiseConditionalProteinMPNN(nn.Module):
     def __init__(
         self,
-        n_channel=128,
-        n_layers=3,
-        n_neighbors=32,
-        time_cond_dim=None,
-        vocab_size=21,
-        input_S_is_embeddings=False,
+        num_channels: int = 128,
+        num_layers: int = 3,
+        num_neighbors: int = 32,
+        vocab_size: int = 21,
+        time_cond_dim: int | None = None,
+        input_S_is_embeddings: bool = False,
     ):
         super().__init__()
-        self.n_channel = n_channel
-        self.n_layers = n_layers
-        self.n_neighbors = n_neighbors
-        self.time_cond_dim = time_cond_dim
+        self.num_channels = num_channels
+        self.num_layers = num_layers
+        self.num_neighbors = num_neighbors
         self.vocab_size = vocab_size
+        self.time_cond_dim = time_cond_dim
         self.bb_idxs_if_atom37 = [
             residue_constants.atom_order[a] for a in ["N", "CA", "C", "O"]
         ]
         self.ca_idxs_if_atom37 = [residue_constants.atom_order[a] for a in ["CA"]]
 
-        self.mpnn = protein_mpnn.ProteinMPNN(
+        self.mpnn = ProteinMPNN(
             num_letters=vocab_size,
-            node_features=n_channel,
-            edge_features=n_channel,
-            hidden_dim=n_channel,
-            num_encoder_layers=n_layers,
-            num_decoder_layers=n_layers,
+            node_features=num_channels,
+            edge_features=num_channels,
+            hidden_dim=num_channels,
+            num_encoder_layers=num_layers,
+            num_decoder_layers=num_layers,
             vocab=vocab_size,
-            k_neighbors=n_neighbors,
+            k_neighbors=num_neighbors,
             augment_eps=0.0,
             dropout=0.1,
             ca_only=True,  # CHANGED -- better to use CA-only for noisy coords
@@ -1295,8 +1254,13 @@ class NoiseConditionalProteinMPNN(nn.Module):
         )
 
     def forward(
-        self, denoised_coords, noisy_aatype, seq_mask, residue_index, time_cond
-    ):
+        self,
+        denoised_coords: torch.Tensor,
+        noisy_aatype: torch.Tensor,
+        seq_mask: torch.Tensor,
+        residue_index: torch.Tensor,
+        time_cond: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if denoised_coords.shape[-2] == 37:
             denoised_coords = denoised_coords[:, :, 1]  # CHANGED to ca-only
 
@@ -1314,4 +1278,5 @@ class NoiseConditionalProteinMPNN(nn.Module):
             time_cond=time_cond,
             return_node_embs=True,
         )
+
         return node_embs, encoder_embs

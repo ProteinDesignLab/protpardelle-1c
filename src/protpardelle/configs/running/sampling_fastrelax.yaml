@@ -1,12 +1,6 @@
-model:
-  model_ckpt: "" # Path to denoiser model weights
-  model_cfg: "" # Path to denoiser model config
-  minimpnn_path: "" # Path to minimpnn model weights
-  full_mpnn_path: "" # If provided, replace full MPNN in model_cfg with this path
-
 sampling:
-  n_steps: 500 # number of denoising steps
-  s_churn: 200 # add s_churn / n_steps amount of noise when noise level is between s_max and s_min
+  num_steps: 500 # number of denoising steps
+  s_churn: 200 # add s_churn / num_steps amount of noise when noise level is between s_max and s_min
   step_scale: 1.2 # inverse temperature, 1.0 is taking denoising steps exactly according to model's predictions, 0.8 is higher temperature
   noise_schedule:
     _partial_: true
@@ -17,7 +11,9 @@ sampling:
   partial_diffusion:
     enabled: true # use partial diffusion
     pdb_file_path: # input pdb to apply partial diffusion
-    n_steps: 100 # go back these many steps, 100 here with sampling.backbone.n_steps=500 means going back to step 400
+    num_steps: 100 # go back these many steps, 100 here with sampling.num_steps=500 means going back to step 400
+    repack: true # init all sidechain coords from CA
+    seq: "" # sequence to repack
   dx: 0.0 # translate motif in x-axis
   dy: 0.0 # translate motif in y-axis
   dz: 0.0 # translate motif in z-axis
@@ -51,17 +47,17 @@ sampling:
 
   allatom_cfg:
     sidechain_mode: false
-    skip_mpnn_proportion: 0.6
+    skip_mpnn_proportion: 1.0
     use_fullmpnn: false
-    use_fullmpnn_for_final: true
+    use_fullmpnn_for_final: false
     anneal_seq_resampling_rate: "linear"
     jump_steps: false
-    uniform_steps: false
+    uniform_steps: true
 
   stage2_cfg:
     enabled: false
     rewind_steps: 50
-    n_steps: 200
+    num_steps: 200
     s_churn: 100
     step_scale: 1.2
     sidechain_mode: true
