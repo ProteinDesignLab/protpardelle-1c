@@ -20,7 +20,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float, Int
-from omegaconf import DictConfig
 from torch.types import Device
 from tqdm.auto import tqdm
 

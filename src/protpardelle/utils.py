@@ -169,7 +169,12 @@ def load_config(
     config_path: StrPath, config_dataclass: type[TrainingConfig]
 ) -> TrainingConfig: ...
 def load_config(config_path: StrPath, config_dataclass: type[Config]) -> Config:
-    """Load a YAML file and merge it into the structured Config schema."""
+    """Load a YAML file and merge it into the structured Config schema.
+
+    This function uses OmegaConf to load a YAML configuration file and merge it
+    with a structured dataclass schema. The resulting configuration is validated
+    against the schema, but is actually an OmegaConf DictConfig object.
+    """
     config_path = norm_path(config_path)
     if not config_path.is_file():
         raise FileNotFoundError(f"Config file not found: {config_path}")
