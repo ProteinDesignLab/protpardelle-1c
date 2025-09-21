@@ -39,7 +39,6 @@ dependencies = [
     "pyyaml",
     "scipy",
     "torch>=2.6.0",
-    "torchtyping",
     "tqdm",
     "transformers",
     "typer",
