@@ -195,7 +195,7 @@ def load_config(config_path: StrPath, _):
 
     with open(config_path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
-    config = apply_dotdict_recursively(config_dict)
+    config = dict_to_namespace(config_dict)
 
     return config
 
