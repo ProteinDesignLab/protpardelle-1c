@@ -651,7 +651,10 @@ class ProtpardelleTrainer:
             denom = torch.clamp((noise_level_fp32 * sigma_fp32) ** 2, min=tol)
             loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
             struct_loss = masked_mse_loss(
-                atom_coords, denoised_coords, struct_loss_mask, loss_weight
+                atom_coords.float(),
+                denoised_coords.float(),
+                struct_loss_mask.float(),
+                loss_weight,
             ).mean()
             loss = loss + struct_loss
             log_dict["struct_loss"] = struct_loss.detach().cpu().item()
