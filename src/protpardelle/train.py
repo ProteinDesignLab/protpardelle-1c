@@ -828,15 +828,19 @@ def train(
 
     if distributed is not None:
         logger.info(
-            "Distributed training: rank %d/%d using %d dataloader workers (global=%d)",
+            "Distributed training: rank %d/%d, global batch %d, local batch %d, dataloader workers %d (global=%d)",
             distributed.rank,
             distributed.world_size,
+            global_batch_size,
+            per_process_batch_size,
             max(1, effective_num_workers),
             num_workers,
         )
     else:
         logger.info(
-            "Single-process training with %d dataloader workers", effective_num_workers
+            "Single-process training: batch %d, dataloader workers %d",
+            global_batch_size,
+            effective_num_workers,
         )
 
     start_epoch, total_steps = _load_checkpoint_or_not(trainer)
