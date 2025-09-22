@@ -693,8 +693,11 @@ class ProtpardelleTrainer:
             except RuntimeError as e:
                 logger.warning("Failed to clip gradients: %s", e)
 
+            prev_scale = self.scaler.get_scale()
             self.scaler.step(self.optimizer)
             self.scaler.update()
+
+        if self.scaler.get_scale() >= prev_scale:
             self.scheduler.step()
 
         # Add train prefix to all keys for wandb logging
