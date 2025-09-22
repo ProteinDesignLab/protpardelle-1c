@@ -22,7 +22,11 @@ PROJECT_ROOT_DIR=$(python -c "from protpardelle.env import PROJECT_ROOT_DIR; pri
 
 model_name=$1
 output_dir=$2
-debug=$3
+
+if [[ "${2:-}" == "--debug" ]]; then
+    debug="--debug"
+fi
+
 config_path="${PROJECT_ROOT_DIR}/examples/training/${model_name}.yaml"
 project_name="protpardelle-1c"
 wandb_id="your-wandb-id"
