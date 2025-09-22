@@ -617,7 +617,7 @@ class ProtpardelleTrainer:
             seq_self_cond=seq_self_cond,
         )
 
-        loss = torch.tensor(0.0, device=self.device, dtype=torch.float)
+        loss = torch.tensor(0.0, device=self.device)
         log_dict: dict[str, float] = {}
 
         # Compute structure loss
@@ -642,10 +642,16 @@ class ProtpardelleTrainer:
                     -1
                 )
 
-            denom = (noise_level * self.module.sigma_data) ** 2
-            loss_weight = (
-                noise_level**2 + self.module.sigma_data**2
-            ) / torch.clamp(denom, min=tol)
+            noise_level_fp32 = noise_level.float()
+            sigma_fp32 = torch.tensor(
+                self.module.sigma_data,
+                device=self.device,
+                dtype=torch.float,
+            )
+            
+            denom = torch.clamp((noise_level_fp32 * sigma_fp32) ** 2, min=tol)
+            loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
+            loss_weight = loss_weight.to(noise_level.dtype)
             struct_loss = masked_mse_loss(
                 atom_coords, denoised_coords, struct_loss_mask, loss_weight
             ).mean()

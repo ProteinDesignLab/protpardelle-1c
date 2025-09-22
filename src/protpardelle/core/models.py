@@ -1209,7 +1209,7 @@ class Protpardelle(nn.Module):
             new_xt = xt_in + step
             return new_xt
 
-        def sample_aatype(logprobs):
+        def sample_aatype(logprobs, tol: float = 1e-8):
             # Top-p truncation
             probs = F.softmax(logprobs.clone(), dim=-1)
             sorted_prob, sorted_idxs = torch.sort(probs, descending=True)
@@ -1226,7 +1226,7 @@ class Protpardelle(nn.Module):
 
             # Apply temperature and disallowed AAs and sample
             assert temperature >= 0.0
-            scaled_logits = orig_probs.clamp(min=1e-9).log() / (temperature + 1e-4)
+            scaled_logits = orig_probs.clamp(min=tol).log() / (temperature + 1e-4)
             if disallow_aas:
                 unwanted_mask = torch.zeros(scaled_logits.shape[-1]).to(scaled_logits)
                 unwanted_mask[disallow_aas] = 1
