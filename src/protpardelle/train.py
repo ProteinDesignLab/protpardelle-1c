@@ -514,13 +514,13 @@ class ProtpardelleTrainer:
         return sigma_data
 
     def compute_loss(
-        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-9
+        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-8
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the loss for a given input batch.
 
         Args:
             input_dict (dict[str, torch.Tensor]): Input tensors for the model.
-            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-9.
+            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-8.
 
         Raises:
             NotImplementedError: If the all atom loss computation is not implemented.
@@ -641,9 +641,11 @@ class ProtpardelleTrainer:
                 struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(
                     -1
                 )
-            loss_weight = (noise_level**2 + self.module.sigma_data**2) / (
-                (noise_level * self.module.sigma_data) ** 2
-            )
+
+            denom = (noise_level * self.module.sigma_data) ** 2
+            loss_weight = (
+                noise_level**2 + self.module.sigma_data**2
+            ) / torch.clamp(denom, min=tol)
             struct_loss = masked_mse_loss(
                 atom_coords, denoised_coords, struct_loss_mask, loss_weight
             ).mean()
