@@ -201,7 +201,7 @@ def masked_mse_loss(
     """
 
     data_dims = tuple(range(1, x.ndim))
-    mse = (x - y).square() * mask
+    mse = (x - y).float().square() * mask.float()
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
     mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=tol)
@@ -642,7 +642,7 @@ class ProtpardelleTrainer:
                     -1
                 )
 
-            noise_level_fp32 = noise_level.float()
+            noise_level_fp32 = noise_level.float().clamp(min=1e-4)
             sigma_fp32 = torch.tensor(
                 self.module.sigma_data,
                 device=self.device,
@@ -650,11 +650,18 @@ class ProtpardelleTrainer:
             )
             denom = torch.clamp((noise_level_fp32 * sigma_fp32) ** 2, min=tol)
             loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
+            loss_weight = torch.nan_to_num(loss_weight, nan=0.0, posinf=1e12, neginf=0.0)
+            loss_weight = loss_weight.clamp(max=1e8)
+
             struct_loss = masked_mse_loss(
-                atom_coords.float(),
-                denoised_coords.float(),
-                struct_loss_mask.float(),
-                loss_weight,
+                torch.nan_to_num(atom_coords.float(), nan=0.0, posinf=0.0, neginf=0.0),
+                torch.nan_to_num(
+                    denoised_coords.float(), nan=0.0, posinf=0.0, neginf=0.0
+                ),
+                torch.nan_to_num(
+                    struct_loss_mask.float(), nan=0.0, posinf=0.0, neginf=0.0
+                ),
+                loss_weight.float(),
             ).mean()
             loss = loss + struct_loss
             log_dict["struct_loss"] = struct_loss.detach().cpu().item()
