@@ -1070,6 +1070,9 @@ def main(
     motif_dir: Path = typer.Option(
         Path("motifs/nanobody"), help="Directory containing motif PDBs"
     ),
+    motif_pdb: Path | None = typer.Option(
+        None, help="Path to a single motif PDB, overrides motif_dir"
+    ),
     num_samples: int = typer.Option(8, help="Number of samples to draw"),
     num_mpnn_seqs: int = typer.Option(
         8, help="Number of sequences to design with MPNN (0 to skip)"
