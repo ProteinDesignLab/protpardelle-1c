@@ -3,9 +3,8 @@
 #SBATCH --output=sample-%x.%j.out
 #SBATCH --error=sample-%x.%j.err
 #SBATCH --partition=your-partition-name
-#SBATCH --gpu_cmode=shared
 #SBATCH --gpus-per-node=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --time=3-00:00:00
 
 if command -v module >/dev/null 2>&1; then

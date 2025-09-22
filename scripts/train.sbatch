@@ -4,7 +4,6 @@
 #SBATCH --error=train-%x.%j.err
 #SBATCH --partition=your-partition-name
 #SBATCH --gpus-per-node=2
-#SBATCH --gpu_cmode=shared
 #SBATCH --cpus-per-task=16
 #SBATCH --time=3-00:00:00
 
