@@ -389,7 +389,7 @@ class ProtpardelleTrainer:
         self.scheduler.load_state_dict(checkpoint["scheduler"])
         self.scaler.load_state_dict(checkpoint["scaler"])
 
-        torch.set_rng_state(checkpoint["rng"]["torch"])
+        torch.set_rng_state(checkpoint["rng"]["torch"].cpu())
         if torch.cuda.is_available():
             if checkpoint["rng"]["cuda"] is None:
                 raise ValueError(
