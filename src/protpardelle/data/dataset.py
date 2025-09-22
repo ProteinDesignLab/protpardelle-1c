@@ -4,7 +4,6 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import math
-from collections.abc import Sequence
 from itertools import accumulate
 from pathlib import Path
 from typing import Literal
@@ -810,14 +809,14 @@ class StochasticMixedSampler(Sampler):
 
     def __init__(
         self,
-        datasets: Sequence[PDBDataset],
+        datasets: list[PDBDataset],
         mixing_ratios: list[float],
         batch_size: int,
     ) -> None:
         """Stochastic Mixed Sampler.
 
         Args:
-            datasets (Sequence[PDBDataset]): A list of datasets to sample from. The first dataset
+            datasets (list[PDBDataset]): A list of datasets to sample from. The first dataset
                 is considered the primary dataset that will be sampled without replacement.
             mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
                 The sum of all ratios should be equal to 1. The length of this list should be equal
