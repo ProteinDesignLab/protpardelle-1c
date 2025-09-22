@@ -395,7 +395,8 @@ class ProtpardelleTrainer:
                 raise ValueError(
                     "Checkpoint was trained with CUDA but current device is CPU"
                 )
-            torch.cuda.set_rng_state_all(checkpoint["rng"]["cuda"])
+            cuda_states = [state.cpu() for state in checkpoint["rng"]["cuda"]]
+            torch.cuda.set_rng_state_all(cuda_states)
         np.random.set_state(checkpoint["rng"]["numpy"])
         random.setstate(checkpoint["rng"]["python"])
 
@@ -650,7 +651,9 @@ class ProtpardelleTrainer:
             )
             denom = torch.clamp((noise_level_fp32 * sigma_fp32) ** 2, min=tol)
             loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
-            loss_weight = torch.nan_to_num(loss_weight, nan=0.0, posinf=1e12, neginf=0.0)
+            loss_weight = torch.nan_to_num(
+                loss_weight, nan=0.0, posinf=1e12, neginf=0.0
+            )
             loss_weight = loss_weight.clamp(max=1e8)
 
             struct_loss = masked_mse_loss(
