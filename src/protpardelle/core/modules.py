@@ -506,7 +506,9 @@ class LayerNorm(nn.Module):
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
+        x_fp32 = x.float()
+        y = F.layer_norm(x_fp32, x.shape[-1:], self.gamma.float(), self.beta.float())
+        return y.to(dtype=x.dtype)
 
 
 class NoiseConditioningBlock(nn.Module):
