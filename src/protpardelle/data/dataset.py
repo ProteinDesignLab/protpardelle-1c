@@ -849,9 +849,11 @@ class StochasticMixedSampler(Sampler[int]):
         else:
             self.primary_sampler = RandomSampler(datasets[0], replacement=False)
 
+        self.primary_sampler_length = len(self.primary_sampler)
+
         remaining_per_batch = self.batch_size - self.primary_samples_per_batch
         batches_per_epoch = int(
-            np.ceil(self.primary_dataset_length / self.primary_samples_per_batch)
+            np.ceil(self.primary_sampler_length / self.primary_samples_per_batch)
         )
         total_augmented_needed = max(remaining_per_batch * batches_per_epoch, 1)
 
@@ -932,6 +934,6 @@ class StochasticMixedSampler(Sampler[int]):
 
     def __len__(self) -> int:
         batches_per_epoch = int(
-            np.ceil(self.primary_dataset_length / self.primary_samples_per_batch)
+            np.ceil(self.primary_sampler_length / self.primary_samples_per_batch)
         )
         return batches_per_epoch * self.batch_size
