@@ -6,7 +6,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 import math
 from itertools import accumulate
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -14,7 +14,13 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float
-from torch.utils.data import DataLoader, Dataset, RandomSampler, Sampler
+from torch.utils.data import (
+    DataLoader,
+    Dataset,
+    DistributedSampler,
+    RandomSampler,
+    Sampler,
+)
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -789,97 +795,143 @@ class PDBDataset(Dataset):
             return data
 
 
-class StochasticMixedSampler(Sampler):
-    """Stochastic Mixed Sampler.
-
-    A sampler to draw samples from multiple datasets. This sampler is specifically designed
-    to accommodate a setup where there's one primary dataset that needs to be fully iterated
-    without replacement (typically primary examples) and several augmented datasets where samples
-    can be drawn with replacement. The ratio of drawing from each dataset is determined by the
-    provided mixing ratios, but we are guaranteed to draw a fixed number of samples from the
-    primary dataset (equal to int(batch_size * mixing_ratios[0])).
-
-    Attributes:
-        primary_dataset_length (int): The length of the primary dataset.
-        primary_samples_per_batch (int): The number of primary dataset examples we draw per batch.
-        offsets (list[int]): The accumulated offset of each dataset when all datasets are concatenated.
-        samplers (list[Sampler]): A list of samplers for each dataset. The primary dataset uses a
-            RandomSampler without replacement while all others use a RandomSampler with replacement.
-    """
+class StochasticMixedSampler(Sampler[int]):
+    """Sampler that mixes primary and augmented datasets with optional DDP support."""
 
     def __init__(
         self,
         datasets: list[PDBDataset],
         mixing_ratios: list[float],
         batch_size: int,
+        *,
+        num_replicas: int = 1,
+        rank: int = 0,
+        seed: int = 0,
     ) -> None:
-        """Stochastic Mixed Sampler.
-
-        Args:
-            datasets (list[PDBDataset]): A list of datasets to sample from. The first dataset
-                is considered the primary dataset that will be sampled without replacement.
-            mixing_ratios (list[float]): A list of floats representing the mixing ratio for each dataset.
-                The sum of all ratios should be equal to 1. The length of this list should be equal
-                to the number of datasets.
-            batch_size (int): The batch size for which samples need to be drawn.
-        """
+        if len(datasets) == 0:
+            raise ValueError("StochasticMixedSampler requires at least one dataset")
+        if len(datasets) != len(mixing_ratios):
+            raise ValueError(
+                "Mixing ratios must be provided for every dataset (primary + augmented)"
+            )
+        if not np.isclose(sum(mixing_ratios), 1.0):
+            raise ValueError("Mixing ratios for datasets must sum to 1")
+        if num_replicas < 1:
+            raise ValueError("num_replicas must be >= 1")
+        if rank < 0 or rank >= num_replicas:
+            raise ValueError("rank must be in [0, num_replicas)")
 
         self.datasets = datasets
         self.mixing_ratios = np.array(mixing_ratios)
         self.batch_size = batch_size
         self.primary_dataset_length = len(datasets[0])
-
-        # Deterministic number of primary examples to draw per batch
         self.primary_samples_per_batch = int(batch_size * mixing_ratios[0])
         self.offsets = [0] + list(accumulate(len(dataset) for dataset in datasets[:-1]))
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.seed = seed
+        self.epoch = 0
 
-        assert (
-            sum(mixing_ratios) == 1
-        ), "Mixing ratios for drawing samples from datasets do not sum to 1."
+        if self.primary_samples_per_batch == 0:
+            raise ValueError(
+                "Primary dataset mixing ratio too small for the configured batch size"
+            )
 
-        # Samplers
-        self.samplers = [
-            RandomSampler(datasets[0], replacement=False)
-        ]  # primary dataset without replacement
-        self.samplers.extend(
-            [RandomSampler(dataset, replacement=True) for dataset in datasets[1:]]
-        )  # Augmented datasets with replacement
+        if num_replicas > 1:
+            self.primary_sampler: Sampler[int] = DistributedSampler(
+                datasets[0],
+                num_replicas=num_replicas,
+                rank=rank,
+                shuffle=True,
+                seed=seed,
+                drop_last=False,
+            )
+        else:
+            self.primary_sampler = RandomSampler(datasets[0], replacement=False)
+
+        remaining_per_batch = self.batch_size - self.primary_samples_per_batch
+        batches_per_epoch = int(
+            np.ceil(self.primary_dataset_length / self.primary_samples_per_batch)
+        )
+        total_augmented_needed = max(remaining_per_batch * batches_per_epoch, 1)
+
+        self.augmented_samplers: list[RandomSampler]
+        self.augmented_samplers = [
+            RandomSampler(
+                dataset,
+                replacement=True,
+                num_samples=total_augmented_needed,
+            )
+            for dataset in datasets[1:]
+        ]
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set epoch for deterministic shuffling across distributed processes."""
+
+        self.epoch = epoch
+
+    def _next_primary(self, iterator) -> int | None:
+        try:
+            return next(iterator)
+        except StopIteration:
+            return None
+
+    def _next_augmented(
+        self, iterator, sampler: RandomSampler
+    ) -> tuple[int | None, Any]:
+        try:
+            sample = next(iterator)
+            return sample, iterator
+        except StopIteration:
+            iterator = iter(sampler)
+            try:
+                sample = next(iterator)
+            except StopIteration:
+                return None, iterator
+            return sample, iterator
 
     def __iter__(self):
-        iterators = [iter(sampler) for sampler in self.samplers]
+        if isinstance(self.primary_sampler, DistributedSampler):
+            self.primary_sampler.set_epoch(self.epoch)
+
+        primary_iter = iter(self.primary_sampler)
+        augmented_iters = [iter(sampler) for sampler in self.augmented_samplers]
+
+        rng = np.random.default_rng(self.seed + self.epoch)
 
         while True:
-            batch_indices = []
+            batch_indices: list[int] = []
 
-            # Draw the fixed number of primary dataset examples
             for _ in range(self.primary_samples_per_batch):
-                primary_sample = next(iterators[0], None)
-                if primary_sample is None:  # If primary dataset is exhausted
-                    return  # This will end the iterator
-                batch_indices.append(primary_sample + self.offsets[0])
+                sample = self._next_primary(primary_iter)
+                if sample is None:
+                    return
+                batch_indices.append(sample + self.offsets[0])
 
-            # Calculate the remaining size of the batch
-            remaining_size = self.batch_size - self.primary_samples_per_batch
-            if remaining_size > 0:
-                # Randomly determine number of instances from the augmented datasets for this batch
-                num_samples = np.random.multinomial(
-                    remaining_size, self.mixing_ratios[1:] / sum(self.mixing_ratios[1:])
-                )
+            remaining_size = self.batch_size - len(batch_indices)
+            if remaining_size > 0 and len(self.augmented_samplers) > 0:
+                probs = self.mixing_ratios[1:]
+                probs = probs / probs.sum()
+                allocations = rng.multinomial(remaining_size, probs)
+                for aug_idx, count in enumerate(allocations):
+                    if count == 0:
+                        continue
+                    sampler = self.augmented_samplers[aug_idx]
+                    iterator = augmented_iters[aug_idx]
+                    for _ in range(count):
+                        sample, iterator = self._next_augmented(iterator, sampler)
+                        if sample is None:
+                            break
+                        batch_indices.append(sample + self.offsets[aug_idx + 1])
+                    augmented_iters[aug_idx] = iterator
 
-                for i, num in enumerate(num_samples, start=1):
-                    batch_indices.extend(
-                        [
-                            next(iterators[i], None) + self.offsets[i]
-                            for _ in range(num)
-                            if next(iterators[i], None) is not None
-                        ]
-                    )
+            if not batch_indices:
+                return
 
-            # Yield the indices for this batch
             yield from batch_indices
 
     def __len__(self) -> int:
-        return (
-            int(np.ceil(len(self.datasets[0]) / self.primary_samples_per_batch))
-            * self.batch_size
+        batches_per_epoch = int(
+            np.ceil(self.primary_dataset_length / self.primary_samples_per_batch)
         )
+        return batches_per_epoch * self.batch_size

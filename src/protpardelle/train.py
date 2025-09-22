@@ -3,12 +3,15 @@
 Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
 """
 
+import os
 import random
 import subprocess
 from contextlib import nullcontext
+from dataclasses import dataclass
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
@@ -45,6 +48,111 @@ from protpardelle.utils import (
 logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+@dataclass
+class DistributedContext:
+    """Container for distributed training metadata."""
+
+    rank: int
+    local_rank: int
+    world_size: int
+
+    @property
+    def is_main(self) -> bool:
+        """Return True if the current process is the primary (rank 0)."""
+
+        return self.rank == 0
+
+
+def _parse_device(device: Device | None) -> torch.device | None:
+    """Convert a CLI device argument into a torch.device when possible."""
+
+    if device is None:
+        return None
+    if isinstance(device, torch.device):
+        return device
+    try:
+        return torch.device(device)
+    except (TypeError, RuntimeError) as exc:  # pragma: no cover - defensive logging
+        raise ValueError(f"Invalid device specification: {device}") from exc
+
+
+def _init_distributed_if_needed(
+    requested_device: torch.device | None,
+) -> tuple[torch.device | None, DistributedContext | None]:
+    """Initialize torch.distributed if launched with multiple processes.
+
+    Args:
+        requested_device (torch.device | None): Optional device requested via CLI.
+
+    Returns:
+        tuple[torch.device | None, DistributedContext | None]: Possibly updated device and
+            the distributed context when multi-process training is active.
+    """
+
+    if not dist.is_available():
+        return requested_device, None
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return requested_device, None
+
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend, init_method="env://")
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        resolved_device = torch.device(f"cuda:{local_rank}")
+    else:
+        resolved_device = torch.device("cpu")
+
+    if requested_device is not None and requested_device != resolved_device:
+        logger.warning(
+            "Overriding requested device %s with local rank device %s for DDP.",
+            requested_device,
+            resolved_device,
+        )
+
+    return resolved_device, DistributedContext(
+        rank=rank, local_rank=local_rank, world_size=world_size
+    )
+
+
+def _cleanup_distributed(context: DistributedContext | None) -> None:
+    """Tear down the distributed process group if it was initialized."""
+
+    if context is None:
+        return
+    if dist.is_available() and dist.is_initialized():
+        try:
+            dist.barrier()
+        except RuntimeError as exc:  # Some ranks may have crashed already.
+            logger.debug("Skipping distributed barrier during cleanup: %s", exc)
+        try:
+            dist.destroy_process_group()
+        except RuntimeError as exc:
+            logger.debug("Failed to destroy process group cleanly: %s", exc)
+
+
+def _distributed_mean(
+    log_dict: dict[str, float],
+    device: torch.device,
+    context: DistributedContext | None,
+) -> dict[str, float]:
+    """Average scalar metrics across distributed processes."""
+
+    if context is None or len(log_dict) == 0:
+        return log_dict
+
+    keys = sorted(log_dict.keys())
+    values = torch.tensor([log_dict[k] for k in keys], device=device)
+    dist.all_reduce(values, op=dist.ReduceOp.AVG)
+    return {k: values[i].item() for i, k in enumerate(keys)}
 
 
 def masked_cross_entropy_loss(
@@ -108,28 +216,58 @@ class ProtpardelleTrainer:
         self,
         config: TrainingConfig,
         device: Device,
+        *,
+        batch_size_override: int | None = None,
+        distributed: DistributedContext | None = None,
     ) -> None:
         """Initialize the ProtpardelleTrainer.
 
         Args:
             config (TrainingConfig): The training configuration.
             device (Device): The device to train on.
+            batch_size_override (int | None, optional): Per-process batch size for distributed
+                training. Defaults to None.
+            distributed (DistributedContext | None, optional): Metadata about the distributed
+                setup, if any. Defaults to None.
         """
 
         self.config = config
+        self.distributed = distributed
+        self.is_main_process = distributed is None or distributed.is_main
+        self.batch_size = batch_size_override or self.config.train.batch_size
         if device is None:
             device = get_default_device()
 
         # Initialize model
         model = Protpardelle(config, device)
-        if torch.cuda.is_available():
-            logger.info("Device count: %d", torch.cuda.device_count())
-            logger.info("Current device: %d", torch.cuda.current_device())
-            if torch.cuda.device_count() > 1:
-                # TODO: Implement DDP
-                model = nn.DataParallel(model)  # type: ignore
-                logger.info("Using DataParallel")
-        model.to(device)
+        if self.distributed is not None:
+            logger.info(
+                "Initialized DistributedDataParallel rank=%d local_rank=%d world_size=%d",
+                self.distributed.rank,
+                self.distributed.local_rank,
+                self.distributed.world_size,
+            )
+            model.to(device)
+            if device.type == "cuda":
+                model = nn.parallel.DistributedDataParallel(  # type: ignore[assignment]
+                    model,
+                    device_ids=[device.index],
+                    output_device=device.index,
+                    broadcast_buffers=False,
+                    gradient_as_bucket_view=True,
+                    find_unused_parameters=True,
+                )
+            else:
+                model = nn.parallel.DistributedDataParallel(  # type: ignore[assignment]
+                    model,
+                    broadcast_buffers=False,
+                    find_unused_parameters=True,
+                )
+        else:
+            if torch.cuda.is_available():
+                logger.info("Device count: %d", torch.cuda.device_count())
+                logger.info("Current device: %d", torch.cuda.current_device())
+            model.to(device)
         model.train()
         self.model = model
 
@@ -140,8 +278,14 @@ class ProtpardelleTrainer:
     @property
     def module(self) -> Protpardelle:
         """Get the underlying Protpardelle model on the fly."""
+        parallel_wrappers = (
+            nn.DataParallel,
+            nn.parallel.DistributedDataParallel,
+        )
         return (
-            self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+            self.model.module
+            if isinstance(self.model, parallel_wrappers)
+            else self.model
         )
 
     @property
@@ -303,21 +447,32 @@ class ProtpardelleTrainer:
         ]
         dataset: ConcatDataset[PDBDataset] = ConcatDataset(train_datasets)
 
+        sampler_kwargs: dict[str, int] = {}
+        if self.distributed is not None:
+            sampler_kwargs = {
+                "num_replicas": self.distributed.world_size,
+                "rank": self.distributed.rank,
+            }
+        seed = self.config.train.seed
+        if seed is not None:
+            sampler_kwargs["seed"] = seed
+
         sampler = StochasticMixedSampler(
             train_datasets,
             self.config.data.mixing_ratios,
-            batch_size=self.config.train.batch_size,
+            batch_size=self.batch_size,
+            **sampler_kwargs,
         )
 
         dataloader = DataLoader(
             dataset,
-            batch_size=self.config.train.batch_size,
+            batch_size=self.batch_size,
             num_workers=num_workers,
             pin_memory=self.device.type == "cuda",
             shuffle=False,  # the sampler takes care of shuffling
             sampler=sampler,
             drop_last=True,
-            persistent_workers=not debug,
+            persistent_workers=num_workers > 0 and not debug,
         )
 
         if self.config.data.auto_calc_sigma_data:
@@ -336,13 +491,24 @@ class ProtpardelleTrainer:
             float: The computed sigma data.
         """
 
+        if self.distributed is not None and not self.is_main_process:
+            sigma_tensor = torch.zeros(1, device=self.device)
+            dist.broadcast(sigma_tensor, src=0)
+            sigma = float(sigma_tensor.item())
+            self.config.data.sigma_data = sigma
+            return sigma
+
         logger.info(
             "Automatically computing sigma_data for %d examples",
             self.config.data.n_examples_for_sigma_data,
         )
         sigma_data = calc_sigma_data(dataset, self.config, num_workers=num_workers)
+        sigma_tensor = torch.tensor([sigma_data], device=self.device)
 
-        # Overwrite config with estimated sigma_data
+        if self.distributed is not None:
+            dist.broadcast(sigma_tensor, src=0)
+            sigma_data = float(sigma_tensor.item())
+
         self.config.data.sigma_data = sigma_data
 
         return sigma_data
@@ -553,6 +719,8 @@ def _initialize_training_parameters(trainer: ProtpardelleTrainer) -> tuple[int, 
     # Set seeds if no rng provided
     seed = trainer.config.train.seed
     if seed is not None:
+        if trainer.distributed is not None:
+            seed += trainer.distributed.rank
         seed_everything(
             seed, freeze_cuda=True
         )  # use deterministic pytorch for training
@@ -621,94 +789,157 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
+    if project_name == "None":
+        project_name = None
+    if wandb_id == "None":
+        wandb_id = None
+
     config = load_config(config_path, TrainingConfig)
 
+    requested_device = _parse_device(device)
+    resolved_device, distributed = _init_distributed_if_needed(requested_device)
+    final_device = resolved_device or requested_device or get_default_device()
+
+    global_batch_size = config.train.batch_size
+    if distributed is not None:
+        if global_batch_size % distributed.world_size != 0:
+            raise ValueError(
+                "train.batch_size must be divisible by the number of distributed processes"
+            )
+        per_process_batch_size = global_batch_size // distributed.world_size
+        if per_process_batch_size == 0:
+            raise ValueError("Per-process batch size must be at least 1")
+    else:
+        per_process_batch_size = global_batch_size
+
+    effective_num_workers = num_workers
     if debug:
         logger.debug("Debug mode is enabled")
-        num_workers = 0  # override num_workers to 0 in debug mode
+        effective_num_workers = 0
+    elif distributed is not None and num_workers > 0:
+        effective_num_workers = max(1, num_workers // distributed.world_size)
 
-    trainer = ProtpardelleTrainer(config, device)
+    trainer = ProtpardelleTrainer(
+        config,
+        final_device,
+        batch_size_override=per_process_batch_size,
+        distributed=distributed,
+    )
 
     start_epoch, total_steps = _load_checkpoint_or_not(trainer)
 
-    # Set output directories for wandb
     output_dir = norm_path(output_dir)
 
-    # Create dataloader
     dataloader = trainer.get_dataloader(
-        overfit=overfit, num_workers=num_workers, debug=debug
+        overfit=overfit, num_workers=effective_num_workers, debug=debug
     )
 
-    # Init wandb and logging for process 0
-    wandb.init(
-        mode="disabled" if debug else "online",
-        project=project_name,
-        entity=wandb_id,
-        name=exp_name,
-        job_type="debug" if debug else "train",
-        config=trainer.config,  # type: ignore
-        dir=output_dir,
-    )
-    if wandb.run is None:
-        raise RuntimeError("Failed to initialize wandb run")
-    run_name = wandb.run.name
-    run_dir = wandb.run.dir
-    run_id = wandb.run.id
+    wandb_kwargs = {
+        "mode": "disabled" if debug else "online",
+        "name": exp_name,
+        "job_type": "debug" if debug else "train",
+        "config": trainer.config,  # type: ignore[arg-type]
+        "dir": output_dir,
+    }
+    if project_name is not None:
+        wandb_kwargs["project"] = project_name
+    if wandb_id is not None:
+        wandb_kwargs["entity"] = wandb_id
+    if distributed is not None and not trainer.is_main_process and not debug:
+        wandb_kwargs["mode"] = "disabled"
 
-    # Assert variables cannot be None if wandb runs properly
-    assert run_name is not None
-    assert run_dir is not None
-    assert run_id is not None
+    run_name: str
+    run_dir: str | None = None
+    run_id: str | None = None
 
-    logger.info(
-        "Beginning: run_name=%s, run_id=%s, device=%s",
-        run_name,
-        run_id,
-        trainer.device,
-    )
-    logger.info(
-        "Training configuration: %s, %s, %s", config_path, output_dir, project_name
-    )
+    wandb_run = None
+    if trainer.is_main_process or debug:
+        wandb_run = wandb.init(**wandb_kwargs)
+        if wandb_run is None:
+            raise RuntimeError("Failed to initialize wandb run")
+        if wandb_run.name is None or wandb_run.dir is None or wandb_run.id is None:
+            raise RuntimeError("wandb returned an incomplete run object")
+        run_name = wandb_run.name
+        run_dir = wandb_run.dir
+        run_id = wandb_run.id
+    else:
+        # Non-main ranks reuse exp_name for logging clarity
+        run_name = exp_name or (f"run-rank{distributed.rank}" if distributed else "run")
 
-    log_dir = output_dir / (f"{run_name}_debug" if debug else run_name)
-    checkpoint_dir = log_dir / "checkpoints"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    if trainer.is_main_process:
+        logger.info(
+            "Beginning: run_name=%s, run_id=%s, device=%s",
+            run_name,
+            run_id,
+            trainer.device,
+        )
+        logger.info(
+            "Training configuration: %s, %s, %s", config_path, output_dir, project_name
+        )
 
-    # Preserve config
-    with open(log_dir / "config.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(namespace_to_dict(trainer.config), f)
+    log_dir = None
+    checkpoint_dir = None
+    if trainer.is_main_process:
+        log_dir = output_dir / (f"{run_name}_debug" if debug else run_name)
+        checkpoint_dir = log_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    trainer.log_training_info()
-    with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
-        for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
-            for input_dict in tqdm(
-                dataloader, desc=f"epoch {epoch}/{trainer.config.train.max_epochs}"
-            ):
-                input_dict = {k: v.to(trainer.device) for k, v in input_dict.items()}
-                input_dict["step"] = total_steps
-                log_dict = trainer.train_step(input_dict)
-                log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
-                log_dict["epoch"] = epoch
-                wandb.log(log_dict, step=total_steps)
-                total_steps += 1
+        with open(log_dir / "config.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(namespace_to_dict(trainer.config), f)
 
-            with torch.no_grad():  # per epoch
-                # Save checkpoint
-                if (
-                    epoch % trainer.config.train.checkpoint_freq == 0
-                    or epoch in trainer.config.train.checkpoints
-                ):
-                    trainer.module.eval()
-                    trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
-                    trainer.module.train()
+        trainer.log_training_info()
 
-    wandb.finish()
-    subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
-    logger.info(
-        "Training finished. (run name '%s', run id '%s')",
-        run_name,
-        run_id,
-    )
+    try:
+        with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
+            for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
+                if hasattr(dataloader.sampler, "set_epoch"):
+                    dataloader.sampler.set_epoch(epoch)
+
+                progress = tqdm(
+                    dataloader,
+                    desc=f"epoch {epoch}/{trainer.config.train.max_epochs}",
+                    disable=not trainer.is_main_process,
+                )
+                for input_dict in progress:
+                    input_dict = {
+                        k: v.to(trainer.device) for k, v in input_dict.items()
+                    }
+                    input_dict["step"] = total_steps
+                    log_dict = trainer.train_step(input_dict)
+                    log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
+                    log_dict["epoch"] = epoch
+                    log_dict = _distributed_mean(log_dict, trainer.device, distributed)
+                    if trainer.is_main_process:
+                        wandb.log(log_dict, step=total_steps)
+                    total_steps += 1
+
+                with torch.no_grad():
+                    should_checkpoint = (
+                        trainer.is_main_process
+                        and checkpoint_dir is not None
+                        and (
+                            epoch % trainer.config.train.checkpoint_freq == 0
+                            or epoch in trainer.config.train.checkpoints
+                        )
+                    )
+                    if should_checkpoint:
+                        trainer.module.eval()
+                        trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
+                        trainer.module.train()
+
+                if distributed is not None:
+                    dist.barrier()
+    finally:
+        if wandb_run is not None:
+            wandb.finish()
+        if trainer.is_main_process and run_dir is not None and log_dir is not None:
+            subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
+            logger.info(
+                "Training finished. (run name '%s', run id '%s')",
+                run_name,
+                run_id,
+            )
+        _cleanup_distributed(distributed)
 
 
 @app.command()
