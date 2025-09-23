@@ -203,7 +203,7 @@ class ProtpardelleTrainer:
     def __init__(
         self,
         config: TrainingConfig,
-        device: Device = None,
+        device: torch.device,
         batch_size_override: int | None = None,
         distributed: DistributedContext | None = None,
     ) -> None:
@@ -226,9 +226,6 @@ class ProtpardelleTrainer:
             if batch_size_override is not None
             else self.config.train.batch_size
         )
-        if device is None:
-            device = get_default_device()
-        device = torch.device(device)
 
         # Initialize model
         model = Protpardelle(config, device)

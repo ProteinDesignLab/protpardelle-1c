@@ -62,8 +62,7 @@ class ProtpardelleSampler:
     def __init__(
         self,
         model: Protpardelle,
-        device: Device = None,
-        num_mpnn_seqs: int = 8,
+        device: torch.device,
     ): ...
 
 
