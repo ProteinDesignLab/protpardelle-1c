@@ -119,12 +119,12 @@ def _cleanup_distributed(context: DistributedContext | None) -> None:
     if dist.is_available() and dist.is_initialized():
         try:
             dist.barrier()
-        except RuntimeError as exc:  # Some ranks may have crashed already.
-            logger.debug("Skipping distributed barrier during cleanup: %s", exc)
+        except RuntimeError as e:  # Some ranks may have crashed already.
+            logger.debug("Skipping distributed barrier during cleanup: %s", e)
         try:
             dist.destroy_process_group()
-        except RuntimeError as exc:
-            logger.debug("Failed to destroy process group cleanly: %s", exc)
+        except RuntimeError as e:
+            logger.debug("Failed to destroy process group cleanly: %s", e)
 
 
 def _log_distributed_mean(
@@ -486,6 +486,7 @@ class ProtpardelleTrainer:
             self.config.data.n_examples_for_sigma_data,
         )
         sigma_data = calc_sigma_data(dataset, self.config, num_workers=num_workers)
+        logger.info("Computed sigma_data: %.4f", sigma_data)
         sigma_tensor = torch.tensor([sigma_data], device=self.device)
 
         if self.distributed is not None:
@@ -734,7 +735,7 @@ def _load_checkpoint_or_not(trainer: ProtpardelleTrainer) -> tuple[int, int]:
     try:
         start_epoch, total_steps = trainer.load_checkpoint(checkpoint_path)
         logger.info(
-            "Resumed from checkpoint: %s (epoch %d, total_steps %d)",
+            "Resumed from checkpoint: %s (epoch=%d, total_steps=%d)",
             checkpoint_path,
             start_epoch,
             total_steps,
@@ -812,11 +813,11 @@ def train(
 
     if distributed is not None:
         logger.info(
-            "Distributed training: rank %d/%d, global batch %d, local batch %d, dataloader workers %d (global=%d)",
+            "Distributed training: rank %d/%d; local/global batch %d/%d; local/global dataloader workers %d/%d",
             distributed.rank,
             distributed.world_size,
-            global_batch_size,
             per_process_batch_size,
+            global_batch_size,
             max(1, effective_num_workers),
             num_workers,
         )
@@ -866,7 +867,7 @@ def train(
 
     if trainer.is_main_process:
         logger.info(
-            "Beginning: run_name=%s, run_id=%s, device=%s",
+            "Beginning: run_name %s, run_id %s, device %s",
             run_name,
             run_id,
             trainer.device,
@@ -933,7 +934,7 @@ def train(
         if trainer.is_main_process and run_dir is not None and log_dir is not None:
             subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
             logger.info(
-                "Training finished. (run name '%s', run id '%s')",
+                "Training finished. (run_name %s, run_id %s)",
                 run_name,
                 run_id,
             )
