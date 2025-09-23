@@ -1,26 +1,34 @@
 #!/bin/bash
 #SBATCH --output=train-%x.%j.out
 #SBATCH --error=train-%x.%j.err
-#SBATCH --partition=possu
-#SBATCH --nodelist=sh04-10n01
+#SBATCH --partition=your-partition-name
 #SBATCH --gpus-per-node=1
 #SBATCH --gpu_cmode=shared
 #SBATCH --cpus-per-task=8
 #SBATCH --time=3-00:00:00
 
-source ~/.bashrc
+if command -v module >/dev/null 2>&1; then
+    module load gcc/12.4.0
+fi
 
-source /scratch/users/tianyulu/envs/protpardelle/bin/activate
+if [ -z "$ENV_DIR" ]; then
+    conda activate protpardelle
+else
+    source "$ENV_DIR"/protpardelle/bin/activate
+fi
+
+PROJECT_ROOT_DIR=$(python -c "from protpardelle.env import PROJECT_ROOT_DIR; print(PROJECT_ROOT_DIR)")
 
 model_name=$1
-debug=$2
-config_path="/home/users/tianyulu/code/protpardelle-1c/examples/training/${model_name}.yaml"
+output_dir=$2
+debug=$3
+config_path="${PROJECT_ROOT_DIR}/examples/training/${model_name}.yaml"
 project_name="protpardelle-1c"
-wandb_id="tyl"
+wandb_id="your-wandb-id"
 
 WANDB__SERVICE_WAIT=300 python -m protpardelle.train \
     --config "${config_path}" \
-    --out-dir "/scratch/users/tianyulu/protpardelle-1c-experiments" \
+    --out-dir "${output_dir}" \
     --project "${project_name}" \
     --wandb-id "${wandb_id}" \
     --exp-name "${model_name}" \
