@@ -516,8 +516,8 @@ def make_crop_cond_mask_and_recenter_coords(
                         motif_aatype_str
                     ]
                     tip_atom_idx_atom37 = [
-                        residue_constants.atom_order.get(atype)
-                        for atype in tip_atomtypes
+                        residue_constants.atom_order[atom]
+                        for atom in tip_atomtypes
                     ]
 
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)

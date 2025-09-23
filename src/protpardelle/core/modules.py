@@ -506,16 +506,7 @@ class LayerNorm(nn.Module):
         self.register_buffer("beta", torch.zeros(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x_fp32 = x.float()
-        mean = x_fp32.mean(dim=-1, keepdim=True)
-        var = x_fp32.var(dim=-1, keepdim=True, unbiased=False)
-        inv_std = torch.rsqrt(var + 1e-5)
-        normalized = (x_fp32 - mean) * inv_std
-        if self.gamma is not None:
-            normalized = normalized * self.gamma.float()
-        if self.beta is not None:
-            normalized = normalized + self.beta.float()
-        return normalized.to(dtype=x.dtype)
+        return F.layer_norm(x, x.shape[-1:], self.gamma, self.beta)
 
 
 class NoiseConditioningBlock(nn.Module):
@@ -1243,9 +1234,9 @@ class NoiseConditionalProteinMPNN(nn.Module):
         self.vocab_size = vocab_size
         self.time_cond_dim = time_cond_dim
         self.bb_idxs_if_atom37 = [
-            residue_constants.atom_order[a] for a in ["N", "CA", "C", "O"]
+            residue_constants.atom_order[atom] for atom in ["N", "CA", "C", "O"]
         ]
-        self.ca_idxs_if_atom37 = [residue_constants.atom_order[a] for a in ["CA"]]
+        self.ca_idxs_if_atom37 = [residue_constants.atom_order[atom] for atom in ["CA"]]
 
         self.mpnn = ProteinMPNN(
             num_letters=vocab_size,

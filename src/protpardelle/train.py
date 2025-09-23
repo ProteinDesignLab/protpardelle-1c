@@ -201,7 +201,7 @@ def masked_mse_loss(
     """
 
     data_dims = tuple(range(1, x.ndim))
-    mse = (x - y).float().square() * mask.float()
+    mse = (x - y).square() * mask
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
     mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=tol)
@@ -515,13 +515,13 @@ class ProtpardelleTrainer:
         return sigma_data
 
     def compute_loss(
-        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-8
+        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-6
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the loss for a given input batch.
 
         Args:
             input_dict (dict[str, torch.Tensor]): Input tensors for the model.
-            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-8.
+            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-6.
 
         Raises:
             NotImplementedError: If the all atom loss computation is not implemented.
@@ -622,13 +622,13 @@ class ProtpardelleTrainer:
         log_dict: dict[str, float] = {}
 
         # Compute structure loss
-        if self.config.model.task in [
+        if self.config.model.task in {
             "backbone",
             "allatom",
             "ai-allatom",
             "ai-allatom-nomask",
             "codesign",
-        ]:
+        }:
             if self.config.model.task == "backbone":
                 struct_loss_mask = torch.ones_like(
                     atom_coords
@@ -643,28 +643,17 @@ class ProtpardelleTrainer:
                     -1
                 )
 
-            noise_level_fp32 = noise_level.float().clamp(min=1e-4)
+            noise_level_fp32 = noise_level.float()
             sigma_fp32 = torch.tensor(
                 self.module.sigma_data,
                 device=self.device,
                 dtype=torch.float,
             )
-            denom = torch.clamp((noise_level_fp32 * sigma_fp32) ** 2, min=tol)
+            denom = (noise_level_fp32 * sigma_fp32).square().clamp(min=tol)
             loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
-            loss_weight = torch.nan_to_num(
-                loss_weight, nan=0.0, posinf=1e12, neginf=0.0
-            )
-            loss_weight = loss_weight.clamp(max=1e8)
 
             struct_loss = masked_mse_loss(
-                torch.nan_to_num(atom_coords.float(), nan=0.0, posinf=0.0, neginf=0.0),
-                torch.nan_to_num(
-                    denoised_coords.float(), nan=0.0, posinf=0.0, neginf=0.0
-                ),
-                torch.nan_to_num(
-                    struct_loss_mask.float(), nan=0.0, posinf=0.0, neginf=0.0
-                ),
-                loss_weight.float(),
+                atom_coords, denoised_coords, struct_loss_mask, loss_weight
             ).mean()
             loss = loss + struct_loss
             log_dict["struct_loss"] = struct_loss.detach().cpu().item()
@@ -811,11 +800,6 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
-    if project_name == "None":
-        project_name = None
-    if wandb_id == "None":
-        wandb_id = None
-
     config = load_config(config_path, TrainingConfig)
 
     requested_device = _parse_device(device)
@@ -877,13 +861,12 @@ def train(
         "mode": "disabled" if debug else "online",
         "name": exp_name,
         "job_type": "debug" if debug else "train",
-        "config": trainer.config,  # type: ignore[arg-type]
+        "config": trainer.config,  # type: ignore
         "dir": output_dir,
+        "project": project_name,
+        "entity": wandb_id,
     }
-    if project_name is not None:
-        wandb_kwargs["project"] = project_name
-    if wandb_id is not None:
-        wandb_kwargs["entity"] = wandb_id
+
     if distributed is not None and not trainer.is_main_process and not debug:
         wandb_kwargs["mode"] = "disabled"
 

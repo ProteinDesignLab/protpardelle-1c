@@ -212,7 +212,7 @@ def load_feats_from_pdb(
     protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
 
     feats = {}
-    bb_idxs = [residue_constants.atom_order[a] for a in bb_atoms]
+    bb_idxs = [residue_constants.atom_order[atom] for atom in bb_atoms]
     feats["bb_coords"] = torch.from_numpy(
         protein_obj.atom_positions[:, bb_idxs]
     ).float()

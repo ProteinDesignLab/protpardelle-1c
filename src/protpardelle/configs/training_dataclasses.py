@@ -149,7 +149,7 @@ class MPNNModel:
 
 @dataclass
 class Model:
-    # task: Literal["backbone", "allatom", "seqdes", "codesign", "ai-allatom-nomask"]
+    # task: Literal["backbone", "allatom", "seqdes", "codesign"]
     task: str
     # pretrained_modules: list[Literal["struct_model", "mpnn_model"]]
     pretrained_modules: list[str]
