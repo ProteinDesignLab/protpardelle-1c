@@ -154,7 +154,7 @@ We recommend reading and running the example sampling configs under `examples/sa
 python -m protpardelle.sample examples/sampling/00_unconditional.yaml --num-samples 8 --num-mpnn-seqs 0
 
 # Partial diffusion
-python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-pdb examples/motifs/nanobody/7eow_CDR3_atom_rot_128.pdb --num-samples 8 --num-mpnn-seqs 0
 
 # Motif scaffolding
 python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
