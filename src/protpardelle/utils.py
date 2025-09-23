@@ -158,36 +158,18 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
 
 
 @overload
-def load_config_(
+def load_config(
     config_path: StrPath, config_dataclass: type[RunningConfig]
 ) -> RunningConfig: ...
 @overload
-def load_config_(
+def load_config(
     config_path: StrPath, config_dataclass: type[SamplingConfig]
 ) -> SamplingConfig: ...
 @overload
-def load_config_(
+def load_config(
     config_path: StrPath, config_dataclass: type[TrainingConfig]
 ) -> TrainingConfig: ...
-def load_config_(config_path: StrPath, config_dataclass: type[Config]) -> Config:
-    """Load a YAML file and merge it into the structured Config schema.
-
-    This function uses OmegaConf to load a YAML configuration file and merge it
-    with a structured dataclass schema. The resulting configuration is validated
-    against the schema, but is actually an OmegaConf DictConfig object.
-    """
-    config_path = norm_path(config_path)
-    if not config_path.is_file():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    raw = OmegaConf.load(config_path)
-    base = OmegaConf.structured(config_dataclass)
-    merged = OmegaConf.merge(base, raw)
-
-    return cast(Config, merged)
-
-
-def load_config(config_path: StrPath, _):
+def load_config(config_path: StrPath, config_dataclass: type[Config]) -> Config:
     """Load a YAML configuration file and convert it to a namespace."""
     config_path = norm_path(config_path)
     if not config_path.is_file():
@@ -197,7 +179,7 @@ def load_config(config_path: StrPath, _):
         config_dict = yaml.safe_load(f)
     config = dict_to_namespace(config_dict)
 
-    return config
+    return cast(Config, config)
 
 
 def namespace_to_dict(namespace: argparse.Namespace) -> dict:
