@@ -253,32 +253,11 @@ def draw_samples(
         start = time.time()
         sampling_kwargs["jump_steps"] = False
         sampling_kwargs["uniform_steps"] = True
-
-        # Here, an alternative strategy is to set stage2 as partial diffusion conditioned on backbone
-        # uncomment the subsequent lines to achieve this
-        # sampling_kwargs['conditional_cfg']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['crop_conditional_guidance']['strategy'] = 'backbone'
-        # sampling_kwargs['conditional_cfg']['reconstruction_guidance']['enabled'] = False
-        # sampling_kwargs['conditional_cfg']['replacement_guidance']['enabled'] = False
-
         sampling_kwargs["partial_diffusion"]["enabled"] = True
         sampling_kwargs["partial_diffusion"]["n_steps"] = rewind_steps
         sampling_kwargs["partial_diffusion"]["pdb_file_path"] = [
             tmp_dir / f"stage1_{i}.pdb" for i in range(len(samp_coords))
         ]
-
-        residue_index, residue_index_orig, chain_index, chain_id_mapping = [], [], [], []
-        for pd_fp in sampling_kwargs["partial_diffusion"]["pdb_file_path"]:
-            pd_feats, pd_hetero_obj = load_feats_from_pdb(pd_fp, include_pos_feats=True)
-            residue_index.append(pd_feats["residue_index"][None])
-            residue_index_orig.append(pd_feats["residue_index_orig"][None])
-            chain_index.append(pd_feats["chain_index"][None])
-            chain_id_mapping.append(pd_feats["chain_id_mapping"])
-        residue_index = torch.cat(residue_index, dim=0).to(device)
-        residue_index_orig = torch.cat(residue_index_orig, dim=0).to(device)
-        chain_index = torch.cat(chain_index, dim=0).to(device)
-        seq_mask = torch.ones_like(residue_index).to(device)
 
         stage2_aux = model.sample(
             gt_aatype=samp_seq.to(device),
