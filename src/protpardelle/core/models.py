@@ -12,7 +12,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
@@ -1010,6 +1010,8 @@ class Protpardelle(nn.Module):
 
         cc = apply_dotdict_recursively(conditional_cfg)  # shorthand
         pd = apply_dotdict_recursively(partial_diffusion)
+        cc = cast(ConditionalCfg, cc)  # TODO: change actual types
+        pd = cast(PartialDiffusion, pd)
 
         if sse_cond is not None and adj_cond is not None:
             sse_cond = sse_cond.to(self.device)
