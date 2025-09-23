@@ -14,11 +14,11 @@ search_space:
   translations:
     - [0.0, 0.0, 0.0]
 motifs:
-  - 7eow_B_atom
+  - null
 motif_contigs:
   - partial_diffusion
 total_lengths:
-  - [[128, 128]]
+  - null
 hotspots:
   - null
 ssadj:
