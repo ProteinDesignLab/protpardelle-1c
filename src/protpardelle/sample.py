@@ -1098,6 +1098,7 @@ def main(
         sampling_yaml_path=sampling_yaml_path,
         project_name=project_name,
         motif_dir=motif_dir,
+        motif_pdb=motif_pdb,
         num_samples=num_samples,
         num_mpnn_seqs=num_mpnn_seqs,
         batch_size=batch_size,
