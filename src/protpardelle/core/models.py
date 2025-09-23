@@ -489,7 +489,7 @@ class CoordinateDenoiser(nn.Module):
         actual_var_data = self.sigma_data**2
         var_noisy_coords = noise_level**2 + actual_var_data
         emb = noisy_coords / unsqueeze_trailing_dims(
-            var_noisy_coords.clamp(min=1e-6).sqrt(), noisy_coords
+            var_noisy_coords.clamp(min=tol).sqrt(), noisy_coords
         )
 
         struct_noise_scaled = 0.25 * torch.log(noise_level)
@@ -573,9 +573,9 @@ class CoordinateDenoiser(nn.Module):
         out_scale = (
             noise_level
             * actual_var_data**0.5
-            / torch.sqrt(var_noisy_coords.clamp(min=1e-6))
+            / torch.sqrt(var_noisy_coords.clamp(min=tol))
         )
-        skip_scale = actual_var_data / var_noisy_coords.clamp(min=1e-6)
+        skip_scale = actual_var_data / var_noisy_coords.clamp(min=tol)
         emb = emb * unsqueeze_trailing_dims(out_scale, emb)
         skip_info = noisy_coords * unsqueeze_trailing_dims(skip_scale, noisy_coords)
         denoised_coords = emb + skip_info
@@ -1173,7 +1173,7 @@ class Protpardelle(nn.Module):
 
             mask = (sigma_in > 0).float()
             score = (xt_in - x0_pred) / unsqueeze_trailing_dims(
-                sigma_in.clamp(min=1e-6), xt_in
+                sigma_in.clamp(min=tol), xt_in
             )
             score = score * unsqueeze_trailing_dims(mask, score)
 

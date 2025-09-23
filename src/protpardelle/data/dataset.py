@@ -730,7 +730,7 @@ class PDBDataset(Dataset):
 
         orig_size = coords_in.shape[0]
         if orig_size < 5:
-            return None
+            return
         example["coords_in"] = coords_in
         example["orig_size"] = torch.ones(1) * orig_size
 
@@ -767,22 +767,6 @@ class PDBDataset(Dataset):
                 out.setdefault(k, []).append(v)
         return {k: torch.stack(v) for k, v in out.items()}
 
-    def sample(self, n=1, return_data=True, return_keys=False):
-        keys = self.pdb_keys[torch.randperm(self.__len__())[:n].long()]
-
-        if return_keys and not return_data:
-            return keys
-
-        if n == 1:
-            data = self.collate([self.get_item(keys)])
-        else:
-            data = self.collate([self.get_item(key) for key in keys])
-
-        if return_data and return_keys:
-            return data, keys
-        if return_data and not return_keys:
-            return data
-
 
 class StochasticMixedSampler(Sampler[int]):
     """Sampler that mixes primary and augmented datasets with optional DDP support."""
@@ -792,12 +776,11 @@ class StochasticMixedSampler(Sampler[int]):
         datasets: list[PDBDataset],
         mixing_ratios: list[float],
         batch_size: int,
-        *,
         num_replicas: int = 1,
         rank: int = 0,
-        seed: int = 0,
+        seed: int | None = None,
     ) -> None:
-        if len(datasets) == 0:
+        if not datasets:
             raise ValueError("StochasticMixedSampler requires at least one dataset")
         if len(datasets) != len(mixing_ratios):
             raise ValueError(
@@ -832,7 +815,7 @@ class StochasticMixedSampler(Sampler[int]):
                 num_replicas=num_replicas,
                 rank=rank,
                 shuffle=True,
-                seed=seed,
+                seed=seed if seed is not None else 0,
                 drop_last=False,
             )
         else:
@@ -846,7 +829,6 @@ class StochasticMixedSampler(Sampler[int]):
         )
         total_augmented_needed = max(remaining_per_batch * batches_per_epoch, 1)
 
-        self.augmented_samplers: list[RandomSampler]
         self.augmented_samplers = [
             RandomSampler(
                 dataset,
@@ -858,14 +840,7 @@ class StochasticMixedSampler(Sampler[int]):
 
     def set_epoch(self, epoch: int) -> None:
         """Set epoch for deterministic shuffling across distributed processes."""
-
         self.epoch = epoch
-
-    def _next_primary(self, iterator) -> int | None:
-        try:
-            return next(iterator)
-        except StopIteration:
-            return None
 
     def _next_augmented(
         self, iterator, sampler: RandomSampler
@@ -888,13 +863,15 @@ class StochasticMixedSampler(Sampler[int]):
         primary_iter = iter(self.primary_sampler)
         augmented_iters = [iter(sampler) for sampler in self.augmented_samplers]
 
-        rng = np.random.default_rng(self.seed + self.epoch)
+        rng = np.random.default_rng(
+            self.seed + self.epoch if self.seed is not None else None
+        )
 
         while True:
             batch_indices: list[int] = []
 
             for _ in range(self.primary_samples_per_batch):
-                sample = self._next_primary(primary_iter)
+                sample = next(primary_iter, None)
                 if sample is None:
                     return
                 batch_indices.append(sample + self.offsets[0])

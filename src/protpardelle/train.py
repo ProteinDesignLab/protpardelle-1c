@@ -19,6 +19,7 @@ import wandb
 import yaml
 from torch.amp import GradScaler, autocast
 from torch.distributed.elastic.multiprocessing.errors import record
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader, Dataset
 from tqdm.auto import tqdm
@@ -65,29 +66,16 @@ class DistributedContext:
         return self.rank == 0
 
 
-def _parse_device(device: Device | None) -> torch.device | None:
-    """Convert a CLI device argument into a torch.device when possible."""
-
-    if device is None:
-        return None
-    if isinstance(device, torch.device):
-        return device
-    try:
-        return torch.device(device)
-    except (TypeError, RuntimeError) as exc:  # pragma: no cover - defensive logging
-        raise ValueError(f"Invalid device specification: {device}") from exc
-
-
-def _init_distributed_if_needed(
-    requested_device: torch.device | None,
-) -> tuple[torch.device | None, DistributedContext | None]:
+def _resolve_device_with_distributed(
+    requested_device: torch.device,
+) -> tuple[torch.device, DistributedContext | None]:
     """Initialize torch.distributed if launched with multiple processes.
 
     Args:
-        requested_device (torch.device | None): Optional device requested via CLI.
+        requested_device (torch.device): Optional device requested via CLI.
 
     Returns:
-        tuple[torch.device | None, DistributedContext | None]: Possibly updated device and
+        tuple[torch.device, DistributedContext | None]: Possibly updated device and
             the distributed context when multi-process training is active.
     """
 
@@ -139,14 +127,14 @@ def _cleanup_distributed(context: DistributedContext | None) -> None:
             logger.debug("Failed to destroy process group cleanly: %s", exc)
 
 
-def _distributed_mean(
+def _log_distributed_mean(
     log_dict: dict[str, float],
     device: torch.device,
     context: DistributedContext | None,
 ) -> dict[str, float]:
     """Average scalar metrics across distributed processes."""
 
-    if context is None or len(log_dict) == 0:
+    if (context is None) or (not log_dict):
         return log_dict
 
     keys = sorted(log_dict.keys())
@@ -215,8 +203,7 @@ class ProtpardelleTrainer:
     def __init__(
         self,
         config: TrainingConfig,
-        device: Device,
-        *,
+        device: Device = None,
         batch_size_override: int | None = None,
         distributed: DistributedContext | None = None,
     ) -> None:
@@ -224,7 +211,7 @@ class ProtpardelleTrainer:
 
         Args:
             config (TrainingConfig): The training configuration.
-            device (Device): The device to train on.
+            device (Device, optional): The device to use for training. Defaults to None.
             batch_size_override (int | None, optional): Per-process batch size for distributed
                 training. Defaults to None.
             distributed (DistributedContext | None, optional): Metadata about the distributed
@@ -233,23 +220,28 @@ class ProtpardelleTrainer:
 
         self.config = config
         self.distributed = distributed
-        self.is_main_process = distributed is None or distributed.is_main
-        self.batch_size = batch_size_override or self.config.train.batch_size
+        self.is_main_process = (distributed is None) or distributed.is_main
+        self.batch_size = (
+            batch_size_override
+            if batch_size_override is not None
+            else self.config.train.batch_size
+        )
         if device is None:
             device = get_default_device()
+        device = torch.device(device)
 
         # Initialize model
         model = Protpardelle(config, device)
         if self.distributed is not None:
             logger.info(
-                "Initialized DistributedDataParallel rank=%d local_rank=%d world_size=%d",
+                "Initialized DDP rank=%d local_rank=%d world_size=%d",
                 self.distributed.rank,
                 self.distributed.local_rank,
                 self.distributed.world_size,
             )
             model.to(device)
             if device.type == "cuda":
-                model = nn.parallel.DistributedDataParallel(  # type: ignore[assignment]
+                model = DDP(  # type: ignore
                     model,
                     device_ids=[device.index],
                     output_device=device.index,
@@ -258,7 +250,8 @@ class ProtpardelleTrainer:
                     find_unused_parameters=True,
                 )
             else:
-                model = nn.parallel.DistributedDataParallel(  # type: ignore[assignment]
+                # Fall back to CPU training with DDP
+                model = DDP(  # type: ignore
                     model,
                     broadcast_buffers=False,
                     find_unused_parameters=True,
@@ -280,7 +273,7 @@ class ProtpardelleTrainer:
         """Get the underlying Protpardelle model on the fly."""
         parallel_wrappers = (
             nn.DataParallel,
-            nn.parallel.DistributedDataParallel,
+            DDP,
         )
         return (
             self.model.module
@@ -443,21 +436,15 @@ class ProtpardelleTrainer:
         ]
         dataset: ConcatDataset[PDBDataset] = ConcatDataset(train_datasets)
 
-        sampler_kwargs: dict[str, int] = {}
-        if self.distributed is not None:
-            sampler_kwargs = {
-                "num_replicas": self.distributed.world_size,
-                "rank": self.distributed.rank,
-            }
-        seed = self.config.train.seed
-        if seed is not None:
-            sampler_kwargs["seed"] = seed
-
         sampler = StochasticMixedSampler(
             train_datasets,
             self.config.data.mixing_ratios,
             batch_size=self.batch_size,
-            **sampler_kwargs,
+            num_replicas=(
+                self.distributed.world_size if self.distributed is not None else 1
+            ),
+            rank=self.distributed.rank if self.distributed is not None else 0,
+            seed=self.config.train.seed,
         )
 
         dataloader = DataLoader(
@@ -685,16 +672,11 @@ class ProtpardelleTrainer:
             self.scaler.scale(loss).backward()
 
             # Compute the gradient norm and add it to the log_dict
-            grad_norm = nn.utils.clip_grad_norm_(self.module.parameters(), float("inf"))
+            grad_norm = nn.utils.clip_grad_norm_(
+                self.module.parameters(),
+                self.config.train.grad_clip_val,
+            )
             log_dict["grad_norm"] = grad_norm.item()
-
-            try:
-                nn.utils.clip_grad_norm_(
-                    self.module.parameters(),
-                    self.config.train.grad_clip_val,
-                )
-            except RuntimeError as e:
-                logger.warning("Failed to clip gradients: %s", e)
 
             prev_scale = self.scaler.get_scale()
             self.scaler.step(self.optimizer)
@@ -795,9 +777,12 @@ def train(
 
     config = load_config(config_path, TrainingConfig)
 
-    requested_device = _parse_device(device)
-    resolved_device, distributed = _init_distributed_if_needed(requested_device)
-    final_device = resolved_device or requested_device or get_default_device()
+    if device is None:
+        requested_device = get_default_device()
+    else:
+        requested_device = torch.device(device)
+    resolved_device, distributed = _resolve_device_with_distributed(requested_device)
+    final_device = resolved_device
 
     global_batch_size = config.train.batch_size
     if distributed is not None:
@@ -921,7 +906,9 @@ def train(
                     log_dict = trainer.train_step(input_dict)
                     log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
                     log_dict["epoch"] = epoch
-                    log_dict = _distributed_mean(log_dict, trainer.device, distributed)
+                    log_dict = _log_distributed_mean(
+                        log_dict, trainer.device, distributed
+                    )
                     if trainer.is_main_process:
                         wandb.log(log_dict, step=total_steps)
                     total_steps += 1
@@ -936,9 +923,7 @@ def train(
                         )
                     )
                     if should_checkpoint:
-                        trainer.module.eval()
                         trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
-                        trainer.module.train()
 
                 if distributed is not None:
                     dist.barrier()
