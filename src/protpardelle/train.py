@@ -412,14 +412,10 @@ class ProtpardelleTrainer:
             sum(p.numel() for p in self.module.parameters() if p.requires_grad),
         )
 
-    def get_dataloader(
-        self, overfit: int = 0, num_workers: int = 0, debug: bool = False
-    ) -> DataLoader:
+    def get_dataloader(self, num_workers: int = 0, debug: bool = False) -> DataLoader:
         """Get the training dataloader.
 
         Args:
-            overfit (int, optional): If > 0, will overfit to this many examples; 0 means no overfitting.
-                Defaults to 0.
             num_workers (int, optional): Number of workers for data loading. Defaults to 0.
             debug (bool, optional): If True, will use a smaller dataset for debugging. Defaults to False.
 
@@ -434,7 +430,6 @@ class ProtpardelleTrainer:
                 pdb_path=pdb_path,
                 fixed_size=self.config.data.fixed_size,
                 mode="train",
-                overfit=overfit,
                 short_epoch=debug,
                 se3_data_augment=self.config.data.se3_data_augment,
                 translation_scale=self.config.data.translation_scale,
@@ -779,7 +774,6 @@ def train(
     project_name: str | None = None,
     wandb_id: str | None = None,
     exp_name: str | None = None,
-    overfit: int = 0,
     num_workers: int = 0,
     debug: bool = False,
 ) -> None:
@@ -792,7 +786,6 @@ def train(
         project_name (str | None, optional): Project name for wandb. Defaults to None.
         wandb_id (str | None, optional): Wandb ID for logging. Defaults to None.
         exp_name (str | None, optional): Experiment name for logging. Defaults to None.
-        overfit (int, optional): Overfit on this many examples for debugging. Defaults to 0.
         num_workers (int, optional): Number of workers for data loading. Defaults to 0.
         debug (bool, optional): Whether to enable debug mode. Defaults to False.
 
@@ -853,9 +846,7 @@ def train(
 
     output_dir = norm_path(output_dir)
 
-    dataloader = trainer.get_dataloader(
-        overfit=overfit, num_workers=effective_num_workers, debug=debug
-    )
+    dataloader = trainer.get_dataloader(num_workers=effective_num_workers, debug=debug)
 
     wandb_kwargs = {
         "mode": "disabled" if debug else "online",
@@ -972,9 +963,6 @@ def main(
     project_name: str | None = typer.Option(None, help="Project name for wandb."),
     wandb_id: str | None = typer.Option(None, help="User/entity ID for wandb."),
     exp_name: str | None = typer.Option(None, help="Run/experiment name for wandb."),
-    overfit: int = typer.Option(
-        0, min=0, help="Number of examples to overfit to (0 disables)."
-    ),
     num_workers: int = typer.Option(0, min=0, help="DataLoader num_workers."),
     debug: bool = typer.Option(False, help="Run one batch and eval offline."),
 ) -> None:
@@ -986,7 +974,6 @@ def main(
         project_name=project_name,
         wandb_id=wandb_id,
         exp_name=exp_name,
-        overfit=overfit,
         num_workers=num_workers,
         debug=debug,
     )

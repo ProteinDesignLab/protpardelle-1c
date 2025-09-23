@@ -516,8 +516,7 @@ def make_crop_cond_mask_and_recenter_coords(
                         motif_aatype_str
                     ]
                     tip_atom_idx_atom37 = [
-                        residue_constants.atom_order[atom]
-                        for atom in tip_atomtypes
+                        residue_constants.atom_order[atom] for atom in tip_atomtypes
                     ]
 
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)
@@ -555,7 +554,6 @@ class PDBDataset(Dataset):
         pdb_path: str,
         fixed_size: int,
         mode: str = "train",
-        overfit: int = 0,
         short_epoch: bool = False,
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
@@ -570,8 +568,6 @@ class PDBDataset(Dataset):
             fixed_size (int): Target length used to trim or pad per-example tensors.
             mode (str, optional): Operating mode, either "train" or "eval".
                 Defaults to "train".
-            overfit (int, optional): For debugging: if > 0, restrict the dataset
-                to a small subset of this size to intentionally overfit. Defaults to 0.
             short_epoch (bool, optional): For debugging: if True, stop an epoch early
                 to shorten iteration time. Defaults to False.
             se3_data_augment (bool, optional): Apply random SE(3) rotation and
@@ -591,7 +587,6 @@ class PDBDataset(Dataset):
         self.pdb_path = pdb_path
         self.fixed_size = fixed_size
         self.mode = mode
-        self.overfit = overfit
         self.short_epoch = short_epoch
         self.se3_data_augment = se3_data_augment
         self.translation_scale = translation_scale
@@ -642,12 +637,6 @@ class PDBDataset(Dataset):
         else:
             with open(f"{self.pdb_path}/{mode}_{subset}_pdb_keys.list", "r") as f:
                 self.pdb_keys = np.array(f.read().split("\n")[:-1])
-
-        if overfit > 0:
-            num_data = len(self.pdb_keys)
-            self.pdb_keys = np.random.choice(
-                self.pdb_keys, min(num_data, overfit), replace=False
-            ).repeat(num_data // overfit)
 
     def __len__(self):
         return min(len(self.pdb_keys), 256) if self.short_epoch else len(self.pdb_keys)
