@@ -1171,6 +1171,7 @@ class Protpardelle(nn.Module):
             guidance_in=None,
             curr_step=0,
             stage2=False,
+            tol=1e-6,
         ):
 
             mask = (sigma_in > 0).float()
