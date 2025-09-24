@@ -518,7 +518,7 @@ def sample(
 
     sampling_yaml_path = norm_path(sampling_yaml_path)
     if motif_dir is None:
-        motif_dir = Path("motifs/nanobody")  # TODO: fix this temporary patch
+        motif_dir = Path("examples/motifs/nanobody")  # TODO: fix this temporary patch
     else:
         motif_dir = norm_path(motif_dir)
 
@@ -562,6 +562,12 @@ def sample(
             runner_cfg["ssadj"],
         )
     ):
+        if motif_cfg is None and motif_pdb is None:
+            raise ValueError(
+                "Either motif_cfg in the config or motif_pdb must be specified."
+            )
+        if motif_cfg is not None and motif_pdb is not None:
+            raise ValueError("Only one of motif_cfg or motif_pdb can be specified.")
         if motif_cfg is None:
             if motif_pdb is not None:
                 motif_fps.append(norm_path(motif_pdb))
