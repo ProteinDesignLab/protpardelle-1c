@@ -67,6 +67,7 @@ class Data:
     n_aatype_tokens: int
 
     short_epoch: int
+    num_workers: int
 
     se3_data_augment: bool
     translation_scale: float

@@ -41,6 +41,7 @@ data:
   fixed_size: 512
   n_aatype_tokens: 21
   short_epoch: 0
+  num_workers: 8
   se3_data_augment: True
   translation_scale: 1.0
   chain_residx_gap: 200 # residue index gap for chain breaks for PDBs with multiple chains

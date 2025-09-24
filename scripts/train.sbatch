@@ -36,5 +36,4 @@ WANDB__SERVICE_WAIT=300 python -m protpardelle.train \
     --project-name "${project_name}" \
     --wandb-id "${wandb_id}" \
     --exp-name "${model_name}" \
-    --num-workers 8 \
     ${debug:+$debug}
