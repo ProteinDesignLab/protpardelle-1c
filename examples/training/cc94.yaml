@@ -1,7 +1,7 @@
 # cc91 but multichain
 train:
-  seed: 0
-  ckpt_path: ""
+  seed: null
+  ckpt_path: null
   batch_size: 32
   max_epochs: 10000
   eval_freq: 8000000 # seconds
@@ -40,14 +40,16 @@ data:
   mixing_ratios: [0.5, 0.5]
   fixed_size: 512
   n_aatype_tokens: 21
+  short_epoch: 0
+  num_workers: 8
   se3_data_augment: True
   translation_scale: 1.0
   chain_residx_gap: 200 # residue index gap for chain breaks for PDBs with multiple chains
   sigma_data: 10.01
   auto_calc_sigma_data: True # If true, override sigma_data with value computed at runtime
   n_examples_for_sigma_data: 500 # Number of examples to use for computing sigma_data
-  dummy_fill_mode: "CA" # fill ghost side chain atoms with one of ["zero", "CA", "CB"]
-  subset: [2.0, "designable_"] # for AI-CATH, can be 'designable' or 'all' ; for boltz_interface, the resolution cutoff
+  dummy_fill_mode: "CA" # fill ghost side chain atoms with one of ["zero", "CA"]
+  subset: [2.0, "designable"] # for AI-CATH, can be 'designable' or 'all' ; for boltz_interface, the resolution cutoff
 
 diffusion:
   training:
@@ -67,7 +69,6 @@ model:
   crop_conditional: True
   conditioning_style: "concat" # 'concat', 'noise_residual', 'concat_and_noise_residual'
   compute_loss_on_all_atoms: false
-  dummy_fill_masked_atoms: True
   struct_model:
     arch: "dit"
     n_atoms: 37

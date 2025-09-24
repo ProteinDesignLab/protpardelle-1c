@@ -2,10 +2,14 @@
 
 set -euo pipefail
 
-if ! command -v aria2c >/dev/null 2>&1; then
-    echo "Error: aria2c is required but not installed." >&2
-    exit 1
-fi
+for cmd in wget curl aria2c hf; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Error: $cmd is required but not installed." >&2
+        exit 1
+    fi
+done
+
+mkdir -p model_params
 
 # Download Protpadelle model params
 echo "Downloading Protpadelle model parameters..."
@@ -45,3 +49,9 @@ fi
 mv "$tmp/$folder" model_params/ProteinMPNN/
 rm -rf "$tmp"
 echo "ProteinMPNN weights downloaded."
+
+# Download LigandMPNN weights
+echo "Downloading LigandMPNN weights..."
+mkdir -p model_params/LigandMPNN
+curl -fsSL https://raw.githubusercontent.com/dauparas/LigandMPNN/main/get_model_params.sh | bash -s -- ./model_params/LigandMPNN
+echo "LigandMPNN weights downloaded."

@@ -3,7 +3,6 @@
 Authors: Alex Chu, Tianyu Lu
 """
 
-import logging
 from collections import defaultdict
 from pathlib import Path
 
@@ -13,21 +12,25 @@ import torch
 import typer
 from tqdm.auto import tqdm
 
-from protpardelle import utils
 from protpardelle.common import residue_constants
 from protpardelle.core import diffusion
 from protpardelle.core.models import load_model
-from protpardelle.data import dataset
+from protpardelle.data.atom import dummy_fill_noise_coords
+from protpardelle.data.dataset import (
+    apply_random_se3,
+    make_fixed_size_1d,
+    uniform_rand_rotation,
+)
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.env import (
     PROJECT_ROOT_DIR,
-    PROTPARDELLE_MODEL_PARAMS,
+    PROTPARDELLE_MODEL_CONFIGS,
+    PROTPARDELLE_MODEL_WEIGHTS,
     PROTPARDELLE_OUTPUT_DIR,
 )
-from protpardelle.utils import seed_everything, unsqueeze_trailing_dims
+from protpardelle.utils import get_logger, seed_everything, unsqueeze_trailing_dims
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -40,19 +43,17 @@ def get_backbone_mask(atom_mask):
 
 
 def batch_from_pdbs(list_of_pdbs):
-    all_feats = []
-    for pdb in list_of_pdbs:
-        all_feats.append(load_feats_from_pdb(pdb)[0])
-    max_len = max([f["aatype"].shape[0] for f in all_feats])
+    all_feats = [load_feats_from_pdb(pdb)[0] for pdb in list_of_pdbs]
+    max_len = max(f["aatype"].shape[0] for f in all_feats)
     dict_of_lists = {"seq_mask": []}
     for feats in all_feats:
         for k, v in feats.items():
-            if k in ["atom_mask", "atom_positions", "residue_index", "chain_index"]:
+            if k in {"atom_mask", "atom_positions", "residue_index", "chain_index"}:
                 if k == "atom_positions":
-                    v = dataset.apply_random_se3(
+                    v = apply_random_se3(
                         v, atom_mask=feats["atom_mask"], translation_scale=0
                     )
-                padded_feat, seq_mask = dataset.make_fixed_size_1d(v, max_len)
+                padded_feat, seq_mask = make_fixed_size_1d(v, max_len)
                 dict_of_lists.setdefault(k, []).append(padded_feat)
         dict_of_lists["seq_mask"].append(seq_mask)
     return {k: torch.stack(v) for k, v in dict_of_lists.items()}
@@ -61,7 +62,7 @@ def batch_from_pdbs(list_of_pdbs):
 def forward_ode(
     model,
     batch,
-    n_steps=100,
+    num_steps=100,
     sigma_min=0.01,
     sigma_max=800,
     verbose=False,
@@ -100,7 +101,7 @@ def forward_ode(
         init_coords[..., 1:2, :], dim=-3, keepdim=True
     )
     random_rots = torch.stack(
-        [dataset.uniform_rand_rotation(1)[0].to(device) for _ in range(batch_size)]
+        [uniform_rand_rotation(1)[0].to(device) for _ in range(batch_size)]
     )
     init_coords = torch.einsum("bij,blnj->blni", random_rots, init_coords)
 
@@ -116,7 +117,7 @@ def forward_ode(
     noise_schedule = lambda t: diffusion.noise_schedule(
         t, s_min=sigma_min / sigma_data, s_max=sigma_max / sigma_data
     )
-    timesteps = torch.linspace(0, 1, n_steps + 1)
+    timesteps = torch.linspace(0, 1, num_steps + 1)
     sigma = noise_schedule(timesteps[0])
 
     # init to sigma_min
@@ -131,17 +132,14 @@ def forward_ode(
         # For allatom-nomask models, need to inject fresh Gaussian noise
         # at dummy atom dimensions at the current noise level
         if model.task == "ai-allatom-nomask":
-            dummy_fill_mask = 1 - atom_mask
-            if x0 is not None:
-                dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                ) + x0[:, :, 1:2, :]
-            else:
-                dummy_fill_noise = (
-                    torch.randn_like(xt) * unsqueeze_trailing_dims(sigma, xt)
-                ) + xt[:, :, 1:2, :]
-            xt = xt * atom_mask
-            xt = xt + dummy_fill_noise * dummy_fill_mask
+            xt = dummy_fill_noise_coords(
+                atom37_coords=xt,
+                atom37_mask=atom_mask.squeeze(-1),
+                atom37_coords_to_use=x0,
+                noise_level=sigma,
+                mask_noise=True,
+                dummy_fill_mode="CA",
+            )
 
         x0, _, _, _ = model.forward(
             noisy_coords=xt,
@@ -151,7 +149,7 @@ def forward_ode(
             chain_index=chain_index,
             run_mpnn_model=False,
         )
-        dx_dt = (xt - x0) / utils.unsqueeze_trailing_dims(sigma, xt)
+        dx_dt = (xt - x0) / unsqueeze_trailing_dims(sigma, xt)
         dx_dt = dx_dt * atom_mask
         return dx_dt, x0
 
@@ -170,16 +168,16 @@ def forward_ode(
                 hutch_proj = (dx_dt * eps * atom_mask).sum()
                 grad = torch.autograd.grad(hutch_proj, xt)[0]
             xt.requires_grad_(False)
-            dx = dx_dt * utils.unsqueeze_trailing_dims(step_size, dx_dt)
+            dx = dx_dt * unsqueeze_trailing_dims(step_size, dx_dt)
             xt = xt + dx
             dlogp_dt = (grad * eps * atom_mask).sum((1, 2, 3))
-            dlogp = dlogp_dt * utils.unsqueeze_trailing_dims(step_size, dlogp_dt)
+            dlogp = dlogp_dt * unsqueeze_trailing_dims(step_size, dlogp_dt)
             sum_dlogp = sum_dlogp + dlogp
 
             sigma = sigma_next
 
             # Logging
-            xt_scale = sigma_data / utils.unsqueeze_trailing_dims(
+            xt_scale = sigma_data / unsqueeze_trailing_dims(
                 torch.sqrt(sigma_next**2 + sigma_data**2), xt
             )
             scaled_xt = xt * xt_scale
@@ -239,10 +237,8 @@ def runner(
     if seed is not None:
         seed_everything(seed)
 
-    config_path = PROTPARDELLE_MODEL_PARAMS / "configs" / f"{model_name}.yaml"
-    checkpoint_path = (
-        PROTPARDELLE_MODEL_PARAMS / "weights" / f"{model_name}_epoch{epoch}.pth"
-    )
+    config_path = PROTPARDELLE_MODEL_CONFIGS / f"{model_name}.yaml"
+    checkpoint_path = PROTPARDELLE_MODEL_WEIGHTS / f"{model_name}_epoch{epoch}.pth"
 
     model = load_model(config_path, checkpoint_path)
 

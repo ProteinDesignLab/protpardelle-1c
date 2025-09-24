@@ -4,16 +4,19 @@ Authors: Alex Chu, Zhaoyang Li, Tianyu Lu
 """
 
 import argparse
+import logging
 import os
 import random
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeAlias
+from typing import TYPE_CHECKING, Any, TypeAlias, cast, overload
 
 import numpy as np
 import torch
 import yaml
+
+from protpardelle.configs import Config, RunningConfig, SamplingConfig, TrainingConfig
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
@@ -51,7 +54,7 @@ class DotDict(dict):
             ) from e
 
 
-def apply_dotdict_recursively(input_obj: Any) -> Any:
+def apply_dotdict_recursively(input_obj: dict[str, Any]) -> DotDict:
     """Convert dictionaries to DotDict instances recursively.
 
     Args:
@@ -63,16 +66,20 @@ def apply_dotdict_recursively(input_obj: Any) -> Any:
             Non-dictionary objects are returned unchanged.
     """
 
-    if input_obj is None:
-        return None
     if isinstance(input_obj, dict):
+        for key in input_obj:
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"Non-string key detected in dictionary: {key} (type: {type(key)})"
+                )
+            if key in dict.__dict__:
+                raise KeyError(
+                    f"Key '{key}' in dictionary shadows a built-in dict attribute."
+                )
         # Convert the current dictionary to a dotdict
         return DotDict({k: apply_dotdict_recursively(v) for k, v in input_obj.items()})
-    if isinstance(input_obj, list):
-        # Apply recursively to all elements in the list
-        return [apply_dotdict_recursively(item) for item in input_obj]
 
-    # Return the object as-is if it's neither a dict nor a list
+    # Return the object as-is for non-dicts (lists, scalars, etc.)
     return input_obj
 
 
@@ -108,6 +115,36 @@ def dict_to_namespace(d: dict) -> argparse.Namespace:
     return namespace
 
 
+def enable_tf32_if_available() -> bool:
+    """Enable TF32 on Ampere+ CUDA GPUs for matmul (cuBLAS) and conv (cuDNN).
+
+    On non-Ampere or non-CUDA setups it safely does nothing (and disables flags).
+
+    Returns:
+        bool: True if TF32 is enabled, False otherwise.
+    """
+
+    enabled = False
+
+    # Default to strict FP32 unless we detect Ampere+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    # Highest = strict FP32; High = allow TF32 on Ampere for matmul
+    torch.set_float32_matmul_precision("highest")
+
+    if torch.cuda.is_available():
+        device = torch.cuda.current_device()
+        major, minor = torch.cuda.get_device_capability(device)
+        if major >= 8:  # Ampere(8.x) / Hopper(9.x)
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+
+            enabled = True
+
+    return enabled
+
+
 def get_default_device() -> torch.device:
     """Get the default device for PyTorch tensors.
 
@@ -123,7 +160,45 @@ def get_default_device() -> torch.device:
     return torch.device("cpu")
 
 
-def load_config(config_path: StrPath) -> argparse.Namespace:
+def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+    """Get a logger with the specified name and level.
+
+    Args:
+        name (str): The name of the logger.
+        level (int, optional): The logging level. Defaults to logging.INFO (20).
+
+    Returns:
+        logging.Logger: The configured logger.
+    """
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    if not logger.hasHandlers():
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+
+    return logger
+
+
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[RunningConfig]
+) -> RunningConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[SamplingConfig]
+) -> SamplingConfig: ...
+@overload
+def load_config(
+    config_path: StrPath, config_dataclass: type[TrainingConfig]
+) -> TrainingConfig: ...
+def load_config(config_path: StrPath, config_dataclass: type[Config]) -> Config:
     """Load a YAML configuration file and convert it to a namespace."""
     config_path = norm_path(config_path)
     if not config_path.is_file():
@@ -133,7 +208,7 @@ def load_config(config_path: StrPath) -> argparse.Namespace:
         config_dict = yaml.safe_load(f)
     config = dict_to_namespace(config_dict)
 
-    return config
+    return cast(Config, config)
 
 
 def namespace_to_dict(namespace: argparse.Namespace) -> dict:
@@ -150,7 +225,6 @@ def namespace_to_dict(namespace: argparse.Namespace) -> dict:
 
 def norm_path(
     path: StrPath,
-    *,
     expandvars: bool = True,
     expanduser: bool = True,
     resolve: bool = True,
@@ -180,6 +254,8 @@ def norm_path(
 
 def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     """Set the seed for all random number generators.
+
+    Adapted from https://github.com/pyg-team/pytorch_geometric/blob/master/torch_geometric/seed.py
     Freeze CUDA for reproducibility if needed.
 
     Args:
@@ -190,12 +266,24 @@ def seed_everything(seed: int = 0, freeze_cuda: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
     if freeze_cuda:
         # nonrandom CUDNN convolution algo, maybe slower
         torch.backends.cudnn.deterministic = True
         # nonrandom selection of CUDNN convolution, maybe slower
         torch.backends.cudnn.benchmark = False
+
+
+def tensor_to_ndarray(x: np.ndarray | torch.Tensor) -> np.ndarray:
+    """Convert a PyTorch tensor to a NumPy ndarray."""
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    raise TypeError(
+        f"Expected input to be a torch.Tensor or np.ndarray, but got {type(x)}"
+    )
 
 
 def unsqueeze_trailing_dims(
@@ -205,18 +293,19 @@ def unsqueeze_trailing_dims(
 
     Args:
         x (torch.Tensor): The input tensor.
-        target (torch.Tensor | None, optional): The target tensor to match dimensions with. Defaults to None.
-        add_ndims (int, optional): The number of dimensions to add. Defaults to 1.
+        target (torch.Tensor | None, optional): The target tensor to match dimensions with.
+            If None, add_ndims will be used. Defaults to None.
+        add_ndims (int, optional): The number of dimensions to add. Can be overridden by target.
+            Defaults to 1.
 
     Returns:
         torch.Tensor: The modified tensor with trailing dimensions unsqueezed.
     """
 
-    if target is None:
-        for _ in range(add_ndims):
-            x = x.unsqueeze(-1)
-    else:
-        while len(x.shape) < len(target.shape):
-            x = x.unsqueeze(-1)
+    if target is not None:
+        add_ndims = target.ndim - x.ndim
 
-    return x
+    if add_ndims > 0:
+        return x[(...,) + (None,) * add_ndims]
+
+    raise ValueError("Must add a positive number of dimensions.")

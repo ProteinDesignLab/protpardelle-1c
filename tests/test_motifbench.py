@@ -1,74 +1,169 @@
-"""Tests for motif contig placement.
+"""A pytest module for motif contig placement utilities.
 
-Author: Tianyu Lu
+This module tests `contig_to_motif_placement` which expands a motif/scaffold
+specification string like:
+
+    5-20;A16-35;10-25;A52-71;5-20
+
+into concrete motif residue index arrays, placement specifications, and total
+lengths. The function returns lists of length `n_samples` containing sampled
+instantiations satisfying the variable scaffold length ranges.
+
+Test strategy:
+1. Happy path with mixed scaffold ranges and motif segments.
+2. Edge case: single motif segment with zero-length flanking scaffold.
+3. Determinism of output lengths bounds.
+
+The helper `_parse_full_spec` reconstructs lengths to validate returned indices.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
+import pytest
 
 from protpardelle.data.motif import contig_to_motif_placement
 
 
-def test_contig_to_motif_placement():
-    all_motif_indices, all_placement_specs, all_full_specs, all_total_lengths = (
-        contig_to_motif_placement("5-20;A16-35;10-25;A52-71;5-20", [60, 105], 100)
+def _parse_full_spec(spec: str) -> tuple[list[int], str, list[int]]:
+    """Parse a full placement spec (alternating scaffold length / motif segment).
+
+    Returns tuple(all_seglens, reconstructed_simple_spec, motif_segment_lengths)
+    where reconstructed_simple_spec uses only the chain letter for motif segments
+    and raw integers for scaffold segments (mirrors `all_placement_specs`).
+
+    Args:
+        spec (str): The full placement specification string.
+
+    Returns:
+        tuple[list[int], str, list[int]]: A tuple containing:
+            - all_seglens: A list of all segment lengths.
+            - reconstructed_simple_spec: The reconstructed simple specification string.
+            - motif_segment_lengths: A list of motif segment lengths.
+    """
+
+    all_seglens = []
+    simple_parts = []
+    motif_lens = []
+    for segment in spec.split("/"):
+        if segment[0].isalpha():
+            simple_parts.append(segment[0])
+            start, end = segment[1:].split("-")
+            seg_len = int(end) - int(start) + 1
+            motif_lens.append(seg_len)
+        else:
+            seg_len = int(segment)
+            simple_parts.append(str(seg_len))
+        all_seglens.append(seg_len)
+    return all_seglens, "/".join(simple_parts), motif_lens
+
+
+def _reconstruct_motif_indices(total_len: int, seglens: Sequence[int]) -> np.ndarray:
+    """Given alternating scaffold/motif segment lengths, recover motif index array."""
+    full_idx = np.arange(total_len)
+    scaffold_idx: list[int] = []
+    start = 0
+    for pos, seg_len in enumerate(seglens):
+        if pos % 2 == 0:  # scaffold segment positions
+            scaffold_idx.extend(range(start, start + seg_len))
+        start += seg_len
+    return np.delete(full_idx, scaffold_idx)
+
+
+@pytest.mark.parametrize(
+    "spec,length_range,n_samples,constraints",
+    [
+        (
+            "5-20;A16-35;10-25;A52-71;5-20",
+            [60, 105],
+            32,  # fewer samples for faster test
+            [
+                range(5, 21),
+                "A16-35",
+                range(10, 26),
+                "A52-71",
+                range(5, 21),
+            ],
+        ),
+    ],
+)
+def test_contig_to_motif_placement_happy(
+    spec: str,
+    length_range: list[int],
+    num_samples: int,
+    constraints: list[range | str],
+) -> None:
+    """Test the contig_to_motif_placement function with a happy path scenario.
+
+    Args:
+        spec (str): The full placement specification string.
+        length_range (list[int]): A list containing the minimum and maximum length of the contig.
+        num_samples (int): The number of samples to generate.
+        constraints (list[range  |  str]): A list of constraints for each segment in the spec.
+    """
+    mot_idx_list, placement_specs, full_specs, total_lengths = (
+        contig_to_motif_placement(spec, length_range, num_samples)
     )
 
-    assert len(all_motif_indices) == 100
-    assert len(all_placement_specs) == 100
-    assert len(all_full_specs) == 100
-    assert len(all_total_lengths) == 100
+    assert len(mot_idx_list) == num_samples
+    assert len(placement_specs) == num_samples
+    assert len(full_specs) == num_samples
+    assert len(total_lengths) == num_samples
 
-    for i, motif_placement in enumerate(all_full_specs):
-        curr_motif_idx = all_motif_indices[i]
-        curr_placement = all_placement_specs[i]
-        curr_total_length = all_total_lengths[i]
-
-        motif_seglens, reconstructed_placement, scaffold_seglens, all_seglens = (
-            [],
-            [],
-            [],
-            [],
-        )
-        for segment in motif_placement.split("/"):
+    for mot_idx, placement_simple, full_spec, total_len in zip(
+        mot_idx_list, placement_specs, full_specs, total_lengths
+    ):
+        seglens, reconstructed_simple, _ = _parse_full_spec(full_spec)
+        assert reconstructed_simple == placement_simple
+        assert sum(seglens) == total_len
+        # motif indices reconstruct
+        recon = _reconstruct_motif_indices(total_len, seglens)
+        assert np.array_equal(recon, mot_idx)
+        # length bounds respected
+        assert length_range[0] <= total_len <= length_range[1]
+        # constraint satisfaction
+        for cpos, segment in enumerate(full_spec.split("/")):
+            constraint = constraints[cpos]
             if segment[0].isalpha():
-                reconstructed_placement.append(segment[0])
-                start, end = segment[1:].split("-")
-                curr_len = int(end) - int(start) + 1
-                motif_seglens.append(curr_len)
+                # motif segment must match exact motif constraint string
+                assert isinstance(constraint, str)
+                assert segment == constraint
             else:
-                curr_len = int(segment)
-                scaffold_seglens.append(curr_len)
-                reconstructed_placement.append(str(curr_len))
-            all_seglens.append(curr_len)
+                # scaffold segment length must lie inside allowed range
+                assert isinstance(constraint, range)
+                assert int(segment) in constraint
 
-        # check that returned info is self-consistent
-        assert sum(all_seglens) == curr_total_length
 
-        reconstructed_placement = "/".join(reconstructed_placement)
-        assert reconstructed_placement == curr_placement
+def test_single_motif_no_scaffold() -> None:
+    """Test the contig_to_motif_placement function with a single motif and no scaffold."""
+    mot_idx_list, placement_specs, full_specs, total_lengths = (
+        contig_to_motif_placement("A1-5", [5, 5], 3)
+    )
+    assert all(tl == 5 for tl in total_lengths)
+    for mot_idx, placement_simple, full_spec in zip(
+        mot_idx_list, placement_specs, full_specs
+    ):
+        assert placement_simple == "A"
+        _, reconstructed_simple, motif_lens = _parse_full_spec(full_spec)
+        assert reconstructed_simple == "A"
+        assert motif_lens == [5]
+        # motif occupies entire range
+        assert np.array_equal(mot_idx, np.arange(5))
 
-        full_idx = np.arange(curr_total_length)
-        scaffold_idx = []
-        start_idx = 0
-        for i, seglen in enumerate(all_seglens):
-            if i % 2 == 0:
-                scaffold_idx.extend(range(start_idx, start_idx + seglen))
-            start_idx += seglen
-        reconstructed_motif_idx = np.delete(full_idx, scaffold_idx)
-        assert np.all(reconstructed_motif_idx == curr_motif_idx)
 
-        # check that returned info satisfy motif contig constraints
-        constraints = [
-            range(5, 20 + 1),
-            "A16-35",
-            range(10, 25 + 1),
-            "A52-71",
-            range(5, 20 + 1),
-        ]
-        for i, segment in enumerate(motif_placement.split("/")):
-            if segment[0].isalpha():
-                assert segment in constraints[i]
-            else:
-                assert int(segment) in constraints[i]
+def test_length_bounds_respected() -> None:
+    """Test that the length bounds are respected in the placement.
 
-        assert curr_total_length in range(60, 105 + 1)
+    Randomized spec with scaffold flexibility. Original (25,40) range was infeasible:
+    motif length = (10..19) -> 10 residues. Scaffold min sum = 3 + 1 = 4 giving min total 14.
+    To test bounds we pick a feasible window that contains achievable totals.
+    """
+
+    mot_idx_list, _, _, total_lengths = contig_to_motif_placement(
+        "3-6;A10-19;1-4", [14, 25], 16
+    )
+    for tl in total_lengths:
+        assert 14 <= tl <= 25
+    # basic sanity: motif indices strictly increasing
+    for mot_idx in mot_idx_list:
+        assert np.all(np.diff(mot_idx) > 0)

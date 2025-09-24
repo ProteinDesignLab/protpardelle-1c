@@ -1,12 +1,6 @@
-model:
-  model_ckpt: "" # Path to denoiser model weights
-  model_cfg: "" # Path to denoiser model config
-  minimpnn_path: "" # Path to minimpnn model weights
-  full_mpnn_path: "" # If provided, replace full MPNN in model_cfg with this path
-
 sampling:
-  n_steps: 500 # number of denoising steps
-  s_churn: 200 # add s_churn / n_steps amount of noise when noise level is between s_max and s_min
+  num_steps: 500 # number of denoising steps
+  s_churn: 200 # add s_churn / num_steps amount of noise when noise level is between s_max and s_min
   step_scale: 1.2 # inverse temperature, 1.0 is taking denoising steps exactly according to model's predictions, 0.8 is higher temperature
   noise_schedule:
     _partial_: true
@@ -14,10 +8,11 @@ sampling:
     s_max: 80 # start applying schurn after this noise level
     s_min: 0.001 # stop applying schurn after this noise level
   motif_file_path: # input motif, can also be a directory of motifs
+  tip_atom_conditioning: true # reconstruction and replacement guidance applied to tip atoms
   partial_diffusion:
     enabled: false # use partial diffusion
     pdb_file_path: # input pdb to apply partial diffusion
-    n_steps: 100 # go back these many steps, 100 here with sampling.n_steps=500 means going back to step 400
+    num_steps: 100 # go back these many steps, 100 here with sampling.num_steps=500 means going back to step 400
   dx: 0.0 # translate motif in x-axis
   dy: 0.0 # translate motif in y-axis
   dz: 0.0 # translate motif in z-axis
@@ -35,7 +30,7 @@ sampling:
       freq: 1 # apply crop-conditional info every {freq} many steps (e.g. 2 means one step unconditional, one step conditional)
       freq_start: 0.0
       freq_end: 0.0 # after this, go back to constant crop conditional guidance
-      strategy: "backbone-sidechain" # ['backbone', 'sidechain', 'sidechain-tip', 'backbone-sidechain']
+      strategy: "sidechain-tip" # ['backbone', 'sidechain', 'sidechain-tip', 'backbone-sidechain']
     reconstruction_guidance:
       enabled: true
       start: 0.0
@@ -59,9 +54,9 @@ sampling:
     uniform_steps: false
 
   stage2_cfg:
-    enabled: true
+    enabled: false
     rewind_steps: 50
-    n_steps: 200
+    num_steps: 200
     s_churn: 200
     step_scale: 1.2
     sidechain_mode: true

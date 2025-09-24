@@ -4,34 +4,47 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 from Bio.PDB import MMCIFParser, PDBParser
 from einops import rearrange
-from torchtyping import TensorType
 
 from protpardelle.common import residue_constants
-from protpardelle.common.protein import Hetero, Protein, to_pdb
-from protpardelle.data.atom import (
-    atom37_coords_to_atom14,
-    atom37_mask_from_aatype,
-    atom37_to_atom73,
+from protpardelle.common.protein import (
+    PDB_CHAIN_IDS,
+    PDB_MAX_CHAINS,
+    Hetero,
+    Protein,
+    to_pdb,
 )
+from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.utils import StrPath, get_logger, norm_path, tensor_to_ndarray
+
+logger = get_logger(__name__)
 
 
 def add_chain_gap(
-    residue_index: TensorType["n"],
-    chain_index: TensorType["n"],
+    residue_index: torch.Tensor,
+    chain_index: torch.Tensor,
     chain_residx_gap: int = 200,
-) -> TensorType["n"]:
-    """
-    Add a residue index gap between chains.
-    e.g. if chain A has 5 residues and chain B has 3 residues,
-    with chain_residx_gap=200, the residue indices for chain B will be 206, 207, 208.
+) -> torch.Tensor:
+    """Add a residue index gap between chains.
 
-    Iteratively shift residue_index per chain, starting from last residx from previous chain
+    Iteratively shift residue index per chain, starting from last residue index from previous chain.
+    E.g. if chain A has 5 residues and chain B has 3 residues,
+    with chain_residx_gap = 200, the residue indices for chain B will be 206, 207, 208.
+
+    Args:
+        residue_index (torch.Tensor): The residue index tensor. (L,)
+        chain_index (torch.Tensor): The chain index tensor. (L,)
+        chain_residx_gap (int, optional): The gap to add between chains. Defaults to 200.
+
+    Returns:
+        torch.Tensor: The modified residue index tensor.
     """
+
     if torch.sum(chain_index) == 0:
         return residue_index
 
@@ -53,12 +66,12 @@ def add_chain_gap(
 
 
 def read_pdb(
-    pdb_file: str, chain_id: str | None = None
+    pdb_path: StrPath, chain_id: str | None = None
 ) -> tuple[Protein, Hetero, dict[str, int]]:
     """Takes a PDB string and constructs a Protein object.
 
     Args:
-        pdb_file (str): The path to the PDB file.
+        pdb_file (StrPath): The path to the PDB file.
         chain_id (str | None, optional): If chain_id is specified (e.g. A), then only
         that chain is parsed. Otherwise all chains are parsed. Defaults to None.
 
@@ -67,12 +80,20 @@ def read_pdb(
         Hetero, and a mapping of chain IDs to their indices.
     """
 
-    if Path(pdb_file).suffix == ".cif":
+    pdb_path = norm_path(pdb_path)
+
+    if Path(pdb_path).suffix == ".cif":
         parser = MMCIFParser(QUIET=True, auth_chains=True, auth_residues=False)
     else:
         parser = PDBParser(QUIET=True)
 
-    structure = parser.get_structure("protein", pdb_file)
+    structure = parser.get_structure("protein", pdb_path)
+    num_models = len(structure)
+    logger.debug(
+        "PDB file %s has %d models, only the first one will be used.",
+        pdb_path,
+        num_models,
+    )
     model = next(structure.get_models())
 
     atom_positions = []
@@ -169,41 +190,39 @@ def read_pdb(
 
 
 def load_feats_from_pdb(
-    pdb,
-    bb_atoms=("N", "CA", "C", "O"),
-    load_atom73: bool = False,
-    chain_residx_gap: int = 200,
+    pdb_path: StrPath,
+    bb_atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
     chain_id: str | None = None,
-    atom14: bool = False,
+    chain_residx_gap: int = 200,
     include_pos_feats: bool = False,
-):
+) -> tuple[dict[str, Any], Hetero]:
+    """Load model input features from a PDB file or mmcif file.
+
+    Args:
+        pdb_path (StrPath): The path to PDB or mmcif file
+        bb_atoms (tuple[str, ...], optional): List of backbone atom names to load.
+            Defaults to ("N", "CA", "C", "O").
+        chain_id (str | None, optional): Chain ID to load. Defaults to None.
+        chain_residx_gap (int, optional): Residue index gap for chain breaks for PDBs
+            with multiple chains. Defaults to 200.
+        include_pos_feats (bool, optional): If True, include chain_id_mapping and residue_index_orig
+            in feats for specifying specific positions. Defaults to False.
+
+    Returns:
+        tuple[dict[str, Any], Hetero]: A tuple of (feats, hetero) where feats is
+            a dictionary of model input features and hetero is a Hetero object.
     """
-    Load model input features from a PDB file or mmcif file.
-    - bb_atoms: list of backbone atom names to load
-    - load_atom73: if True, also load atom73 features
-    - chain_residx_gap: residue index gap for chain breaks for PDBs with multiple chains
-    - include_pos_feats: if True, include chain_id_mapping and residue_index_orig in feats for specifying specific positions
-    """
+
+    protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
+
     feats = {}
-    protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb, chain_id=chain_id)
-    bb_idxs = [residue_constants.atom_order[a] for a in bb_atoms]
-    bb_coords = torch.from_numpy(protein_obj.atom_positions[:, bb_idxs])
-    feats["bb_coords"] = bb_coords.float()
+    bb_idxs = [residue_constants.atom_order[atom] for atom in bb_atoms]
+    feats["bb_coords"] = torch.from_numpy(
+        protein_obj.atom_positions[:, bb_idxs]
+    ).float()
     for k, v in vars(protein_obj).items():
         feats[k] = torch.from_numpy(v).float()
     feats["aatype"] = feats["aatype"].long()
-    if load_atom73:
-        feats["atom73_coords"], feats["atom73_mask"] = atom37_to_atom73(
-            feats["atom_positions"], feats["aatype"], return_mask=True
-        )
-    if atom14:
-        feats["atom_positions"], feats["b_factors"], feats["atom_mask"] = (
-            atom37_coords_to_atom14(
-                feats["atom_positions"],
-                feats["b_factors"],
-                feats["aatype"],
-            )
-        )
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index
     if include_pos_feats:
@@ -224,24 +243,46 @@ def load_feats_from_pdb(
 
 
 def feats_to_pdb_str(
-    atom_positions,
-    aatype=None,
-    atom_mask=None,
-    residue_index=None,
-    chain_index=None,
-    chain_id_mapping=None,
-    b_factors=None,
-    atom_lines_only=True,
-):
+    atom_coords: torch.Tensor,
+    aatype: torch.Tensor | None = None,
+    atom_mask: torch.Tensor | None = None,
+    residue_index: torch.Tensor | None = None,
+    chain_index: torch.Tensor | None = None,
+    b_factors: torch.Tensor | None = None,
+    chain_id_mapping: dict[str, int] | None = None,
+    atom_lines_only: bool = True,
+) -> str:
+    """Convert features to PDB string.
+
+    Args:
+        atom_coords (torch.Tensor): Atom coordinates. (L, 37, 3)
+        aatype (torch.Tensor | None, optional): Amino acid types. Defaults to None. (L,)
+        atom_mask (torch.Tensor | None, optional): Atom mask. Defaults to None. (L, 37)
+        residue_index (torch.Tensor | None, optional): Residue index. Defaults to None. (L,)
+        chain_index (torch.Tensor | None, optional): Chain index. Defaults to None. (L,)
+        b_factors (torch.Tensor | None, optional): B-factors. Defaults to None. (L, 37)
+        chain_id_mapping (dict[str, int] | None, optional): Chain ID mapping. Defaults to None.
+        atom_lines_only (bool, optional): If True, only include atom lines. Defaults to True.
+
+    Raises:
+        ValueError: If both atom_mask and aatype are None.
+
+    Returns:
+        str: PDB string representation of the features.
+    """
+
     # Expects unbatched, cropped inputs. needs at least one of atom_mask, aatype
     # Uses all-GLY aatype if aatype not given: does not infer from atom_mask
-    assert aatype is not None or atom_mask is not None
+    if (atom_mask is None) and (aatype is None):
+        raise ValueError("At least one of atom_mask or aatype must be provided.")
     if atom_mask is None:
-        aatype = aatype.cpu()
-        atom_mask = atom37_mask_from_aatype(aatype, torch.ones_like(aatype))
+        assert aatype is not None
+        atom_mask = atom37_mask_from_aatype(aatype)
     if aatype is None:
-        seq_mask = atom_mask[:, residue_constants.atom_order["CA"]].cpu()
+        assert atom_mask is not None
+        seq_mask = atom_mask[:, residue_constants.atom_order["CA"]]
         aatype = seq_mask * residue_constants.restype_order["G"]
+
     if residue_index is None:
         residue_index = torch.arange(aatype.shape[-1]) + 1  # start residue index from 1
     if chain_index is None:
@@ -249,14 +290,13 @@ def feats_to_pdb_str(
     if b_factors is None:
         b_factors = torch.ones_like(atom_mask)
 
-    cast = lambda x: np.array(x.detach().cpu()) if isinstance(x, torch.Tensor) else x
     prot = Protein(
-        atom_positions=cast(atom_positions),
-        atom_mask=cast(atom_mask),
-        aatype=cast(aatype),
-        residue_index=cast(residue_index),
-        chain_index=cast(chain_index),
-        b_factors=cast(b_factors),
+        atom_positions=tensor_to_ndarray(atom_coords),
+        atom_mask=tensor_to_ndarray(atom_mask),
+        aatype=tensor_to_ndarray(aatype),
+        residue_index=tensor_to_ndarray(residue_index),
+        chain_index=tensor_to_ndarray(chain_index),
+        b_factors=tensor_to_ndarray(b_factors),
     )
     pdb_str = to_pdb(prot, chain_id_mapping=chain_id_mapping)
 
@@ -272,152 +312,163 @@ def feats_to_pdb_str(
     return pdb_str
 
 
-def bb_coords_to_pdb_str(
-    coords,
-    atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
-    residue_index: TensorType["n"] | None = None,
-    chain_index: TensorType["n"] | None = None,
+def _bb_pdb_line(
+    atomnum: int,
+    atom: str,
+    res: str,
+    chain_idx: int,
+    resnum: int,
+    coords: torch.Tensor,
+    elem: str,
     chain_id_mapping: dict[str, int] | None = None,
-    aatype: TensorType["n"] | None = None,
 ) -> str:
-    """
-    Save backbone coords to pdb string.
-    - chain_index: 0-indexed chain index for each residue, starting from A
-    - aatype: aatype for each residue (if not specified, default to GLY)
-    """
-    if chain_id_mapping is not None:
-        id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
+    """Format a single ATOM line for a PDB file."""
 
-    def _bb_pdb_line(atom, atomnum, resnum, chain_idx, coords, elem, res="GLY"):
-        atm = "ATOM".ljust(6)
-        atomnum = str(atomnum).rjust(5)
-        atomname = atom.center(4)
-        resname = res.ljust(3)
-        if chain_id_mapping is not None:
-            chain = id_chain_mapping.get(chain_idx).rjust(1)
+    if chain_id_mapping is None:
+        if chain_idx < PDB_MAX_CHAINS:
+            chain = PDB_CHAIN_IDS[chain_idx]
         else:
-            chain = chr(ord("A") + chain_idx).rjust(1)
-        resnum = str(resnum).rjust(4)
-        x = str("%8.3f" % (float(coords[0]))).rjust(8)
-        y = str("%8.3f" % (float(coords[1]))).rjust(8)
-        z = str("%8.3f" % (float(coords[2]))).rjust(8)
-        occ = str("%6.2f" % (float(1))).rjust(6)
-        temp = str("%6.2f" % (float(20))).ljust(6)
-        elname = elem.rjust(12)
-        return "%s%s %s %s %s%s    %s%s%s%s%s%s\n" % (
-            atm,
-            atomnum,
-            atomname,
-            resname,
-            chain,
-            resnum,
-            x,
-            y,
-            z,
-            occ,
-            temp,
-            elname,
-        )
+            raise ValueError(
+                f"chain_idx {chain_idx} exceeds max PDB chains {PDB_MAX_CHAINS}."
+            )
+    else:
+        id_chain_mapping = {v: k for k, v in chain_id_mapping.items()}
+        chain = id_chain_mapping.get(chain_idx, "A")
 
-    n = coords.shape[0]
-    na = len(atoms)
-    pdb_str = ""
-    res_counter = {}
-    for j in range(0, n, na):
-        for idx, atom in enumerate(atoms):
-            residx = j // na  # 0-indexed residue index
+    x, y, z = float(coords[0]), float(coords[1]), float(coords[2])
+    occupancy = 1.0
+    temp_factor = 20.0
+
+    return (
+        f"{'ATOM':<6}{atomnum:>5} {atom:^4} {res:<3} {chain:>1}{resnum:>4}    "
+        f"{x:8.3f}{y:8.3f}{z:8.3f}{occupancy:6.2f}{temp_factor:6.2f}          "
+        f"{elem:>2}\n"
+    )
+
+
+def bb_coords_to_pdb_str(
+    bb_coords: torch.Tensor,
+    atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
+    aatype: torch.Tensor | None = None,
+    residue_index: torch.Tensor | None = None,
+    chain_index: torch.Tensor | None = None,
+    chain_id_mapping: dict[str, int] | None = None,
+) -> str:
+    """Convert backbone coordinates to PDB string.
+
+    Args:
+        bb_coords (torch.Tensor): Backbone coordinates of shape (L, 4, 3).
+        atoms (tuple[str, ...], optional): Atom names to include. Defaults to ("N", "CA", "C", "O").
+        aatype (torch.Tensor | None, optional): Amino acid types; if not specified, default to GLY. Defaults to None. (L,)
+        residue_index (torch.Tensor | None, optional): Residue indices. Defaults to None. (L,)
+        chain_index (torch.Tensor | None, optional): 0-indexed chain index for each residue, starting from A. Defaults to None. (L,)
+        chain_id_mapping (dict[str, int] | None, optional): Chain ID mapping. Defaults to None.
+
+    Returns:
+        str: PDB string representation of the backbone coordinates.
+    """
+
+    L = bb_coords.shape[0]
+    num_atoms = len(atoms)
+    pdb_str_list: list[str] = []
+    res_counter: dict[int, int] = {}
+    chain_idx = 0
+    for i in range(0, L, num_atoms):
+        for j, atom in enumerate(atoms):
+            residx = i // num_atoms  # 0-indexed residue index
 
             # Handle aatype
             if aatype is not None:
-                # save with aatype if specified
-                restype = residue_constants.restypes[aatype[residx].item()]
-                resname = residue_constants.restype_1to3[restype]
+                # Save with aatype if specified
+                restype = residue_constants.restypes[aatype[residx].item()]  # type: ignore
+                res = residue_constants.restype_1to3[restype]
             else:
-                # otherwise, default to GLY
-                resname = "GLY"
+                # Otherwise, default to GLY
+                res = "GLY"
 
             # Handle chain index
-            if chain_index is not None:
-                chain_idx = chain_index[residx].long().item()
-            else:
-                chain_idx = 0
-
+            chain_idx = (
+                chain_index[residx].long().item() if chain_index is not None else 0
+            )
+            assert isinstance(chain_idx, int)
             if chain_idx not in res_counter:
                 res_counter[chain_idx] = 1
 
             if residue_index is not None:
                 resnum = residue_index[residx].long().item()
+                assert isinstance(resnum, int)
             else:
                 resnum = res_counter[chain_idx]
 
-            pdb_str += _bb_pdb_line(
-                atom,
-                j + idx + 1,
-                resnum,
-                chain_idx,
-                coords[j + idx],
-                atom[0],
-                resname,
+            pdb_line = _bb_pdb_line(
+                atomnum=i + j + 1,
+                atom=atom,
+                res=res,
+                chain_idx=chain_idx,
+                resnum=resnum,
+                coords=bb_coords[i + j],
+                elem=atom[0],
+                chain_id_mapping=chain_id_mapping,
             )
+            pdb_str_list.append(pdb_line)
+
         res_counter[chain_idx] += 1
-    return pdb_str
 
-
-def write_pdb_str(pdb_str, filename, append=False, write_to_frames=False):
-    write_mode = "a" if append else "w"
-    with open(filename, write_mode) as f:
-        if write_to_frames:
-            f.write("MODEL\n")
-        f.write(pdb_str)
-        if write_to_frames:
-            f.write("ENDMDL\n")
+    return "".join(pdb_str_list)
 
 
 def write_coords_to_pdb(
-    coords_in,
-    filename,
-    batched=True,
-    write_to_frames=False,
-    chain_id_mapping=None,
-    **all_atom_feats,
+    atom_coords: torch.Tensor,
+    output_path: StrPath,
+    chain_id_mapping: dict[str, int] | None = None,
+    **all_atom_feats: torch.Tensor,
 ) -> None:
-    if not (batched or write_to_frames):
-        coords_in = [coords_in]
-        filename = [filename]
-        all_atom_feats = {k: [v] for k, v in all_atom_feats.items()}
+    """Write atomic coordinates to a PDB file.
 
-    n_atoms_in = coords_in[0].shape[-2]
-    is_bb_or_ca_pdb = n_atoms_in <= 4
-    for i, c in enumerate(coords_in):
-        n_res = c.shape[0]
-        if isinstance(filename, list):
-            fname = filename[i]
-        elif write_to_frames or len(coords_in) == 1:
-            fname = filename
+    Args:
+        atom_coords (torch.Tensor): Atomic coordinates. (L, A, 3).
+        output_path (StrPath): Path to the output PDB file.
+        chain_id_mapping (dict[str, int] | None, optional): Mapping of chain IDs to indices. Defaults to None.
+        **all_atom_feats (torch.Tensor): Additional features such as aatype, atom_mask, residue_index, chain_index, b_factors.
+
+    Raises:
+        ValueError: If the input tensor has an invalid shape.
+    """
+
+    L, A, _ = atom_coords.shape
+
+    if A <= 4:
+        coords_flat = rearrange(atom_coords, "l a c -> (l a) c")
+        if A == 1:
+            atoms = ("CA",)
+        elif A == 3:
+            atoms = ("N", "CA", "C")
+        elif A == 4:
+            atoms = ("N", "CA", "C", "O")
         else:
-            fname = f"{filename[:-4]}_{i}.pdb"
+            raise ValueError("Invalid number of atoms for backbone/CA PDB.")
+        feats = {k: v[:L] for k, v in all_atom_feats.items()}
+        pdb_str = bb_coords_to_pdb_str(
+            coords_flat,
+            atoms,
+            aatype=feats.get("aatype"),
+            residue_index=feats.get("residue_index"),
+            chain_index=feats.get("chain_index"),
+            chain_id_mapping=chain_id_mapping,
+        )
+    else:
+        feats = {k: v[:L] for k, v in all_atom_feats.items()}
+        pdb_str = feats_to_pdb_str(
+            atom_coords,
+            aatype=feats.get("aatype"),
+            atom_mask=feats.get("atom_mask"),
+            residue_index=feats.get("residue_index"),
+            chain_index=feats.get("chain_index"),
+            b_factors=feats.get("b_factors"),
+            chain_id_mapping=chain_id_mapping,
+            atom_lines_only=True,
+        )
 
-        if is_bb_or_ca_pdb:
-            c_flat = rearrange(c, "n a c -> (n a) c")
-            if n_atoms_in == 1:
-                atoms = ("CA",)
-            elif n_atoms_in == 3:
-                atoms = ("N", "CA", "C")
-            elif n_atoms_in == 4:
-                atoms = ("N", "CA", "C", "O")
-            else:
-                raise ValueError("Invalid number of atoms for backbone/CA PDB.")
-            feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
-            pdb_str = bb_coords_to_pdb_str(
-                c_flat,
-                atoms,
-                aatype=feats_i.get("aatype", None),
-                residue_index=feats_i.get("residue_index", None),
-                chain_index=feats_i.get("chain_index", None),
-                chain_id_mapping=chain_id_mapping,
-            )
-        else:
-            feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
-            pdb_str = feats_to_pdb_str(c, chain_id_mapping=chain_id_mapping, **feats_i)
-
-        write_pdb_str(pdb_str, fname, append=write_to_frames and i > 0)
+    output_path = norm_path(output_path)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(pdb_str)

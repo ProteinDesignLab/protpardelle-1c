@@ -1,30 +1,37 @@
 """Entrypoint for Protpardelle-1c training.
 
-Authors: Alex Chu, Richard Shuai, Zhaoyang Li
+Authors: Alex Chu, Zhaoyang Li, Richard Shuai, Tianyu Lu
 """
 
-import shlex
+from __future__ import annotations
+
+import os
+import random
 import subprocess
+import sys
 from contextlib import nullcontext
-from pathlib import Path
+from dataclasses import dataclass
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import typer
 import wandb
 import yaml
-from torch.amp import autocast
+from torch.amp import GradScaler, autocast
 from torch.distributed.elastic.multiprocessing.errors import record
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader
 from tqdm.auto import tqdm
 
-import protpardelle.core.diffusion as diffusion
-import protpardelle.core.models as models
-import protpardelle.core.modules as modules
 from protpardelle.common import residue_constants
-from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.configs import TrainingConfig
+from protpardelle.core import modules
+from protpardelle.core.models import Protpardelle
+from protpardelle.data.atom import atom37_mask_from_aatype, dummy_fill_noise_coords
 from protpardelle.data.dataset import (
     PDBDataset,
     StochasticMixedSampler,
@@ -32,16 +39,131 @@ from protpardelle.data.dataset import (
     make_crop_cond_mask_and_recenter_coords,
 )
 from protpardelle.utils import (
-    dict_to_namespace,
+    StrPath,
+    enable_tf32_if_available,
+    get_default_device,
+    get_logger,
+    load_config,
+    namespace_to_dict,
+    norm_path,
     seed_everything,
     unsqueeze_trailing_dims,
 )
 
+logger = get_logger(__name__)
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
-def masked_cross_entropy(
-    logprobs: torch.Tensor, target: torch.Tensor, loss_mask: torch.Tensor
+@dataclass
+class DistributedContext:
+    """Container for distributed training metadata."""
+
+    rank: int
+    local_rank: int
+    world_size: int
+
+    @property
+    def is_main(self) -> bool:
+        """Return True if the current process is the primary (rank 0)."""
+
+        return self.rank == 0
+
+    @property
+    def ddp_enabled(self) -> bool:
+        """Return True if distributed data parallel is enabled."""
+        return self.world_size > 1
+
+    @classmethod
+    def empty_context(cls) -> DistributedContext:
+        """Return an empty distributed context."""
+
+        return cls(rank=0, local_rank=0, world_size=1)
+
+
+def _resolve_device_with_distributed(
+    requested_device: torch.device,
+) -> tuple[torch.device, DistributedContext]:
+    """Initialize torch.distributed if launched with multiple processes.
+
+    Args:
+        requested_device (torch.device): Optional device requested via CLI.
+
+    Returns:
+        tuple[torch.device, DistributedContext]: Possibly updated device and
+            the distributed context when multi-process training is active.
+    """
+
+    if not dist.is_available():
+        return requested_device, DistributedContext.empty_context()
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    if world_size <= 1:
+        return requested_device, DistributedContext.empty_context()
+
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    if not dist.is_initialized():
+        dist.init_process_group(backend=backend, init_method="env://")
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        resolved_device = torch.device(f"cuda:{local_rank}")
+    else:
+        resolved_device = torch.device("cpu")
+
+    if requested_device != resolved_device:
+        logger.warning(
+            "Overriding requested device %s with local rank device %s for DDP.",
+            requested_device,
+            resolved_device,
+        )
+
+    return resolved_device, DistributedContext(
+        rank=rank, local_rank=local_rank, world_size=world_size
+    )
+
+
+def _cleanup_distributed(distributed: DistributedContext) -> None:
+    """Tear down the distributed process group if it was initialized."""
+
+    if not distributed.ddp_enabled:
+        return
+    if dist.is_available() and dist.is_initialized():
+        try:
+            dist.barrier()
+        except RuntimeError as e:  # Some ranks may have crashed already.
+            logger.debug("Skipping distributed barrier during cleanup: %s", e)
+        try:
+            dist.destroy_process_group()
+        except RuntimeError as e:
+            logger.debug("Failed to destroy process group cleanly: %s", e)
+
+
+def _log_distributed_mean(
+    log_dict: dict[str, float],
+    device: torch.device,
+    distributed: DistributedContext,
+) -> dict[str, float]:
+    """Average scalar metrics across distributed processes."""
+
+    if not (distributed.ddp_enabled and log_dict):
+        return log_dict
+
+    keys = sorted(log_dict.keys())
+    values = torch.tensor([log_dict[k] for k in keys], device=device)
+    dist.all_reduce(values, op=dist.ReduceOp.AVG)
+
+    return {k: values[i].item() for i, k in enumerate(keys)}
+
+
+def masked_cross_entropy_loss(
+    logprobs: torch.Tensor,
+    target: torch.Tensor,
+    loss_mask: torch.Tensor,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked cross-entropy loss.
 
@@ -49,24 +171,25 @@ def masked_cross_entropy(
         logprobs (torch.Tensor): Log probabilities of the predicted tokens.
         target (torch.Tensor): One-hot encoded target tokens.
         loss_mask (torch.Tensor): Mask to apply to the loss.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked cross-entropy loss.
     """
 
     cel = -target * logprobs
-    cel = cel * loss_mask[..., None]
-    cel = cel.sum((-1, -2)) / loss_mask.sum(-1).clamp(min=1e-6)
+    cel = cel * loss_mask.unsqueeze(-1)
+    cel = cel.sum((-1, -2)) / loss_mask.sum(-1).clamp(min=tol)
 
     return cel
 
 
-def masked_mse(
+def masked_mse_loss(
     x: torch.Tensor,
     y: torch.Tensor,
     mask: torch.Tensor,
     weights: torch.Tensor | None = None,
-    tol: float = 1e-7,
+    tol: float = 1e-6,
 ) -> torch.Tensor:
     """Compute the masked mean squared error loss.
 
@@ -75,14 +198,14 @@ def masked_mse(
         y (torch.Tensor): Target values.
         mask (torch.Tensor): Mask to apply to the loss.
         weights (torch.Tensor | None, optional): Weights to apply to the loss. Defaults to None.
-        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-7.
+        tol (float, optional): Tolerance for the loss computation. Defaults to 1e-6.
 
     Returns:
         torch.Tensor: The computed masked mean squared error loss.
     """
 
-    data_dims = tuple(range(1, len(x.shape)))
-    mse = (x - y).pow(2) * mask
+    data_dims = tuple(range(1, x.ndim))
+    mse = (x - y).square() * mask
     if weights is not None:
         mse = mse * unsqueeze_trailing_dims(weights, mse)
     mse = mse.sum(data_dims) / mask.sum(data_dims).clamp(min=tol)
@@ -90,45 +213,141 @@ def masked_mse(
     return mse
 
 
-class ProtpardelleRunner:
+def load_datasets(config: TrainingConfig) -> list[PDBDataset]:
+    """Load the training datasets."""
+    datasets = [
+        PDBDataset(
+            pdb_path=pdb_path,
+            subset=subset,
+            fixed_size=config.data.fixed_size,
+            short_epoch=config.data.short_epoch,
+            se3_data_augment=config.data.se3_data_augment,
+            translation_scale=config.data.translation_scale,
+            chain_residx_gap=config.data.chain_residx_gap,
+            dummy_fill_mode=config.data.dummy_fill_mode,
+        )
+        for pdb_path, subset in zip(config.data.pdb_paths, config.data.subset)
+    ]
+
+    return datasets
+
+
+class ProtpardelleTrainer:
+    """Trainer for the Protpardelle model."""
+
     def __init__(
         self,
-        config,
-        model,
-        train_dataset,
-        save_dir,
-        device,
-        scaler=None,
-    ):
+        config: TrainingConfig,
+        device: torch.device,
+        distributed: DistributedContext,
+        batch_size_override: int | None = None,
+        num_workers_override: int | None = None,
+    ) -> None:
+        """Initialize the ProtpardelleTrainer.
+
+        Args:
+            config (TrainingConfig): The training configuration.
+            device (torch.device): The device to use for training.
+            distributed (DistributedContext): Metadata about the distributed setup.
+            batch_size_override (int | None, optional): Per-process batch size for distributed
+                training. Defaults to None.
+            num_workers_override (int | None, optional): Number of dataloader workers.
+                Defaults to None.
+        """
+
+        # Store config
         self.config = config
 
-        if isinstance(model, nn.DataParallel):
-            self.model = model.module
+        # Store distributed context
+        self.distributed = distributed
+        self.is_main = self.distributed.is_main
+        self.ddp_enabled = self.distributed.ddp_enabled
+
+        # Determine batch size and num_workers
+        self.batch_size = (
+            batch_size_override
+            if batch_size_override is not None
+            else self.config.train.batch_size
+        )
+        self.num_workers = (
+            num_workers_override
+            if num_workers_override is not None
+            else self.config.data.num_workers
+        )
+
+        # Initialize model
+        model = Protpardelle(self.config, device)
+        if self.ddp_enabled:
+            logger.info(
+                "Initialized DDP rank=%d local_rank=%d world_size=%d",
+                self.distributed.rank,
+                self.distributed.local_rank,
+                self.distributed.world_size,
+            )
+            model.to(device)
+            if device.type == "cuda":
+                model = DDP(  # type: ignore
+                    model,
+                    device_ids=[device.index],
+                    output_device=device.index,
+                    broadcast_buffers=False,
+                    gradient_as_bucket_view=True,
+                    find_unused_parameters=False,  # should be False if using static graph
+                    static_graph=True,  # the graph is static; speeds up DDP
+                )
+            else:
+                # Fall back to CPU training with DDP
+                model = DDP(  # type: ignore
+                    model,
+                    broadcast_buffers=False,
+                    find_unused_parameters=True,
+                )
         else:
-            self.model = model
-        self.forward = model
+            if torch.cuda.is_available():
+                logger.info("Device count: %d", torch.cuda.device_count())
+                logger.info("Current device: %d", torch.cuda.current_device())
+            model.to(device)
+        model.train()
+        self.model = model
 
-        self.optimizer, self.scheduler = self.get_optimizer_and_scheduler()
-        self.dataset = train_dataset
-        self.save_dir = save_dir
-        self.device = device
-        self.scaler = scaler
+        # Initialize optimizer, scheduler, and scaler
+        self.optimizer, self.scheduler = self._load_optimizer_and_scheduler()
+        self.scaler = GradScaler(device=device, enabled=self.config.train.use_amp)  # type: ignore
 
-        self.next_eval_time = config.train.eval_freq
+    @property
+    def module(self) -> Protpardelle:
+        """Get the underlying Protpardelle model on the fly."""
+        parallel_wrappers = (
+            nn.DataParallel,
+            DDP,
+        )
+        return (
+            self.model.module
+            if isinstance(self.model, parallel_wrappers)
+            else self.model
+        )
 
-        self.mpnn_model = None
-        self.struct_pred_model = None
-        self.tokenizer = None
+    @property
+    def device(self) -> torch.device:
+        """Get the device of the underlying Protpardelle model."""
+        return self.module.device
 
-        self.sigma_data = self.model.sigma_data
+    def _load_optimizer_and_scheduler(
+        self,
+    ) -> tuple[torch.optim.Adam, modules.LinearWarmupCosineDecay]:
+        """Load the optimizer and scheduler.
 
-    def get_optimizer_and_scheduler(self):
-        params_to_train = [(n, p) for n, p in self.model.named_parameters()]
-        if self.model.task == "seqdes":
+        Returns:
+            tuple[torch.optim.Adam, modules.LinearWarmupCosineDecay]: The optimizer and scheduler.
+        """
+
+        if self.module.task == "seqdes":
             params_to_train = [
-                (n, p) for n, p in params_to_train if "struct_model" not in n
+                p for n, p in self.module.named_parameters() if "struct_model" not in n
             ]
-        params_to_train = [p for n, p in params_to_train]
+        else:
+            params_to_train = [p for _, p in self.module.named_parameters()]
+
         optimizer = torch.optim.Adam(
             params_to_train,
             lr=self.config.train.lr,
@@ -140,448 +359,657 @@ class ProtpardelleRunner:
             warmup_steps=self.config.train.warmup_steps,
             decay_steps=self.config.train.decay_steps,
         )
+
         return optimizer, scheduler
 
-    def train_init(self):
-        print(f"total params: {sum(p.numel() for p in self.model.parameters())}")
-        print(
-            f"trainable params: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}"
+    def save_checkpoint(
+        self,
+        epoch: int,
+        total_steps: int,
+        checkpoint_dir: StrPath,
+    ) -> None:
+        """Save the model checkpoint.
+
+        Args:
+            epoch (int): The current epoch.
+            total_steps (int): The total number of training steps.
+            checkpoint_dir (StrPath): The directory to save the checkpoint.
+        """
+
+        checkpoint = {
+            "model": self.module.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "scaler": self.scaler.state_dict(),
+            "epoch": epoch,
+            "total_steps": total_steps,
+            "pytorch_version": torch.__version__,
+            "numpy_version": np.__version__,
+            "python_version": ".".join(map(str, sys.version_info[:3])),
+        }
+        checkpoint["rng"] = {
+            "torch": torch.get_rng_state(),
+            "cuda": (
+                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+            ),
+            "numpy": np.random.get_state(),
+            "python": random.getstate(),
+            "sampler_seed": (
+                self.config.train.seed if self.config.train.seed is not None else 0
+            ),  # only for storing purpose
+        }
+
+        checkpoint_dir = norm_path(checkpoint_dir)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        torch.save(checkpoint, checkpoint_dir / f"epoch{epoch}_training_state.pth")
+
+    def load_checkpoint(
+        self,
+        checkpoint_path: StrPath,
+    ) -> tuple[int, int]:
+        """Load the model checkpoint.
+
+        Args:
+            checkpoint_path (StrPath): The path to the checkpoint file.
+
+        Raises:
+            FileNotFoundError: If the checkpoint file is not found.
+            ValueError: If the checkpoint is invalid.
+
+        Returns:
+            tuple[int, int]: The epoch and total steps from the checkpoint.
+        """
+
+        checkpoint_path = norm_path(checkpoint_path)
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        checkpoint = torch.load(
+            checkpoint_path, map_location=self.device, weights_only=False
         )
 
-    def compute_loss(
-        self,
-        inputs,
-        timestep=None,
-        is_training=False,
-        return_aux=False,
-    ) -> tuple[torch.Tensor, dict[str, float]] | torch.Tensor:
-        seq_mask = inputs["seq_mask"]
-        coords = inputs["coords_in"]
-        aatype = inputs["aatype"]
-        aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
-        atom_mask = inputs["atom_mask"]
-        device = coords.device
-        bs = coords.shape[0]
+        self.module.load_state_dict(checkpoint["model"])
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        self.scheduler.load_state_dict(checkpoint["scheduler"])
+        self.scaler.load_state_dict(checkpoint["scaler"])
 
-        # Initialize variables that may not be set in all branches
-        struct_crop_cond = None
+        torch.set_rng_state(checkpoint["rng"]["torch"].cpu())
+        if torch.cuda.is_available():
+            if checkpoint["rng"]["cuda"] is None:
+                raise ValueError(
+                    "Checkpoint was trained with CUDA but current device is CPU"
+                )
+            cuda_states = [state.cpu() for state in checkpoint["rng"]["cuda"]]
+            torch.cuda.set_rng_state_all(cuda_states)
+        np.random.set_state(checkpoint["rng"]["numpy"])
+        random.setstate(checkpoint["rng"]["python"])
+
+        return checkpoint["epoch"], checkpoint["total_steps"]
+
+    def initialize_training_parameters(self) -> tuple[int, int]:
+        """Initialize training parameters.
+
+        Returns:
+            tuple[int, int]: The starting epoch and total steps.
+        """
+
+        start_epoch = 0
+        total_steps = 0
+
+        # Set seeds if no rng provided
+        seed = self.config.train.seed
+        if seed is not None:
+            if self.ddp_enabled:
+                seed += self.distributed.rank
+            seed_everything(
+                seed, freeze_cuda=True
+            )  # use deterministic pytorch for training
+
+        return start_epoch, total_steps
+
+    def start_or_resume(self) -> tuple[int, int]:
+        """Load checkpoint if it exists, otherwise initialize training parameters.
+
+        Returns:
+            tuple[int, int]: The starting epoch and total steps.
+        """
+
+        checkpoint_path = self.config.train.ckpt_path
+        if checkpoint_path is None:
+            return self.initialize_training_parameters()
+
+        checkpoint_path = norm_path(checkpoint_path)
+        try:
+            start_epoch, total_steps = self.load_checkpoint(checkpoint_path)
+            logger.info(
+                "Resumed from checkpoint: %s (epoch=%d, total_steps=%d)",
+                checkpoint_path,
+                start_epoch,
+                total_steps,
+            )
+            return start_epoch, total_steps
+        except FileNotFoundError:
+            logger.warning(
+                "Checkpoint file not found: %s; starting from scratch", checkpoint_path
+            )
+
+        return self.initialize_training_parameters()
+
+    def log_training_info(self) -> None:
+        """Log training information."""
+        logger.info(
+            "Total params: %d", sum(p.numel() for p in self.module.parameters())
+        )
+        logger.info(
+            "Trainable params: %d",
+            sum(p.numel() for p in self.module.parameters() if p.requires_grad),
+        )
+
+    def get_dataloader(self, datasets: list[PDBDataset]) -> DataLoader:
+        """Get the training dataloader.
+
+        Args:
+            datasets (list[PDBDataset]): The list of datasets to use.
+
+        Returns:
+            DataLoader: The training dataloader.
+        """
+
+        # Initialize and combine training datasets. The StochasticMixedSampler will handle
+        # sampling from the combined datasets according to specified mixing ratios.
+
+        sampler = StochasticMixedSampler(
+            datasets,
+            self.config.data.mixing_ratios,
+            batch_size=self.batch_size,
+            num_replicas=(self.distributed.world_size if self.ddp_enabled else 1),
+            rank=self.distributed.rank if self.ddp_enabled else 0,
+            seed=self.config.train.seed,
+        )
+
+        dataset = ConcatDataset(datasets)
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            pin_memory=self.device.type == "cuda",
+            shuffle=False,  # the sampler takes care of shuffling
+            sampler=sampler,
+            drop_last=True,
+            prefetch_factor=4 if self.num_workers > 0 else None,
+            persistent_workers=self.num_workers > 0,
+        )
+
+        return dataloader
+
+    def compute_loss(
+        self, input_dict: dict[str, torch.Tensor], tol: float = 1e-6
+    ) -> tuple[torch.Tensor, dict[str, float]]:
+        """Compute the loss for a given input batch.
+
+        Args:
+            input_dict (dict[str, torch.Tensor]): Input tensors for the model.
+            tol (float, optional): Tolerance for numerical stability. Defaults to 1e-6.
+
+        Raises:
+            NotImplementedError: If the all atom loss computation is not implemented.
+
+        Returns:
+            tuple[torch.Tensor, dict[str, float]]: The computed loss and logging metrics.
+        """
+
+        seq_mask = input_dict["seq_mask"]
+        atom_coords = input_dict["coords_in"]
+        aatype = input_dict["aatype"]
+        atom_mask = input_dict["atom_mask"]
+        chain_index = input_dict["chain_index"]
+        residue_index = input_dict["residue_index"]
+
+        batch_size = atom_coords.shape[0]
+
+        # Crop conditioning
         if self.config.train.crop_conditional:
-            assert (
-                not self.config.model.compute_loss_on_all_atoms
-            ), "Crop conditioning with compute_loss_on_all_atoms not implemented"
-            coords, crop_cond_mask, hotspot_mask = (
+            if self.config.model.compute_loss_on_all_atoms:
+                raise NotImplementedError(
+                    "Crop conditioning with all atom loss not implemented"
+                )
+            atom_coords, crop_cond_mask, hotspot_mask = (
                 make_crop_cond_mask_and_recenter_coords(
-                    atom_mask,
-                    coords,
+                    atom_coords=atom_coords,
+                    atom_mask=atom_mask,
                     aatype=aatype,
-                    chain_index=inputs["chain_index"],
+                    chain_index=chain_index,
                     **vars(self.config.train.crop_cond),
                 )
             )
-            struct_crop_cond = coords * crop_cond_mask[..., None]
+            struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
+            if "hotspots" not in self.config.model.conditioning_style:
+                hotspot_mask = None  # type: ignore
+        else:
+            struct_crop_cond = None
+            hotspot_mask = None
 
-        sse_cond, adj_cond = None, None
-        if (
-            "conditioning_style" in self.config.model
-            and "ssadj" in self.config.model.conditioning_style
-        ):
-            sse_cond = inputs["sse"]
-            adj_cond = inputs["adj"]
+        # Secondary structure conditioning
+        if "ssadj" in self.config.model.conditioning_style:
+            sse_cond = input_dict["sse"]
+            adj_cond = input_dict["adj"]
+        else:
+            sse_cond = None
+            adj_cond = None
 
         # Noise data
-        # Sample time
-        if timestep is None:
-            timestep = torch.rand(bs).clamp(min=1e-9, max=1 - 1e-9).to(self.device)
-        noise_level = self.model.training_noise_schedule(timestep)
-
-        noised_coords = diffusion.noise_coords(
-            coords,
-            noise_level,
-            atom_mask=atom_mask,
+        timestep = torch.rand(batch_size, device=self.device).clamp(
+            min=tol, max=1 - tol
+        )
+        noise_level = self.module.training_noise_schedule(timestep)
+        noised_coords = dummy_fill_noise_coords(
+            atom_coords,
+            atom_mask,
+            noise_level=noise_level,
             dummy_fill_mode=self.config.data.dummy_fill_mode,
         )
 
         bb_seq = (seq_mask * residue_constants.restype_order["G"]).long()
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
-        # some backbone atoms may be missing -- mask them to zeros!
-        bb_atom_mask = torch.logical_and(bb_atom_mask, atom_mask)
-
+        # Some backbone atoms may be missing; mask them to zeros
+        bb_atom_mask = (
+            bb_atom_mask * atom_mask
+        )  # float masks; multiply instead of boolean ops
         if self.config.model.task == "backbone":
-            noised_coords = noised_coords * bb_atom_mask[..., None]
+            noised_coords = noised_coords * bb_atom_mask.unsqueeze(-1)
         elif self.config.model.task == "ai-allatom":
-            noised_coords = noised_coords * atom_mask[..., None]
+            noised_coords = noised_coords * atom_mask.unsqueeze(-1)
 
         # Forward pass
         model_inputs = {
             "noisy_coords": noised_coords,
             "noise_level": noise_level,
             "seq_mask": seq_mask,
-            "residue_index": inputs["residue_index"],
-            "chain_index": inputs["chain_index"],
-            "hotspot_mask": (
-                hotspot_mask
-                if "hotspot" in self.config.model.conditioning_style
-                else None
-            ),
+            "residue_index": residue_index,
+            "chain_index": chain_index,
+            "hotspot_mask": hotspot_mask,
             "struct_crop_cond": struct_crop_cond,
             "sse_cond": sse_cond,
             "adj_cond": adj_cond,
         }
 
-        forward_fn = self.forward if is_training else self.model
-        struct_self_cond, seq_self_cond = None, None
-
-        if hasattr(self.config.model, "debug_mpnn") and self.config.model.debug_mpnn:
-            if (
-                np.random.uniform() < self.config.train.self_cond_train_prob
-                and self.config.model.mpnn_model.use_self_conditioning
-            ):
-                with torch.no_grad():
-                    _, _, _, seq_self_cond = forward_fn(
-                        **model_inputs,
-                    )
-            _, pred_seq_logprobs, _, _ = forward_fn(
-                **model_inputs,
-                seq_self_cond=seq_self_cond,
-            )
+        if np.random.rand() < self.config.train.self_cond_train_prob:
+            with torch.no_grad():
+                _, _, struct_self_cond, seq_self_cond = self.model(**model_inputs)
         else:
-            if np.random.uniform() < self.config.train.self_cond_train_prob:
-                with torch.no_grad():
-                    _, _, struct_self_cond, seq_self_cond = forward_fn(**model_inputs)
-            denoised_coords, pred_seq_logprobs, _, _ = forward_fn(
-                **model_inputs,
-                struct_self_cond=struct_self_cond,
-                seq_self_cond=seq_self_cond,
-            )
+            struct_self_cond = None
+            seq_self_cond = None
+        denoised_coords, aatype_logprobs, _, _ = self.model(
+            **model_inputs,
+            struct_self_cond=struct_self_cond,
+            seq_self_cond=seq_self_cond,
+        )
 
-        loss = torch.tensor(0.0, device=device, dtype=torch.float32)
-        aux = {}
+        loss = torch.tensor(0.0, device=self.device)
+        log_dict: dict[str, float] = {}
 
         # Compute structure loss
-        if self.config.model.task in [
+        if self.config.model.task in {
             "backbone",
             "allatom",
             "ai-allatom",
             "ai-allatom-nomask",
             "codesign",
-        ]:
+        }:
             if self.config.model.task == "backbone":
-                struct_loss_mask = torch.ones_like(coords) * bb_atom_mask[..., None]
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * bb_atom_mask.unsqueeze(-1)
+            elif self.config.model.compute_loss_on_all_atoms:
+                # Compute loss on all 37 atoms
+                struct_loss_mask = torch.ones_like(
+                    atom_coords
+                ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
             else:
-                if self.config.model.compute_loss_on_all_atoms:
-                    # Compute loss on all 37 atoms
-                    struct_loss_mask = torch.ones_like(
-                        coords
-                    ) * unsqueeze_trailing_dims(seq_mask, coords)
-                else:
-                    struct_loss_mask = torch.ones_like(coords) * atom_mask[..., None]
-            loss_weight = (noise_level**2 + self.sigma_data**2) / (
-                (noise_level * self.sigma_data) ** 2
+                struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(
+                    -1
+                )
+
+            noise_level_fp32 = noise_level.float()
+            sigma_fp32 = torch.tensor(
+                self.module.sigma_data,
+                device=self.device,
+                dtype=torch.float,
             )
-            struct_loss = masked_mse(
-                coords, denoised_coords, struct_loss_mask, loss_weight
-            )
+            denom = (noise_level_fp32 * sigma_fp32).square().clamp(min=tol)
+            loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
+
+            struct_loss = masked_mse_loss(
+                atom_coords, denoised_coords, struct_loss_mask, loss_weight
+            ).mean()
             loss = loss + struct_loss
-            aux["struct_loss"] = struct_loss.mean().detach().cpu().item()
+            log_dict["struct_loss"] = struct_loss.detach().cpu().item()
 
         # Compute mpnn loss
-        if self.config.model.task in ["seqdes", "codesign"]:
+        if self.config.model.task in {"seqdes", "codesign"}:
             alpha = self.config.model.mpnn_model.label_smoothing
-            target_oh = (1 - alpha) * aatype_oh + alpha / self.model.n_tokens
-            seq_loss_mask = seq_mask
-            mpnn_loss = masked_cross_entropy(
-                pred_seq_logprobs, target_oh, seq_loss_mask
-            )
+            aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
+            target_oh = (1 - alpha) * aatype_oh + alpha / self.module.num_tokens
+            mpnn_loss = masked_cross_entropy_loss(
+                aatype_logprobs, target_oh, seq_mask
+            ).mean()
             loss = loss + mpnn_loss
-            aux["mpnn_loss"] = mpnn_loss.mean().detach().cpu().item()
+            log_dict["mpnn_loss"] = mpnn_loss.detach().cpu().item()
 
-        aux["train_loss"] = loss.mean().detach().cpu().item()
-        if return_aux:
-            return loss.mean(), aux
-        return loss.mean()
+        log_dict["train_loss"] = loss.detach().cpu().item()
 
-    def train_step(self, inputs) -> dict[str, float]:
-        self.model.zero_grad()
+        return loss, log_dict
 
-        if self.scaler is not None:
-            with autocast("cuda"):
-                loss, log_dict = self.compute_loss(
-                    inputs, is_training=True, return_aux=True
-                )
-                self.scaler.scale(loss).backward()
+    def train_step(self, input_dict: dict[str, torch.Tensor]) -> dict[str, float]:
+        """Perform a single training step.
 
-                # Compute the gradient norm and add it to the log_dict
-                grad_norm = nn.utils.clip_grad_norm_(
-                    self.model.parameters(), float("inf")
-                )
-                log_dict["grad_norm"] = grad_norm.item()
+        Args:
+            input_dict (dict[str, torch.Tensor]): Input tensors for the model.
 
-                try:
-                    nn.utils.clip_grad_norm_(
-                        self.model.parameters(), self.config.train.grad_clip_val
-                    )
-                except RuntimeError as e:
-                    print(f"Warning: Failed to clip gradients: {e}")
+        Returns:
+            dict[str, float]: Dictionary containing training logging metrics.
+        """
 
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                self.scheduler.step()
-        else:
-            loss, log_dict = self.compute_loss(
-                inputs, is_training=True, return_aux=True
-            )
-            loss.backward()
+        self.optimizer.zero_grad()
+
+        with autocast(self.device.type) if self.config.train.use_amp else nullcontext():
+            loss, log_dict = self.compute_loss(input_dict)
+            self.scaler.scale(loss).backward()
+
+            self.scaler.unscale_(self.optimizer)
 
             # Compute the gradient norm and add it to the log_dict
-            grad_norm = nn.utils.clip_grad_norm_(self.model.parameters(), float("inf"))
+            grad_norm = nn.utils.clip_grad_norm_(
+                self.module.parameters(),
+                self.config.train.grad_clip_val,
+            )
             log_dict["grad_norm"] = grad_norm.item()
 
-            try:
-                nn.utils.clip_grad_norm_(
-                    self.model.parameters(), self.config.train.grad_clip_val
-                )
-            except RuntimeError as e:
-                print(f"Warning: Failed to clip gradients: {e}")
-            self.optimizer.step()
+            prev_scale = self.scaler.get_scale()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+
+        if self.scaler.get_scale() >= prev_scale:
             self.scheduler.step()
 
-        # Add train prefix to all keys
-        keys = list(log_dict.keys())
-        for k in keys:
-            log_dict[f"train/{k}"] = log_dict.pop(k)
+        # Add train prefix to all keys for wandb logging
+        log_dict = {f"train/{k}": v for k, v in log_dict.items()}
 
         return log_dict
 
 
 @record
 def train(
-    config_path: str,
-    out_dir: str,
-    project: str,
-    wandb_id: str = "",
+    config_path: StrPath,
+    output_dir: StrPath,
+    device: Device = None,
+    project_name: str | None = None,
+    wandb_id: str | None = None,
     exp_name: str | None = None,
-    overfit: int = -1,
     debug: bool = False,
-    gpu_id: int = 0,
-    use_dataparallel: bool = False,
-    num_workers: int = 0,
 ) -> None:
+    """Train a Protpardelle model.
 
-    with open(config_path, "r", encoding="utf-8") as f:
-        config_dict = yaml.safe_load(f)
-    config = dict_to_namespace(config_dict)
+    Args:
+        config_path (StrPath): Path to the configuration file.
+        output_dir (StrPath): Directory to save output files.
+        device (Device, optional): Device to use for training. Defaults to None.
+        project_name (str | None, optional): Project name for wandb. Defaults to None.
+        wandb_id (str | None, optional): Wandb ID for logging. Defaults to None.
+        exp_name (str | None, optional): Experiment name for logging. Defaults to None.
+        debug (bool, optional): Whether to enable debug mode. Defaults to False.
 
+    Raises: ...  # TODO
+    """
+
+    # Enable TF32 on Ampere+ GPUs for faster training
+    tf32_enabled = enable_tf32_if_available()
+    if tf32_enabled:
+        logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
+
+    # Set and resolve device with DDP if applicable
+    if device is None:
+        requested_device = get_default_device()
+    else:
+        requested_device = torch.device(device)
+    resolved_device, distributed = _resolve_device_with_distributed(requested_device)
+
+    # Load config
+    config = load_config(config_path, TrainingConfig)
+
+    # Determine per-process batch size
+    global_batch_size = config.train.batch_size
+    if distributed.ddp_enabled:
+        if global_batch_size % distributed.world_size != 0:
+            raise ValueError(
+                "train.batch_size must be divisible by the number of distributed processes"
+            )
+        local_batch_size = global_batch_size // distributed.world_size
+        if local_batch_size == 0:
+            raise ValueError("Per-process batch size must be at least 1")
+    else:
+        local_batch_size = global_batch_size
+
+    # Determine number of effective dataloader workers
+    global_num_workers = config.data.num_workers
     if debug:
-        print("Debug mode is enabled")
-        num_workers = 0  # Override num_workers to 0 in debug mode
-
-    # Set seeds
-    seed = config.train.seed
-    if seed is not None:
-        seed_everything(seed)
-    # nonrandom CUDNN convolution algo, maybe slower
-    torch.backends.cudnn.deterministic = True
-    # nonrandom selection of CUDNN convolution, maybe slower
-    torch.backends.cudnn.benchmark = False
-
-    wandb_dir = str(Path(out_dir, project))
-    Path(wandb_dir, "wandb").mkdir(parents=True, exist_ok=True)  # Create wandb dir
-
-    # Set up devices
-    if torch.cuda.is_available():
-        torch.cuda.init()
-        print("Device count:", torch.cuda.device_count())
-        print("Current device:", torch.cuda.current_device())
-        device = f"cuda:{gpu_id}"
+        logger.debug("Debug mode is enabled; setting num_workers to 0")
+        global_num_workers = 0
+        local_num_workers = 0
+    elif distributed.ddp_enabled and (global_num_workers > 0):
+        local_num_workers = max(1, global_num_workers // distributed.world_size)
+        global_num_workers = local_num_workers * distributed.world_size
     else:
-        device = "cpu"
+        local_num_workers = global_num_workers
 
-    # Load in datasets, using torch concatenation to combine datasets if there are multiple specified
-    # assumes the first dataset is the main dataset for computing epochs, sample from the other datasets with replacement
-    train_datasets = [
-        PDBDataset(
-            pdb_path=config.data.pdb_paths[di],
-            fixed_size=config.data.fixed_size,
-            mode="train",
-            overfit=overfit,
-            short_epoch=debug,
-            se3_data_augment=config.data.se3_data_augment,
-            translation_scale=config.data.translation_scale,
-            chain_residx_gap=config.data.chain_residx_gap,
-            dummy_fill_mode=config.data.dummy_fill_mode,
-            subset=config.data.subset[di],
+    # Log DDP training setup
+    if distributed.ddp_enabled:
+        logger.info(
+            "Distributed training: rank %d/%d; local/global batch %d/%d; "
+            "local/global dataloader workers %d/%d",
+            distributed.rank,
+            distributed.world_size,
+            local_batch_size,
+            global_batch_size,
+            local_num_workers,
+            global_num_workers,
         )
-        for di in range(len(config.data.pdb_paths))
-    ]
-    dataset = ConcatDataset(train_datasets)
+    else:
+        logger.info(
+            "Single-process training: batch %d, dataloader workers %d",
+            global_batch_size,
+            global_num_workers,
+        )
 
-    train_sampler = StochasticMixedSampler(
-        train_datasets, config.data.mixing_ratios, batch_size=config.train.batch_size
-    )
+    # Load datasets
+    datasets = load_datasets(config)
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=config.train.batch_size,
-        num_workers=num_workers,
-        pin_memory="cuda" in device,
-        shuffle=False,  # the sampler takes care of shuffling
-        sampler=train_sampler,
-        drop_last=True,
-        persistent_workers=not debug,
-    )
-
-    # Calculate sigma_data
+    # Auto calculate sigma data if needed
     if config.data.auto_calc_sigma_data:
-        print(
-            f"===== Automatically computing sigma_data for {config.data.n_examples_for_sigma_data} examples ====="
-        )
-        sigma_data = calc_sigma_data(dataset, config, num_workers)
+        sigma_data: float | None = None
+        if distributed.is_main:
+            dataset = ConcatDataset(datasets)
+            sigma_data = calc_sigma_data(dataset, config, num_workers=local_num_workers)
+        if distributed.ddp_enabled:
+            sigma_tensor = torch.zeros(1, device=resolved_device)
+            if distributed.is_main:
+                assert sigma_data is not None
+                sigma_tensor[0] = sigma_data
+            dist.broadcast(sigma_tensor, src=0)
+            sigma_data = float(sigma_tensor.item())
+        else:
+            assert sigma_data is not None
 
-        # Update config and config_dict with estimated sigma_data
+        # Override the config value
         config.data.sigma_data = sigma_data
-        config_dict["data"]["sigma_data"] = sigma_data
 
-    # Init wandb and logging for process 0
-    log_dir = ""
-    wandb.init(
-        mode="disabled" if debug else "online",
-        project=project,
-        entity=wandb_id,
-        name=exp_name,
-        job_type="debug" if debug else "train",
-        config=config_dict,
-        dir=wandb_dir,
-    )
-    if wandb.run:
-        print(
-            f"Beginning: run_name={wandb.run.name}, run_id={wandb.run.id}, device={device}"
-        )
+    # Initialize wandb
+    output_dir = norm_path(output_dir)
+    wandb_kwargs = {
+        "config": config,
+        "dir": output_dir,
+        "entity": wandb_id,
+        "job_type": "debug" if debug else "train",
+        "mode": "disabled" if debug else "online",
+        "name": exp_name,
+        "project": project_name,
+    }
+
+    # Disable wandb logging on non-main ranks
+    if distributed.ddp_enabled and (not distributed.is_main):
+        wandb_kwargs["mode"] = "disabled"
+
+    wandb_run: wandb.Run | None = None
+    run_name: str
+    run_dir: str | None = None
+    run_id: str | None = None
+
+    # Initialize wandb only on the main rank or in debug mode
+    if distributed.is_main or debug:
+        wandb_run = wandb.init(**wandb_kwargs)
+        if wandb_run is None:
+            raise RuntimeError("Failed to initialize wandb run")
+        if (
+            (wandb_run.name is None)
+            or (wandb_run.dir is None)
+            or (wandb_run.id is None)
+        ):
+            raise RuntimeError("wandb returned an incomplete run object")
+        run_name = wandb_run.name
+        run_dir = wandb_run.dir
+        run_id = wandb_run.id
     else:
-        print(f"Beginning: device={device}")
-    print(f"Training configuration: {config_path=}, {out_dir=}, {project=}")
+        # Non-main ranks reuse exp_name for logging clarity
+        if exp_name is None:
+            if distributed.ddp_enabled:
+                run_name = f"run-rank{distributed.rank}"
+            else:
+                run_name = "run"
+        else:
+            run_name = exp_name
 
-    # Set up logging
-    run_name = "default_run"
-    if wandb.run and wandb.run.name:
-        run_name = wandb.run.name
-
-    log_dir = Path(out_dir, project, f"{run_name}_debug" if debug else run_name)
-
-    Path(log_dir, "results").mkdir(parents=True, exist_ok=True)
-    Path(log_dir, "checkpoints").mkdir(parents=True, exist_ok=True)
-
-    # Preserve config
-    with open(Path(log_dir, "config.yml"), "w", encoding="utf-8") as f:
-        yaml.safe_dump(config_dict, f)
-
-    # Set up model and optimizers
-    model = models.Protpardelle(config, device)
-    start_epoch, total_steps = 0, 0
-    if config.train.ckpt_path != "":
-        training_state = torch.load(
-            config.train.ckpt_path, weights_only=False, map_location=device
-        )
-        model.load_state_dict(training_state["model_state_dict"])
-        start_epoch = training_state["epoch"]
-        total_steps = training_state["total_steps"]
-
-    if use_dataparallel:
-        model = nn.DataParallel(model)
-
-    model.train()
-    model.to(device)
-
-    runner = ProtpardelleRunner(
+    # Initialize trainer
+    trainer = ProtpardelleTrainer(
         config,
-        model,
-        dataset,
-        log_dir,
-        device,
+        resolved_device,
+        distributed,
+        batch_size_override=local_batch_size,
+        num_workers_override=local_num_workers,
     )
-    if (
-        config.train.ckpt_path != ""
-        and "ckpt_optim" in config.train
-        and config.train.ckpt_optim
-    ):
-        for _ in range(total_steps):
-            runner.scheduler.step()
-        runner.optimizer.load_state_dict(training_state["optim_state_dict"])
-    runner.train_init()
 
-    with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
-        for epoch in range(start_epoch + 1, config.train.max_epochs + 1):
-            for inputs in tqdm(
-                dataloader, desc=f"epoch {epoch}/{config.train.max_epochs}"
-            ):
-                inputs = {k: v.to(device) for k, v in inputs.items()}
-                inputs["step"] = total_steps
-                log_dict = runner.train_step(inputs)
-                log_dict["learning_rate"] = runner.scheduler.get_last_lr()[0]
+    # Start or resume training from checkpoint
+    start_epoch, total_steps = trainer.start_or_resume()
 
-                wandb.log(log_dict, step=total_steps)
-                wandb.log({"epoch": epoch}, step=total_steps)
-                total_steps += 1
-
-            with torch.no_grad():  # per epoch
-                # Save checkpoint
-                if (
-                    epoch % config.train.checkpoint_freq == 0
-                    or epoch in config.train.checkpoints
-                ):
-                    runner.model.eval()
-                    torch.save(
-                        runner.model,
-                        f"{log_dir}/checkpoints/epoch{epoch}_model.pth",
-                    )
-                    torch.save(
-                        {
-                            "model_state_dict": runner.model.state_dict(),
-                            "optim_state_dict": runner.optimizer.state_dict(),
-                            "epoch": epoch,
-                            "total_steps": total_steps,
-                        },
-                        f"{log_dir}/checkpoints/epoch{epoch}_training_state.pth",
-                    )
-
-                    runner.model.train()
-
-    wandb.finish()
-    if wandb.run and wandb.run.dir:
-        subprocess.run(shlex.split(f"cp -r {wandb.run.dir} {log_dir}"), check=False)
-    if wandb.run:
-        print(
-            f'Training finished. (run name "{wandb.run.name}", run id "{wandb.run.id}")'
+    # Log training info
+    if trainer.is_main:
+        logger.info(
+            "Beginning: run_name %s, run_id %s, device %s",
+            run_name,
+            run_id,
+            trainer.device,
         )
+        logger.info(
+            "Training configuration: config_path %s, output_dir %s, project_name %s",
+            config_path,
+            output_dir,
+            project_name,
+        )
+
+    # Create output directories and save config
+    if trainer.is_main:
+        log_dir = output_dir / (f"{run_name}_debug" if debug else run_name)
+        checkpoint_dir = log_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(log_dir / "config.yaml", "w", encoding="utf-8") as f:
+            yaml.safe_dump(namespace_to_dict(trainer.config), f)
+
+        trainer.log_training_info()
     else:
-        print("Training finished.")
+        log_dir = None
+        checkpoint_dir = None
+
+    # Initialize dataloader
+    dataloader = trainer.get_dataloader(datasets)
+
+    # Wrap the entire training loop in a try-finally to ensure cleanup
+    try:
+        # Use anomaly detection if in debug mode
+        with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
+            for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
+                if hasattr(dataloader.sampler, "set_epoch"):
+                    dataloader.sampler.set_epoch(epoch)  # type: ignore
+
+                progress = tqdm(
+                    dataloader,
+                    desc=f"epoch {epoch}/{trainer.config.train.max_epochs}",
+                    disable=not trainer.is_main,
+                )
+                for input_dict in progress:
+                    input_dict: dict[str, torch.Tensor] = {
+                        k: v.to(
+                            trainer.device, non_blocking=True
+                        )  # non_blocking for pin_memory
+                        for k, v in input_dict.items()
+                    }
+                    log_dict = trainer.train_step(input_dict)
+                    log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
+                    log_dict["epoch"] = epoch
+                    log_dict = _log_distributed_mean(
+                        log_dict, trainer.device, distributed
+                    )
+
+                    # Log to wandb on main rank only
+                    if trainer.is_main:
+                        wandb.log(log_dict, step=total_steps)
+                    total_steps += 1
+
+                with torch.no_grad():
+                    if trainer.is_main:
+                        assert checkpoint_dir is not None
+                        if (epoch % trainer.config.train.checkpoint_freq == 0) or (
+                            epoch in trainer.config.train.checkpoints
+                        ):
+                            trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
+
+                if trainer.ddp_enabled:
+                    dist.barrier()
+    finally:
+        if wandb_run is not None:
+            wandb.finish()
+        if trainer.is_main and (run_dir is not None):
+            assert log_dir is not None
+            # Copy the entire wandb run directory to the log_dir for safekeeping
+            subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
+            logger.info(
+                "Training finished. (run_name %s, run_id %s)",
+                run_name,
+                run_id,
+            )
+        _cleanup_distributed(distributed)
 
 
 @app.command()
 def main(
-    project: str = typer.Option("other", help="wandb project name"),
-    wandb_id: str = typer.Option("", help="wandb username"),
-    exp_name: str = typer.Option(None, help="wandb exp name"),
-    config: str = typer.Option("configs/config.yml", help="experiment config"),
-    overfit: int = typer.Option(-1, help="number of examples to overfit to"),
-    debug: bool = typer.Option(False, help="run one batch and eval offline"),
-    gpu_id: int = typer.Option(0, help="which GPU to use"),
-    use_dataparallel: bool = typer.Option(False, help="use DataParallel"),
-    num_workers: int = typer.Option(0, help="dataloader num workers"),
-    out_dir: str = typer.Option(..., help="output path for trained models"),
-):
-
+    config_path: str = typer.Option(..., help="Path to the config file."),
+    output_dir: str = typer.Option(..., help="Path to the output directory."),
+    device: str | None = typer.Option(None, help="Device to use for training."),
+    project_name: str | None = typer.Option(None, help="Project name for wandb."),
+    wandb_id: str | None = typer.Option(None, help="User/entity ID for wandb."),
+    exp_name: str | None = typer.Option(None, help="Run/experiment name for wandb."),
+    debug: bool = typer.Option(False, help="Run one batch and eval offline."),
+) -> None:
+    """Entrypoint for Protpardelle-1c training."""
     train(
-        config_path=config,
-        out_dir=out_dir,
-        project=project,
+        config_path,
+        output_dir,
+        device=device,
+        project_name=project_name,
         wandb_id=wandb_id,
         exp_name=exp_name,
-        overfit=overfit,
         debug=debug,
-        gpu_id=gpu_id,
-        use_dataparallel=use_dataparallel,
-        num_workers=num_workers,
     )
 
 

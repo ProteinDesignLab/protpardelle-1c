@@ -82,7 +82,7 @@ uv pip install -e . --no-deps
 
 ## Download model weights and configs
 
-Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
+Download the pre-trained model weights and corresponding configs from [Zenodo](https://zenodo.org/records/16817230). To run sampling with an all-atom model, download the original [ProteinMPNN weights](https://github.com/dauparas/ProteinMPNN/tree/main/vanilla_model_weights) and [LigandMPNN weights](https://github.com/dauparas/LigandMPNN). To run evaluation, download the [ESMFold weights](https://huggingface.co/facebook/esmfold_v1) from Hugging Face.
 
 We use [`aria2`](https://github.com/aria2/aria2) and [`huggingface-hub[cli]`](https://pypi.org/project/huggingface-hub/) in our download script. All downloads are automatically handled by running:
 
@@ -95,6 +95,7 @@ It takes some time to download all the files; you should see the following direc
 - `<project_root>/model_params/`
 - `<project_root>/model_params/ESMFold/`
 - `<project_root>/model_params/ProteinMPNN/vanilla_model_weights/`
+- `<project_root>/model_params/LigandMPNN/`
 - `<project_root>/model_params/configs/`
 - `<project_root>/model_params/weights/`
 
@@ -120,6 +121,9 @@ export ESMFOLD_PATH=/abs/path/to/ESMFold
 
 # ProteinMPNN weights (directory)
 export PROTEINMPNN_WEIGHTS=/abs/path/to/ProteinMPNN/vanilla_model_weights
+
+# LigandMPNN weights (directory)
+export LIGANDMPNN_WEIGHTS=/abs/path/to/LigandMPNN
 
 # Default output directory (optional; defaults to <project_root>/results)
 export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir
@@ -154,7 +158,7 @@ We recommend reading and running the example sampling configs under `examples/sa
 python -m protpardelle.sample examples/sampling/00_unconditional.yaml --num-samples 8 --num-mpnn-seqs 0
 
 # Partial diffusion
-python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-pdb examples/motifs/nanobody/7eow_B_atom.pdb --num-samples 8 --num-mpnn-seqs 0
+python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
 # Motif scaffolding
 python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
@@ -185,6 +189,7 @@ python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --m
 
 - MotifBench samples and results are at [Zenodo](https://zenodo.org/records/16651614). These were produced with the `03_motifbench` config.
 - RFdiffusion/La-Proteina motif scaffolding samples and results are at [Zenodo](https://zenodo.org/records/16887802). These were produced with the `07_rfdiffusion` and `08_rfdiffusion_allatom` configs.
+- BindCraft samples and results are at [Zenodo](https://zenodo.org/records/17096818). These were produced with the `04_bindcraft` config.
 
 ## Sampling Configs
 
@@ -322,28 +327,29 @@ Previously, all-atom model likelihoods were computed on backbone atoms only. Her
 
 ```bibtex
 @article{doi:10.1073/pnas.2311500121,
-author = {Alexander E. Chu  and Jinho Kim  and Lucy Cheng  and Gina El Nesr  and Minkai Xu  and Richard W. Shuai  and Po-Ssu Huang },
-title = {An all-atom protein generative model},
-journal = {Proceedings of the National Academy of Sciences},
-volume = {121},
-number = {27},
-pages = {e2311500121},
-year = {2024},
-doi = {10.1073/pnas.2311500121},
-URL = {https://www.pnas.org/doi/abs/10.1073/pnas.2311500121},
-eprint = {https://www.pnas.org/doi/pdf/10.1073/pnas.2311500121},
-abstract = {Proteins drive many biological processes; the ability to design and engineer their structure and function has potential for impact across science, medicine, and engineering. Generative modeling with deep neural networks has emerged as a powerful approach for modeling and controllably sampling from the distribution of protein structures. However, many methods ignore the sidechain atoms, which drive most of protein function, focusing only on the backbone conformation. We describe a structure and sequence codesign algorithm which can generate the full atomic structure of proteins across the diverse folds found in the PDB, offering a way to design proteins conditioned directly on functional elements of interest. Proteins mediate their functions through chemical interactions; modeling these interactions, which are typically through sidechains, is an important need in protein design. However, constructing an all-atom generative model requires an appropriate scheme for managing the jointly continuous and discrete nature of proteins encoded in the structure and sequence. We describe an all-atom diffusion model of protein structure, Protpardelle, which represents all sidechain states at once as a “superposition” state; superpositions defining a protein are collapsed into individual residue types and conformations during sample generation. When combined with sequence design methods, our model is able to codesign all-atom protein structure and sequence. Generated proteins are of good quality under the typical quality, diversity, and novelty metrics, and sidechains reproduce the chemical features and behavior of natural proteins. Finally, we explore the potential of our model to conduct all-atom protein design and scaffold functional motifs in a backbone- and rotamer-free way.}}
+  author = {Alexander E. Chu  and Jinho Kim  and Lucy Cheng  and  Gina El Nesr  and Minkai Xu  and Richard W. Shuai  and Po-Ssu  Huang },
+  title = {An all-atom protein generative model},
+  journal = {Proceedings of the National Academy of Sciences},
+  volume = {121},
+  number = {27},
+  pages = {e2311500121},
+  year = {2024},
+  doi = {10.1073/pnas.2311500121},
+  URL = {https://www.pnas.org/doi/abs/10.1073/pnas.2311500121},
+  eprint = {https://www.pnas.org/doi/pdf/10.1073/pnas.2311500121},
+  abstract = {Proteins drive many biological processes; the ability to design and engineer their structure and function has potential for impact across science, medicine, and engineering. Generative modeling with deep neural networks has emerged as a powerful approach for modeling and controllably sampling from the distribution of protein structures. However, many methods ignore the sidechain atoms, which drive most of protein function, focusing only on the backbone conformation. We describe a structure and sequence codesign algorithm which can generate the full atomic structure of proteins across the diverse folds found in the PDB, offering a way to design proteins conditioned directly on functional elements of interest. Proteins mediate their functions through chemical interactions; modeling these interactions, which are typically through sidechains, is an important need in protein design. However, constructing an all-atom generative model requires an appropriate scheme for managing the jointly continuous and discrete nature of proteins encoded in the structure and sequence. We describe an all-atom diffusion model of protein structure, Protpardelle, which represents all sidechain states at once as a “superposition” state; superpositions defining a protein are collapsed into individual residue types and conformations during sample generation. When combined with sequence design methods, our model is able to codesign all-atom protein structure and sequence. Generated proteins are of good quality under the typical quality, diversity, and novelty metrics, and sidechains reproduce the chemical features and behavior of natural proteins. Finally, we explore the potential of our model to conduct all-atom protein design and scaffold functional motifs in a backbone- and rotamer-free way.}
+}
 
-@article {Lu2025.08.18.670959,
- author = {Lu, Tianyu and Shuai, Richard and Kouba, Petr and Li, Zhaoyang and Chen, Yilin and Shirali, Akio and Kim, Jinho and Huang, Po-Ssu},
- title = {Conditional Protein Structure Generation with Protpardelle-1C},
- elocation-id = {2025.08.18.670959},
- year = {2025},
- doi = {10.1101/2025.08.18.670959},
- publisher = {Cold Spring Harbor Laboratory},
- abstract = {We present Protpardelle-1c, a collection of protein structure generative models with robust motif scaffolding and support for multi-chain complex generation under hotspot-conditioning. Enabling sidechain-conditioning to a backbone-only model increased Protpardelle-1c{\textquoteright}s MotifBench score from 4.97 to 28.16, outperforming RFdiffusion{\textquoteright}s 21.27. The crop-conditional all-atom model achieved 208 unique solutions on the La-Proteina all-atom motif scaffolding benchmark, on par with La-Proteina while having \~{}10 times fewer parameters. At 22M parameters, Protpardelle-1c enables rapid sampling, taking 40 minutes to sample all 3000 MotifBench backbones on an NVIDIA A100-80GB, compared to 31 hours for RFdiffusion.Competing Interest StatementThe authors have declared no competing interest.U.S. National Science Foundation, https://ror.org/021nxhr62, DGE-2146755NIH Common Fund, https://ror.org/001d55x84, R01GM147893Merck Research Laboratories, Scientific Engagement and Emerging Discovery Science (SEEDS) ProgramStanford University School of Medicine, https://ror.org/011pcwc98, CatalystEuropean projects CLARA, No. 101136607ERC project FRONTIER, No. 101097822COST Action, CA21162 COZYMEG-Research, Loschmidt Laboratories, Czech Technical University in Prague and Masaryk UniversityStanford University, https://ror.org/00f54p054, Graduate Fellowship},
- URL = {https://www.biorxiv.org/content/early/2025/08/19/2025.08.18.670959},
- eprint = {https://www.biorxiv.org/content/early/2025/08/19/2025.08.18.670959.full.pdf},
- journal = {bioRxiv}
+@article{Lu2025.08.18.670959,
+  author = {Lu, Tianyu and Shuai, Richard and Kouba, Petr and Li, Zhaoyang and Chen, Yilin and Shirali, Akio and Kim, Jinho and Huang, Po-Ssu},
+  title = {Conditional Protein Structure Generation with Protpardelle-1C},
+  elocation-id = {2025.08.18.670959},
+  year = {2025},
+  doi = {10.1101/2025.08.18.670959},
+  publisher = {Cold Spring Harbor Laboratory},
+  abstract = {We present Protpardelle-1c, a collection of protein structure generative models with robust motif scaffolding and support for multi-chain complex generation under hotspot-conditioning. Enabling sidechain-conditioning to a backbone-only model increased Protpardelle-1c{\textquoteright}s MotifBench score from 4.97 to 28.16, outperforming RFdiffusion{\textquoteright}s 21.27. The crop-conditional all-atom model achieved 208 unique solutions on the La-Proteina all-atom motif scaffolding benchmark, on par with La-Proteina while having \~{}10 times fewer parameters. At 22M parameters, Protpardelle-1c enables rapid sampling, taking 40 minutes to sample all 3000 MotifBench backbones on an NVIDIA A100-80GB, compared to 31 hours for RFdiffusion.Competing Interest StatementThe authors have declared no competing interest.U.S. National Science Foundation, https://ror.org/021nxhr62, DGE-2146755NIH Common Fund, https://ror.org/001d55x84, R01GM147893Merck Research Laboratories, Scientific Engagement and Emerging Discovery Science (SEEDS) ProgramStanford University School of Medicine, https://ror.org/011pcwc98, CatalystEuropean projects CLARA, No. 101136607ERC project FRONTIER, No. 101097822COST Action, CA21162 COZYMEG-Research, Loschmidt Laboratories, Czech Technical University in Prague and Masaryk UniversityStanford University, https://ror.org/00f54p054, Graduate Fellowship},
+  URL = {https://www.biorxiv.org/content/early/2025/08/19/2025.08.18.670959},
+  eprint = {https://www.biorxiv.org/content/early/2025/08/19/2025.08.18.670959.full.pdf},
+  journal = {bioRxiv}
 }
 ```
