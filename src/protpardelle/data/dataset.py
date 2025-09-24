@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from torch.utils.data import (
     DataLoader,
     Dataset,
@@ -314,10 +314,10 @@ def calc_sigma_data(
 
 
 def make_crop_cond_mask_and_recenter_coords(
-    atom_coords: torch.Tensor,
-    atom_mask: torch.Tensor,
-    aatype: torch.Tensor | None = None,
-    chain_index: torch.Tensor | None = None,
+    atom_coords: Float[torch.Tensor, "B L A 3"],
+    atom_mask: Float[torch.Tensor, "B L A"],
+    aatype: Int[torch.Tensor, "B L"] | None = None,
+    chain_index: Int[torch.Tensor, "B L"] | None = None,
     contiguous_prob: float = 0.05,
     discontiguous_prob: float = 0.9,
     sidechain_prob: float = 0.9,
@@ -333,18 +333,21 @@ def make_crop_cond_mask_and_recenter_coords(
     hotspot_max: int = 8,
     hotspot_dropout: float = 0.1,
     paratope_prob: float = 0.5,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    Float[torch.Tensor, "B L A 3"],
+    Float[torch.Tensor, "B L A"],
+    Float[torch.Tensor, "B L A"],
+]:
     """Generate a random motif crop from a batch of protein structures.
 
     Args:
+        atom_coords (torch.Tensor): Cartesian atom coordinates in atom37 order.
         atom_mask (torch.Tensor): Binary mask where 1 indicates an existing atom
-            and 0 otherwise. (B, N, A)
-        atom_coords (torch.Tensor): Cartesian atom coordinates in atom37 order
-            (typically A=37, C=3). (B, N, A, C)
+            and 0 otherwise.
         aatype (torch.Tensor | None, optional): Integer-encoded amino acid types.
-            Defaults to None. (B, N)
+            Defaults to None.
         chain_index (torch.Tensor | None, optional): Integer-encoded chain IDs.
-            Defaults to None. (B, N)
+            Defaults to None.
         contiguous_prob (float, optional): Probability of sampling a contiguous
             motif. Defaults to 0.05.
         discontiguous_prob (float, optional): Probability of sampling a
@@ -383,22 +386,21 @@ def make_crop_cond_mask_and_recenter_coords(
     Returns:
         tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple containing:
             - coords_out: Cropped (and optionally recentered/noised) coordinates.
-            (B, N, A, C)
             - crop_cond_mask: Binary mask indicating atoms included in the motif
-            crop/conditioning. (B, N, A)
-            - hotspot_mask: Binary mask indicating hotspot atoms. (B, N, A)
+            crop/conditioning.
+            - hotspot_mask: Binary mask indicating hotspot atoms.
     """
 
-    b, n, a = atom_mask.shape
+    B, L, A = atom_mask.shape
     device = atom_mask.device
     seq_mask = atom_mask[..., 1]
     num_res = seq_mask.sum(-1)
     masks = []
-    all_hotspot_masks = torch.zeros((b, n), device=device)
+    all_hotspot_masks = torch.zeros((B, L), device=device)
 
     for i, nr in enumerate(num_res):
         nr = nr.int().item()
-        mask = torch.zeros((n, a), device=device)
+        mask = torch.zeros((L, A), device=device)
         if chain_index is not None and chain_index[i].sum(-1) > 0:
             conditioning_type = torch.distributions.Categorical(
                 torch.tensor(
@@ -456,7 +458,7 @@ def make_crop_cond_mask_and_recenter_coords(
             )
 
             # Select the indices of CB atoms that are close together
-            idxs = torch.arange(n, device=device)[close_mask.bool()]
+            idxs = torch.arange(L, device=device)[close_mask.bool()]
             idxs = idxs[torch.randperm(len(idxs))[:num_sele]]
 
             if len(idxs) > 0:
