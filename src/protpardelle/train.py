@@ -1,11 +1,14 @@
 """Entrypoint for Protpardelle-1c training.
 
-Authors: Alex Chu, Richard Shuai, Zhaoyang Li, Tianyu Lu
+Authors: Alex Chu, Zhaoyang Li, Richard Shuai, Tianyu Lu
 """
+
+from __future__ import annotations
 
 import os
 import random
 import subprocess
+import sys
 from contextlib import nullcontext
 from dataclasses import dataclass
 
@@ -21,7 +24,7 @@ from torch.amp import GradScaler, autocast
 from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.types import Device
-from torch.utils.data import ConcatDataset, DataLoader, Dataset
+from torch.utils.data import ConcatDataset, DataLoader
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -66,26 +69,37 @@ class DistributedContext:
 
         return self.rank == 0
 
+    @property
+    def ddp_enabled(self) -> bool:
+        """Return True if distributed data parallel is enabled."""
+        return self.world_size > 1
+
+    @classmethod
+    def empty_context(cls) -> DistributedContext:
+        """Return an empty distributed context."""
+
+        return cls(rank=0, local_rank=0, world_size=1)
+
 
 def _resolve_device_with_distributed(
     requested_device: torch.device,
-) -> tuple[torch.device, DistributedContext | None]:
+) -> tuple[torch.device, DistributedContext]:
     """Initialize torch.distributed if launched with multiple processes.
 
     Args:
         requested_device (torch.device): Optional device requested via CLI.
 
     Returns:
-        tuple[torch.device, DistributedContext | None]: Possibly updated device and
+        tuple[torch.device, DistributedContext]: Possibly updated device and
             the distributed context when multi-process training is active.
     """
 
     if not dist.is_available():
-        return requested_device, None
+        return requested_device, DistributedContext.empty_context()
 
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     if world_size <= 1:
-        return requested_device, None
+        return requested_device, DistributedContext.empty_context()
 
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ.get("LOCAL_RANK", rank))
@@ -100,7 +114,7 @@ def _resolve_device_with_distributed(
     else:
         resolved_device = torch.device("cpu")
 
-    if requested_device is not None and requested_device != resolved_device:
+    if requested_device != resolved_device:
         logger.warning(
             "Overriding requested device %s with local rank device %s for DDP.",
             requested_device,
@@ -112,10 +126,10 @@ def _resolve_device_with_distributed(
     )
 
 
-def _cleanup_distributed(context: DistributedContext | None) -> None:
+def _cleanup_distributed(distributed: DistributedContext) -> None:
     """Tear down the distributed process group if it was initialized."""
 
-    if context is None:
+    if not distributed.ddp_enabled:
         return
     if dist.is_available() and dist.is_initialized():
         try:
@@ -131,16 +145,17 @@ def _cleanup_distributed(context: DistributedContext | None) -> None:
 def _log_distributed_mean(
     log_dict: dict[str, float],
     device: torch.device,
-    context: DistributedContext | None,
+    distributed: DistributedContext,
 ) -> dict[str, float]:
     """Average scalar metrics across distributed processes."""
 
-    if (context is None) or (not log_dict):
+    if not (distributed.ddp_enabled and log_dict):
         return log_dict
 
     keys = sorted(log_dict.keys())
     values = torch.tensor([log_dict[k] for k in keys], device=device)
     dist.all_reduce(values, op=dist.ReduceOp.AVG)
+
     return {k: values[i].item() for i, k in enumerate(keys)}
 
 
@@ -198,6 +213,25 @@ def masked_mse_loss(
     return mse
 
 
+def load_datasets(config: TrainingConfig) -> list[PDBDataset]:
+    """Load the training datasets."""
+    datasets = [
+        PDBDataset(
+            pdb_path=pdb_path,
+            subset=subset,
+            fixed_size=config.data.fixed_size,
+            short_epoch=config.data.short_epoch,
+            se3_data_augment=config.data.se3_data_augment,
+            translation_scale=config.data.translation_scale,
+            chain_residx_gap=config.data.chain_residx_gap,
+            dummy_fill_mode=config.data.dummy_fill_mode,
+        )
+        for pdb_path, subset in zip(config.data.pdb_paths, config.data.subset)
+    ]
+
+    return datasets
+
+
 class ProtpardelleTrainer:
     """Trainer for the Protpardelle model."""
 
@@ -205,32 +239,39 @@ class ProtpardelleTrainer:
         self,
         config: TrainingConfig,
         device: torch.device,
+        distributed: DistributedContext,
         batch_size_override: int | None = None,
-        distributed: DistributedContext | None = None,
+        num_workers_override: int | None = None,
     ) -> None:
         """Initialize the ProtpardelleTrainer.
 
         Args:
             config (TrainingConfig): The training configuration.
-            device (Device, optional): The device to use for training. Defaults to None.
+            device (torch.device): The device to use for training.
+            distributed (DistributedContext): Metadata about the distributed setup.
             batch_size_override (int | None, optional): Per-process batch size for distributed
                 training. Defaults to None.
-            distributed (DistributedContext | None, optional): Metadata about the distributed
-                setup, if any. Defaults to None.
+            num_workers_override (int | None, optional): Number of dataloader workers.
+                Defaults to None.
         """
 
-        self.config = config
+        self.is_main = distributed.is_main
+        self.ddp_enabled = distributed.ddp_enabled
         self.distributed = distributed
-        self.is_main_process = (distributed is None) or distributed.is_main
         self.batch_size = (
             batch_size_override
             if batch_size_override is not None
-            else self.config.train.batch_size
+            else config.train.batch_size
+        )
+        self.num_workers = (
+            num_workers_override
+            if num_workers_override is not None
+            else config.data.num_workers
         )
 
         # Initialize model
         model = Protpardelle(config, device)
-        if self.distributed is not None:
+        if self.distributed.ddp_enabled:
             logger.info(
                 "Initialized DDP rank=%d local_rank=%d world_size=%d",
                 self.distributed.rank,
@@ -245,8 +286,8 @@ class ProtpardelleTrainer:
                     output_device=device.index,
                     broadcast_buffers=False,
                     gradient_as_bucket_view=True,
-                    find_unused_parameters=False,
-                    static_graph=True,
+                    find_unused_parameters=False,  # should be False if using static graph
+                    static_graph=True,  # the graph is static; speeds up DDP
                 )
             else:
                 # Fall back to CPU training with DDP
@@ -266,6 +307,9 @@ class ProtpardelleTrainer:
         # Initialize optimizer, scheduler, and scaler
         self.optimizer, self.scheduler = self._load_optimizer_and_scheduler()
         self.scaler = GradScaler(device=device, enabled=config.train.use_amp)  # type: ignore
+
+        # Store config
+        self.config = config
 
     @property
     def module(self) -> Protpardelle:
@@ -337,6 +381,8 @@ class ProtpardelleTrainer:
             "epoch": epoch,
             "total_steps": total_steps,
             "pytorch_version": torch.__version__,
+            "numpy_version": np.__version__,
+            "python_version": ".".join(map(str, sys.version_info[:3])),
         }
         checkpoint["rng"] = {
             "torch": torch.get_rng_state(),
@@ -345,6 +391,9 @@ class ProtpardelleTrainer:
             ),
             "numpy": np.random.get_state(),
             "python": random.getstate(),
+            "sampler_seed": (
+                self.config.train.seed if self.config.train.seed is not None else 0
+            ),  # only for storing purpose
         }
 
         checkpoint_dir = norm_path(checkpoint_dir)
@@ -394,6 +443,55 @@ class ProtpardelleTrainer:
 
         return checkpoint["epoch"], checkpoint["total_steps"]
 
+    def initialize_training_parameters(self) -> tuple[int, int]:
+        """Initialize training parameters.
+
+        Returns:
+            tuple[int, int]: The starting epoch and total steps.
+        """
+
+        start_epoch = 0
+        total_steps = 0
+
+        # Set seeds if no rng provided
+        seed = self.config.train.seed
+        if seed is not None:
+            if self.distributed.ddp_enabled:
+                seed += self.distributed.rank
+            seed_everything(
+                seed, freeze_cuda=True
+            )  # use deterministic pytorch for training
+
+        return start_epoch, total_steps
+
+    def start_or_resume(self) -> tuple[int, int]:
+        """Load checkpoint if it exists, otherwise initialize training parameters.
+
+        Returns:
+            tuple[int, int]: The starting epoch and total steps.
+        """
+
+        checkpoint_path = self.config.train.ckpt_path
+        if checkpoint_path is None:
+            return self.initialize_training_parameters()
+
+        checkpoint_path = norm_path(checkpoint_path)
+        try:
+            start_epoch, total_steps = self.load_checkpoint(checkpoint_path)
+            logger.info(
+                "Resumed from checkpoint: %s (epoch=%d, total_steps=%d)",
+                checkpoint_path,
+                start_epoch,
+                total_steps,
+            )
+            return start_epoch, total_steps
+        except FileNotFoundError:
+            logger.warning(
+                "Checkpoint file not found: %s; starting from scratch", checkpoint_path
+            )
+
+        return self.initialize_training_parameters()
+
     def log_training_info(self) -> None:
         """Log training information."""
         logger.info(
@@ -404,100 +502,45 @@ class ProtpardelleTrainer:
             sum(p.numel() for p in self.module.parameters() if p.requires_grad),
         )
 
-    def get_dataloader(self, num_workers: int = 0, debug: bool = False) -> DataLoader:
+    def get_dataloader(self, datasets: list[PDBDataset]) -> DataLoader:
         """Get the training dataloader.
 
         Args:
-            num_workers (int, optional): Number of workers for data loading. Defaults to 0.
-            debug (bool, optional): If True, will use a smaller dataset for debugging. Defaults to False.
+            datasets (list[PDBDataset]): The list of datasets to use.
 
         Returns:
             DataLoader: The training dataloader.
         """
 
-        if debug:
-            num_workers = 0
-
         # Initialize and combine training datasets. The StochasticMixedSampler will handle
         # sampling from the combined datasets according to specified mixing ratios.
-        train_datasets = [
-            PDBDataset(
-                pdb_path=pdb_path,
-                subset=subset,
-                fixed_size=self.config.data.fixed_size,
-                short_epoch=self.config.data.short_epoch,
-                se3_data_augment=self.config.data.se3_data_augment,
-                translation_scale=self.config.data.translation_scale,
-                chain_residx_gap=self.config.data.chain_residx_gap,
-                dummy_fill_mode=self.config.data.dummy_fill_mode,
-            )
-            for pdb_path, subset in zip(
-                self.config.data.pdb_paths, self.config.data.subset
-            )
-        ]
-        dataset: ConcatDataset[PDBDataset] = ConcatDataset(train_datasets)
 
         sampler = StochasticMixedSampler(
-            train_datasets,
+            datasets,
             self.config.data.mixing_ratios,
             batch_size=self.batch_size,
             num_replicas=(
-                self.distributed.world_size if self.distributed is not None else 1
+                self.distributed.world_size if self.distributed.ddp_enabled else 1
             ),
-            rank=self.distributed.rank if self.distributed is not None else 0,
+            rank=self.distributed.rank if self.distributed.ddp_enabled else 0,
             seed=self.config.train.seed,
         )
+
+        dataset = ConcatDataset(datasets)
 
         dataloader = DataLoader(
             dataset,
             batch_size=self.batch_size,
-            num_workers=num_workers,
+            num_workers=self.num_workers,
             pin_memory=self.device.type == "cuda",
             shuffle=False,  # the sampler takes care of shuffling
             sampler=sampler,
             drop_last=True,
-            prefetch_factor=4 if num_workers > 0 else None,
-            persistent_workers=num_workers > 0 and not debug,
+            prefetch_factor=4 if self.num_workers > 0 else None,
+            persistent_workers=self.num_workers > 0,
         )
-
-        if self.config.data.auto_calc_sigma_data:
-            self.compute_sigma_data(dataset, num_workers=num_workers)
 
         return dataloader
-
-    def compute_sigma_data(self, dataset: Dataset, num_workers: int = 0) -> float:
-        """Compute the sigma data for the given dataset.
-
-        Args:
-            dataset (Dataset): The dataset to compute sigma data for.
-            num_workers (int, optional): The number of workers to use for data loading. Defaults to 0.
-
-        Returns:
-            float: The computed sigma data.
-        """
-
-        if self.distributed is not None and not self.is_main_process:
-            sigma_tensor = torch.zeros(1, device=self.device)
-            dist.broadcast(sigma_tensor, src=0)
-            sigma = float(sigma_tensor.item())
-            self.config.data.sigma_data = sigma
-            return sigma
-
-        logger.info(
-            "Automatically computing sigma_data for %d examples",
-            self.config.data.n_examples_for_sigma_data,
-        )
-        sigma_data = calc_sigma_data(dataset, self.config, num_workers=num_workers)
-        logger.info("Computed sigma_data: %.4f", sigma_data)
-        sigma_tensor = torch.tensor([sigma_data], device=self.device)
-
-        if self.distributed is not None:
-            dist.broadcast(sigma_tensor, src=0)
-            sigma_data = float(sigma_tensor.item())
-
-        self.config.data.sigma_data = sigma_data
-
-        return sigma_data
 
     def compute_loss(
         self, input_dict: dict[str, torch.Tensor], tol: float = 1e-6
@@ -670,9 +713,11 @@ class ProtpardelleTrainer:
 
         self.optimizer.zero_grad()
 
-        with autocast("cuda") if self.config.train.use_amp else nullcontext():
+        with autocast(self.device.type) if self.config.train.use_amp else nullcontext():
             loss, log_dict = self.compute_loss(input_dict)
             self.scaler.scale(loss).backward()
+
+            self.scaler.unscale_(self.optimizer)
 
             # Compute the gradient norm and add it to the log_dict
             grad_norm = nn.utils.clip_grad_norm_(
@@ -694,63 +739,6 @@ class ProtpardelleTrainer:
         return log_dict
 
 
-def _initialize_training_parameters(trainer: ProtpardelleTrainer) -> tuple[int, int]:
-    """Initialize training parameters.
-
-    Args:
-        trainer (ProtpardelleTrainer): The protpardelle trainer instance.
-
-    Returns:
-        tuple[int, int]: The starting epoch and total steps.
-    """
-
-    start_epoch = 0
-    total_steps = 0
-
-    # Set seeds if no rng provided
-    seed = trainer.config.train.seed
-    if seed is not None:
-        if trainer.distributed is not None:
-            seed += trainer.distributed.rank
-        seed_everything(
-            seed, freeze_cuda=True
-        )  # use deterministic pytorch for training
-
-    return start_epoch, total_steps
-
-
-def _load_checkpoint_or_not(trainer: ProtpardelleTrainer) -> tuple[int, int]:
-    """Load checkpoint if it exists, otherwise initialize training parameters.
-
-    Args:
-        trainer (ProtpardelleTrainer): The protpardelle trainer instance.
-
-    Returns:
-        tuple[int, int]: The starting epoch and total steps.
-    """
-
-    checkpoint_path = trainer.config.train.ckpt_path
-    if checkpoint_path is None:
-        return _initialize_training_parameters(trainer)
-
-    checkpoint_path = norm_path(checkpoint_path)
-    try:
-        start_epoch, total_steps = trainer.load_checkpoint(checkpoint_path)
-        logger.info(
-            "Resumed from checkpoint: %s (epoch=%d, total_steps=%d)",
-            checkpoint_path,
-            start_epoch,
-            total_steps,
-        )
-        return start_epoch, total_steps
-    except FileNotFoundError:
-        logger.warning(
-            "Checkpoint file not found: %s; starting from scratch", checkpoint_path
-        )
-
-    return _initialize_training_parameters(trainer)
-
-
 @record
 def train(
     config_path: StrPath,
@@ -759,7 +747,6 @@ def train(
     project_name: str | None = None,
     wandb_id: str | None = None,
     exp_name: str | None = None,
-    num_workers: int = 0,
     debug: bool = False,
 ) -> None:
     """Train a Protpardelle model.
@@ -771,106 +758,147 @@ def train(
         project_name (str | None, optional): Project name for wandb. Defaults to None.
         wandb_id (str | None, optional): Wandb ID for logging. Defaults to None.
         exp_name (str | None, optional): Experiment name for logging. Defaults to None.
-        num_workers (int, optional): Number of workers for data loading. Defaults to 0.
         debug (bool, optional): Whether to enable debug mode. Defaults to False.
 
-    Raises:
-        RuntimeError: If wandb initialization fails.
+    Raises: ...  # TODO
     """
 
+    # Enable TF32 on Ampere+ GPUs for faster training
     tf32_enabled = enable_tf32_if_available()
     if tf32_enabled:
         logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
 
+    # Load config
     config = load_config(config_path, TrainingConfig)
 
+    # Load datasets
+    datasets = load_datasets(config)
+
+    # Auto calculate sigma data if needed
+    if config.data.auto_calc_sigma_data:
+        logger.info(
+            "Automatically computing sigma_data for %d examples",
+            config.data.n_examples_for_sigma_data,
+        )
+        dataset = ConcatDataset(datasets)
+        sigma_data = calc_sigma_data(
+            dataset, config, num_workers=config.data.num_workers
+        )
+        logger.info("Computed sigma_data: %.4f", sigma_data)
+
+        # Override the config value
+        config.data.sigma_data = sigma_data
+
+    # Set and resolve device with DDP if applicable
     if device is None:
         requested_device = get_default_device()
     else:
         requested_device = torch.device(device)
     resolved_device, distributed = _resolve_device_with_distributed(requested_device)
 
+    # Determine per-process batch size
     global_batch_size = config.train.batch_size
-    if distributed is not None:
+    if distributed.ddp_enabled:
         if global_batch_size % distributed.world_size != 0:
             raise ValueError(
                 "train.batch_size must be divisible by the number of distributed processes"
             )
-        per_process_batch_size = global_batch_size // distributed.world_size
-        if per_process_batch_size == 0:
+        local_batch_size = global_batch_size // distributed.world_size
+        if local_batch_size == 0:
             raise ValueError("Per-process batch size must be at least 1")
     else:
-        per_process_batch_size = global_batch_size
+        local_batch_size = global_batch_size
 
-    effective_num_workers = num_workers
+    # Determine number of effective dataloader workers
+    global_num_workers = config.data.num_workers
     if debug:
-        logger.debug("Debug mode is enabled")
-        effective_num_workers = 0
-    elif distributed is not None and num_workers > 0:
-        effective_num_workers = max(1, num_workers // distributed.world_size)
+        logger.debug("Debug mode is enabled; setting num_workers to 0")
+        global_num_workers = 0
+        local_num_workers = 0
+    elif distributed.ddp_enabled and (global_num_workers > 0):
+        local_num_workers = max(1, global_num_workers // distributed.world_size)
+        global_num_workers = local_num_workers * distributed.world_size
+    else:
+        local_num_workers = global_num_workers
 
-    trainer = ProtpardelleTrainer(
-        config,
-        resolved_device,
-        batch_size_override=per_process_batch_size,
-        distributed=distributed,
-    )
-
-    if distributed is not None:
+    # Log DDP training setup
+    if distributed.ddp_enabled:
         logger.info(
-            "Distributed training: rank %d/%d; local/global batch %d/%d; local/global dataloader workers %d/%d",
+            "Distributed training: rank %d/%d; local/global batch %d/%d; "
+            "local/global dataloader workers %d/%d",
             distributed.rank,
             distributed.world_size,
-            per_process_batch_size,
+            local_batch_size,
             global_batch_size,
-            max(1, effective_num_workers),
-            num_workers,
+            local_num_workers,
+            global_num_workers,
         )
     else:
         logger.info(
             "Single-process training: batch %d, dataloader workers %d",
             global_batch_size,
-            effective_num_workers,
+            global_num_workers,
         )
 
-    start_epoch, total_steps = _load_checkpoint_or_not(trainer)
-
+    # Initialize wandb
     output_dir = norm_path(output_dir)
-
-    dataloader = trainer.get_dataloader(num_workers=effective_num_workers, debug=debug)
-
     wandb_kwargs = {
+        "config": config,
+        "dir": output_dir,
+        "entity": wandb_id,
+        "job_type": "debug" if debug else "train",
         "mode": "disabled" if debug else "online",
         "name": exp_name,
-        "job_type": "debug" if debug else "train",
-        "config": trainer.config,  # type: ignore
-        "dir": output_dir,
         "project": project_name,
-        "entity": wandb_id,
     }
 
-    if distributed is not None and not trainer.is_main_process and not debug:
+    # Disable wandb logging on non-main ranks
+    if distributed.ddp_enabled and (not distributed.is_main):
         wandb_kwargs["mode"] = "disabled"
 
+    wandb_run: wandb.Run | None = None
     run_name: str
     run_dir: str | None = None
     run_id: str | None = None
 
-    wandb_run = None
-    if trainer.is_main_process or debug:
+    # Initialize wandb only on the main rank or in debug mode
+    if distributed.is_main or debug:
         wandb_run = wandb.init(**wandb_kwargs)
         if wandb_run is None:
             raise RuntimeError("Failed to initialize wandb run")
-        if wandb_run.name is None or wandb_run.dir is None or wandb_run.id is None:
+        if (
+            (wandb_run.name is None)
+            or (wandb_run.dir is None)
+            or (wandb_run.id is None)
+        ):
             raise RuntimeError("wandb returned an incomplete run object")
         run_name = wandb_run.name
         run_dir = wandb_run.dir
         run_id = wandb_run.id
     else:
         # Non-main ranks reuse exp_name for logging clarity
-        run_name = exp_name or (f"run-rank{distributed.rank}" if distributed else "run")
+        if exp_name is None:
+            if distributed.ddp_enabled:
+                run_name = f"run-rank{distributed.rank}"
+            else:
+                run_name = "run"
+        else:
+            run_name = exp_name
 
-    if trainer.is_main_process:
+    # Initialize trainer
+    trainer = ProtpardelleTrainer(
+        config,
+        resolved_device,
+        distributed,
+        batch_size_override=local_batch_size,
+        num_workers_override=local_num_workers,
+    )
+
+    # Start or resume training from checkpoint
+    start_epoch, total_steps = trainer.start_or_resume()
+
+    # Log training info
+    if trainer.is_main:
         logger.info(
             "Beginning: run_name %s, run_id %s, device %s",
             run_name,
@@ -881,9 +909,8 @@ def train(
             "Training configuration: %s, %s, %s", config_path, output_dir, project_name
         )
 
-    log_dir = None
-    checkpoint_dir = None
-    if trainer.is_main_process:
+    # Create output directories and save config
+    if trainer.is_main:
         log_dir = output_dir / (f"{run_name}_debug" if debug else run_name)
         checkpoint_dir = log_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -892,21 +919,31 @@ def train(
             yaml.safe_dump(namespace_to_dict(trainer.config), f)
 
         trainer.log_training_info()
+    else:
+        log_dir = None
+        checkpoint_dir = None
 
+    # Initialize dataloader
+    dataloader = trainer.get_dataloader(datasets)
+
+    # Wrap the entire training loop in a try-finally to ensure cleanup
     try:
+        # Use anomaly detection if in debug mode
         with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
             for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
                 if hasattr(dataloader.sampler, "set_epoch"):
-                    dataloader.sampler.set_epoch(epoch)
+                    dataloader.sampler.set_epoch(epoch)  # type: ignore
 
                 progress = tqdm(
                     dataloader,
                     desc=f"epoch {epoch}/{trainer.config.train.max_epochs}",
-                    disable=not trainer.is_main_process,
+                    disable=not trainer.is_main,
                 )
                 for input_dict in progress:
                     input_dict: dict[str, torch.Tensor] = {
-                        k: v.to(trainer.device, non_blocking=True)
+                        k: v.to(
+                            trainer.device, non_blocking=True
+                        )  # non_blocking for pin_memory
                         for k, v in input_dict.items()
                     }
                     log_dict = trainer.train_step(input_dict)
@@ -915,28 +952,28 @@ def train(
                     log_dict = _log_distributed_mean(
                         log_dict, trainer.device, distributed
                     )
-                    if trainer.is_main_process:
+
+                    # Log to wandb on main rank only
+                    if trainer.is_main:
                         wandb.log(log_dict, step=total_steps)
                     total_steps += 1
 
                 with torch.no_grad():
-                    should_checkpoint = (
-                        trainer.is_main_process
-                        and checkpoint_dir is not None
-                        and (
-                            epoch % trainer.config.train.checkpoint_freq == 0
-                            or epoch in trainer.config.train.checkpoints
-                        )
-                    )
-                    if should_checkpoint:
-                        trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
+                    if trainer.is_main:
+                        assert checkpoint_dir is not None
+                        if (epoch % trainer.config.train.checkpoint_freq == 0) or (
+                            epoch in trainer.config.train.checkpoints
+                        ):
+                            trainer.save_checkpoint(epoch, total_steps, checkpoint_dir)
 
-                if distributed is not None:
+                if trainer.ddp_enabled:
                     dist.barrier()
     finally:
         if wandb_run is not None:
             wandb.finish()
-        if trainer.is_main_process and run_dir is not None and log_dir is not None:
+        if trainer.is_main and (run_dir is not None):
+            assert log_dir is not None
+            # Copy the entire wandb run directory to the log_dir for safekeeping
             subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
             logger.info(
                 "Training finished. (run_name %s, run_id %s)",
@@ -954,7 +991,6 @@ def main(
     project_name: str | None = typer.Option(None, help="Project name for wandb."),
     wandb_id: str | None = typer.Option(None, help="User/entity ID for wandb."),
     exp_name: str | None = typer.Option(None, help="Run/experiment name for wandb."),
-    num_workers: int = typer.Option(0, min=0, help="DataLoader num_workers."),
     debug: bool = typer.Option(False, help="Run one batch and eval offline."),
 ) -> None:
     """Entrypoint for Protpardelle-1c training."""
@@ -965,7 +1001,6 @@ def main(
         project_name=project_name,
         wandb_id=wandb_id,
         exp_name=exp_name,
-        num_workers=num_workers,
         debug=debug,
     )
 
