@@ -12,9 +12,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from einops import repeat
 from jaxtyping import Float, Int
-from numpy.ma.core import MaskedArray
 from torch.distributions import Categorical
 from torch.utils.data import (
     DataLoader,
@@ -218,25 +216,6 @@ def uniform_rand_rotation(batch_size: int) -> Float[torch.Tensor, "B 3 3"]:
     return rotation
 
 
-def get_masked_coords_array(
-    atom_coords: Float[torch.Tensor, "L A 3"],
-    atom_mask: Float[torch.Tensor, "L A"],
-) -> np.ma.MaskedArray:
-    """Create a masked array from atom coordinates and mask.
-
-    Args:
-        atom_coords (torch.Tensor): Atom coordinates.
-        atom_mask (torch.Tensor): Atom mask.
-
-    Returns:
-        np.ma.MaskedArray: Masked array of atom coordinates.
-    """
-
-    ma_mask = repeat(1 - atom_mask.unsqueeze(-1).cpu().numpy(), "... 1 -> ... 3")
-
-    return np.ma.array(atom_coords.cpu().numpy(), mask=ma_mask)
-
-
 def calc_sigma_data(
     dataset: Dataset,
     config: TrainingConfig,
@@ -276,16 +255,16 @@ def calc_sigma_data(
         "Automatically computing sigma_data for %d examples",
         num_examples,
     )
-    for i, inputs in tqdm(
+    for i, input_dict in tqdm(
         enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
     ):
         # Stop collecting once we've reached enough examples
         if i == num_batches:
             break
 
-        seq_mask = inputs["seq_mask"]
-        coords = inputs["coords_in"]
-        atom_mask = inputs["atom_mask"]
+        seq_mask = input_dict["seq_mask"]
+        coords = input_dict["coords_in"]
+        atom_mask = input_dict["atom_mask"]
 
         if config.train.crop_conditional:
             coords, _, _ = make_crop_cond_mask_and_recenter_coords(
@@ -312,12 +291,39 @@ def calc_sigma_data(
         )
 
     # Estimate sigma_data
-    masked_coords = get_masked_coords_array(coords, atom_mask)
-    sigma_data = float(masked_coords.std())
+    total_weight = (atom_mask.sum() * coords.shape[-1]).clamp(min=1)
+    mean = (coords * atom_mask.unsqueeze(-1)).sum() / total_weight
+    var = ((coords - mean).square() * atom_mask.unsqueeze(-1)).sum() / total_weight
+    sigma_data = float(torch.sqrt(var).item())
 
     logger.info("Computed sigma_data: %.4f", sigma_data)
 
     return sigma_data
+
+
+def recenter_coords_with_crop_cond_mask(
+    atom_coords: Float[torch.Tensor, "B L A 3"],
+    crop_cond_mask: Float[torch.Tensor, "B L A"],
+) -> Float[torch.Tensor, "B L A 3"]:
+    """Recenter coordinates based on the center of mass of the crop_cond_mask.
+
+    Args:
+        atom_coords (torch.Tensor): Input coordinates.
+        crop_cond_mask (torch.Tensor): Binary mask indicating which atoms are part of the motif.
+
+    Returns:
+        torch.Tensor: Recentered coordinates.
+    """
+
+    total_weight = crop_cond_mask.sum(dim=(1, 2), keepdim=True)  # (B, 1, 1)
+    valid_mask = (total_weight > 0).float()  # (B, 1, 1)
+    denom = total_weight.clamp(min=1.0).unsqueeze(-1)  # (B, 1, 1, 1)
+    mean_coords = (atom_coords * crop_cond_mask.unsqueeze(-1)).sum(
+        dim=(1, 2), keepdim=True
+    ) / denom  # (B, 1, 1, 3)
+    coords_out = atom_coords - mean_coords * valid_mask.unsqueeze(-1)  # (B, L, A, 3)
+
+    return coords_out
 
 
 def make_crop_cond_mask_and_recenter_coords(
@@ -520,16 +526,9 @@ def make_crop_cond_mask_and_recenter_coords(
     crop_cond_mask = torch.stack(masks) * atom_mask
 
     if recenter_coords:
-        motif_masked_array = get_masked_coords_array(atom_coords, crop_cond_mask)
-        cond_coords_center: MaskedArray = motif_masked_array.mean((1, 2))
-        motif_mask = torch.tensor(
-            1 - cond_coords_center.mask, device=device, dtype=torch.float
+        coords_out = recenter_coords_with_crop_cond_mask(
+            atom_coords=atom_coords, crop_cond_mask=crop_cond_mask
         )
-        mean_coords = (
-            torch.tensor(cond_coords_center.data, device=device, dtype=torch.float)
-            * motif_mask
-        )
-        coords_out = atom_coords - mean_coords[:, None, None, :]
     else:
         coords_out = atom_coords
 
