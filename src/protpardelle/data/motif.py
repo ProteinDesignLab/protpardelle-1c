@@ -156,12 +156,12 @@ def contig_to_motif_placement(contig: str, length_range: list[int], num_samples:
                         )
                     ),
                 )
-                length = random.randint(min_possible_here, max_possible_here)
+                length = np.random.randint(min_possible_here, max_possible_here + 1)
             else:
                 # Last scaffold must make total valid
                 min_possible_here = max(min_len, remaining_min)
                 max_possible_here = min(max_len, remaining_max)
-                length = random.randint(min_possible_here, max_possible_here)
+                length = np.random.randint(min_possible_here, max_possible_here + 1)
 
             scaffold_lengths[seg_idx] = length
             remaining_min -= length

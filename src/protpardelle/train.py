@@ -586,7 +586,7 @@ class ProtpardelleTrainer:
             "adj_cond": adj_cond,
         }
 
-        if np.random.uniform() < self.config.train.self_cond_train_prob:
+        if np.random.rand() < self.config.train.self_cond_train_prob:
             with torch.no_grad():
                 _, _, struct_self_cond, seq_self_cond = self.model(**model_inputs)
         else:

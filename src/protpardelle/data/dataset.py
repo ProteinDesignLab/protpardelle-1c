@@ -501,10 +501,10 @@ def make_crop_cond_mask_and_recenter_coords(
                         ) : min(idx_paratope + flanking_width, nr)
                     ] = 1
 
-        if np.random.uniform() < sidechain_prob:  # keep all crop-cond coords unmasked
-            if np.random.uniform() < sidechain_only_prob:
+        if np.random.rand() < sidechain_prob:  # keep all crop-cond coords unmasked
+            if np.random.rand() < sidechain_only_prob:
                 mask[:, (0, 1, 2, 4)] = 0
-            if np.random.uniform() < sidechain_tip_prob and aatype is not None:
+            if np.random.rand() < sidechain_tip_prob and aatype is not None:
                 # determine tip atoms by amino acid type
                 motif_idx = torch.nonzero(mask.sum(-1)).flatten()
                 for mi in motif_idx:

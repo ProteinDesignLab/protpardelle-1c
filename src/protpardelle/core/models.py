@@ -2030,7 +2030,7 @@ class Protpardelle(nn.Module):
                                 resampling_rate = (
                                     1 + np.cos(2 * np.pi * (step_time - 0.5))
                                 ) / k
-                            resample_this_step = np.random.uniform() < resampling_rate
+                            resample_this_step = np.random.rand() < resampling_rate
 
                         # Resample sequence or design with full ProteinMPNN
                         if gt_aatype is None and not pd.enabled:
