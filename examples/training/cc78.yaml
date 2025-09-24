@@ -36,6 +36,7 @@ data:
   mixing_ratios: [1.0]
   fixed_size: 512
   n_aatype_tokens: 21
+  short_epoch: 0
   se3_data_augment: True
   translation_scale: 1.0
   # special case when chain_residx_gap is zero: keep original indices for each chain, reset to 1

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import repeat
 from jaxtyping import Float, Int
 from numpy.ma.core import MaskedArray
 from torch.distributions import Categorical
@@ -542,7 +542,7 @@ class PDBDataset(Dataset):
         pdb_path: str,
         fixed_size: int,
         mode: str = "train",
-        short_epoch: bool = False,
+        short_epoch: int = 0,
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
@@ -556,8 +556,8 @@ class PDBDataset(Dataset):
             fixed_size (int): Target length used to trim or pad per-example tensors.
             mode (str, optional): Operating mode, either "train" or "eval".
                 Defaults to "train".
-            short_epoch (bool, optional): For debugging: if True, stop an epoch early
-                to shorten iteration time. Defaults to False.
+            short_epoch (int, optional): For debugging: if positive, stop an epoch early
+                to shorten iteration time. Defaults to 0.
             se3_data_augment (bool, optional): Apply random SE(3) rotation and
                 translation to input coordinates. Defaults to True.
             translation_scale (float, optional): Standard deviation of the Gaussian
@@ -626,8 +626,12 @@ class PDBDataset(Dataset):
             with open(f"{self.pdb_path}/{mode}_{subset}_pdb_keys.list", "r") as f:
                 self.pdb_keys = np.array(f.read().split("\n")[:-1])
 
-    def __len__(self):
-        return min(len(self.pdb_keys), 256) if self.short_epoch else len(self.pdb_keys)
+    def __len__(self) -> int:
+        return (
+            min(len(self.pdb_keys), self.short_epoch)
+            if self.short_epoch
+            else len(self.pdb_keys)
+        )
 
     def __getitem__(self, idx):
         pdb_key = self.pdb_keys[idx]

@@ -65,6 +65,8 @@ class Data:
     fixed_size: int
     n_aatype_tokens: int
 
+    short_epoch: int
+
     se3_data_augment: bool
     translation_scale: float
 

@@ -37,6 +37,7 @@ from protpardelle.data.dataset import (
 )
 from protpardelle.utils import (
     StrPath,
+    enable_tf32_if_available,
     get_default_device,
     get_logger,
     load_config,
@@ -424,7 +425,7 @@ class ProtpardelleTrainer:
                 pdb_path=pdb_path,
                 fixed_size=self.config.data.fixed_size,
                 mode="train",
-                short_epoch=debug,
+                short_epoch=self.config.data.short_epoch,
                 se3_data_augment=self.config.data.se3_data_augment,
                 translation_scale=self.config.data.translation_scale,
                 chain_residx_gap=self.config.data.chain_residx_gap,
@@ -778,9 +779,9 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.set_float32_matmul_precision("high")
+    tf32_enabled = enable_tf32_if_available()
+    if tf32_enabled:
+        logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
 
     config = load_config(config_path, TrainingConfig)
 
@@ -789,7 +790,6 @@ def train(
     else:
         requested_device = torch.device(device)
     resolved_device, distributed = _resolve_device_with_distributed(requested_device)
-    final_device = resolved_device
 
     global_batch_size = config.train.batch_size
     if distributed is not None:
@@ -812,7 +812,7 @@ def train(
 
     trainer = ProtpardelleTrainer(
         config,
-        final_device,
+        resolved_device,
         batch_size_override=per_process_batch_size,
         distributed=distributed,
     )
