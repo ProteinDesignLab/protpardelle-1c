@@ -613,9 +613,7 @@ class ProtpardelleTrainer:
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
         # Some backbone atoms may be missing; mask them to zeros
-        bb_atom_mask = torch.logical_and(
-            bb_atom_mask, atom_mask
-        )  # both masks are float; cannot use &
+        bb_atom_mask = bb_atom_mask * atom_mask  # float masks; multiply instead of boolean ops
         if self.config.model.task == "backbone":
             noised_coords = noised_coords * bb_atom_mask.unsqueeze(-1)
         elif self.config.model.task == "ai-allatom":
@@ -768,6 +766,13 @@ def train(
     if tf32_enabled:
         logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
 
+    # Set and resolve device with DDP if applicable
+    if device is None:
+        requested_device = get_default_device()
+    else:
+        requested_device = torch.device(device)
+    resolved_device, distributed = _resolve_device_with_distributed(requested_device)
+
     # Load config
     config = load_config(config_path, TrainingConfig)
 
@@ -776,25 +781,30 @@ def train(
 
     # Auto calculate sigma data if needed
     if config.data.auto_calc_sigma_data:
-        logger.info(
-            "Automatically computing sigma_data for %d examples",
-            config.data.n_examples_for_sigma_data,
-        )
-        dataset = ConcatDataset(datasets)
-        sigma_data = calc_sigma_data(
-            dataset, config, num_workers=config.data.num_workers
-        )
-        logger.info("Computed sigma_data: %.4f", sigma_data)
+        sigma_data: float | None = None
+        if distributed.is_main:
+            logger.info(
+                "Automatically computing sigma_data for %d examples",
+                config.data.n_examples_for_sigma_data,
+            )
+            dataset = ConcatDataset(datasets)
+            sigma_data = calc_sigma_data(
+                dataset, config, num_workers=config.data.num_workers
+            )
+            logger.info("Computed sigma_data: %.4f", sigma_data)
+
+        if distributed.ddp_enabled:
+            sigma_tensor = torch.zeros(1, device=resolved_device)
+            if distributed.is_main:
+                assert sigma_data is not None
+                sigma_tensor[0] = sigma_data
+            dist.broadcast(sigma_tensor, src=0)
+            sigma_data = float(sigma_tensor.item())
+        else:
+            assert sigma_data is not None
 
         # Override the config value
         config.data.sigma_data = sigma_data
-
-    # Set and resolve device with DDP if applicable
-    if device is None:
-        requested_device = get_default_device()
-    else:
-        requested_device = torch.device(device)
-    resolved_device, distributed = _resolve_device_with_distributed(requested_device)
 
     # Determine per-process batch size
     global_batch_size = config.train.batch_size
