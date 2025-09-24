@@ -540,22 +540,21 @@ class PDBDataset(Dataset):
     def __init__(
         self,
         pdb_path: str,
+        subset: str | float,
         fixed_size: int,
-        mode: str = "train",
         short_epoch: int = 0,
         se3_data_augment: bool = True,
         translation_scale: float = 1.0,
         chain_residx_gap: int = 200,
         dummy_fill_mode: Literal["CA", "zero"] = "zero",
-        subset: str | float = "",
     ) -> None:
         """Initialize the PDBDataset.
 
         Args:
             pdb_path (str): Path to the input PDB file.
+            subset (str | float): Dataset-specific subset identifier to train on;
+                if a float in (0, 1], interpreted as a fraction of data to sample.
             fixed_size (int): Target length used to trim or pad per-example tensors.
-            mode (str, optional): Operating mode, either "train" or "eval".
-                Defaults to "train".
             short_epoch (int, optional): For debugging: if positive, stop an epoch early
                 to shorten iteration time. Defaults to 0.
             se3_data_augment (bool, optional): Apply random SE(3) rotation and
@@ -567,29 +566,18 @@ class PDBDataset(Dataset):
                 separate chains. Defaults to 200.
             dummy_fill_mode (Literal["CA", "zero"], optional): Strategy to fill coordinates
                 for non-existing atoms. Defaults to "zero".
-            subset (str | float, optional): Dataset-specific subset identifier to
-                train on; if a float in (0, 1], interpreted as a fraction of data
-                to sample. Defaults to "".
         """
 
-        self.pdb_path = pdb_path
+        self.pdb_path = pdb_path  # TODO: change name to pdb_dir
+        self.subset = subset
         self.fixed_size = fixed_size
-        self.mode = mode
         self.short_epoch = short_epoch
         self.se3_data_augment = se3_data_augment
         self.translation_scale = translation_scale
         self.chain_residx_gap = chain_residx_gap
         self.dummy_fill_mode = dummy_fill_mode
 
-        if self.pdb_path.endswith("test_boltz_interfaces"):
-            self.cif_df = pd.read_csv(f"{self.pdb_path}/test_interface_info.csv")
-            self.pdb_keys = list(
-                set(
-                    self.cif_df["chain_1_cluster_id"].to_list()
-                    + self.cif_df["chain_2_cluster_id"].to_list()
-                )
-            )
-        elif self.pdb_path.endswith("boltz_interfaces"):
+        if self.pdb_path.endswith("boltz_interfaces"):
             self.cif_df = pd.read_csv(f"{self.pdb_path}/interface_info.csv")
             if isinstance(subset, float):
                 orig_size = len(self.cif_df)
@@ -623,8 +611,8 @@ class PDBDataset(Dataset):
                 )
             )
         else:
-            with open(f"{self.pdb_path}/{mode}_{subset}_pdb_keys.list", "r") as f:
-                self.pdb_keys = np.array(f.read().split("\n")[:-1])
+            with open(f"{self.pdb_path}/{subset}", "r") as f:
+                self.pdb_keys = [line.strip() for line in f.readlines()]
 
     def __len__(self) -> int:
         return (
@@ -633,7 +621,7 @@ class PDBDataset(Dataset):
             else len(self.pdb_keys)
         )
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> dict[str, Any]:
         pdb_key = self.pdb_keys[idx]
         data = self.get_item(pdb_key)
         # For now, replace dataloading errors with a random pdb. 50 tries
@@ -644,7 +632,7 @@ class PDBDataset(Dataset):
             data = self.get_item(pdb_key)
         raise ValueError("Failed to load data example after 50 tries.")
 
-    def get_item(self, pdb_key):
+    def get_item(self, pdb_key: str) -> dict[str, Any] | None:
         example = {}
 
         chain_id = None
@@ -658,8 +646,8 @@ class PDBDataset(Dataset):
             data_file = f"{self.pdb_path}/mpnn_esmfold/{pdb_key}"
             if not Path(data_file).exists():
                 data_file = f"{self.pdb_path}/dne_mpnn/{pdb_key}"
-        elif self.pdb_path.endswith("boltz_interfaces") or self.pdb_path.endswith(
-            "test_boltz_interfaces"
+        elif self.pdb_path.endswith(
+            "boltz_interfaces"
         ):  # boltz interfaces curated by Richard
             df_subset = self.cif_df[
                 (self.cif_df["chain_1_cluster_id"] == pdb_key)
@@ -751,13 +739,6 @@ class PDBDataset(Dataset):
                 example_out[k] = v.long()
 
         return example_out
-
-    def collate(self, example_list):
-        out = {}
-        for ex in example_list:
-            for k, v in ex.items():
-                out.setdefault(k, []).append(v)
-        return {k: torch.stack(v) for k, v in out.items()}
 
 
 class StochasticMixedSampler(Sampler[int]):

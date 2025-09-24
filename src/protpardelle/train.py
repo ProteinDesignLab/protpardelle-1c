@@ -423,14 +423,13 @@ class ProtpardelleTrainer:
         train_datasets = [
             PDBDataset(
                 pdb_path=pdb_path,
+                subset=subset,
                 fixed_size=self.config.data.fixed_size,
-                mode="train",
                 short_epoch=self.config.data.short_epoch,
                 se3_data_augment=self.config.data.se3_data_augment,
                 translation_scale=self.config.data.translation_scale,
                 chain_residx_gap=self.config.data.chain_residx_gap,
                 dummy_fill_mode=self.config.data.dummy_fill_mode,
-                subset=subset,
             )
             for pdb_path, subset in zip(
                 self.config.data.pdb_paths, self.config.data.subset

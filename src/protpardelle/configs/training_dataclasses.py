@@ -60,6 +60,7 @@ class Train:
 @dataclass
 class Data:
     pdb_paths: list[str]
+    subset: list[str | float]
     mixing_ratios: list[float]
 
     fixed_size: int
@@ -78,8 +79,6 @@ class Data:
 
     dummy_fill_mode: Literal["zero", "CA"]
     # dummy_fill_mode: str
-    subset: list[Literal["designable", "all"] | float]
-    # subset: list[str | float]
 
 
 @dataclass
