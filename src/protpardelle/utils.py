@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast, overload
 import numpy as np
 import torch
 import yaml
-from omegaconf import OmegaConf
 
 from protpardelle.configs import Config, RunningConfig, SamplingConfig, TrainingConfig
 
@@ -114,6 +113,36 @@ def dict_to_namespace(d: dict) -> argparse.Namespace:
             setattr(namespace, key, value)
 
     return namespace
+
+
+def enable_tf32_if_available() -> bool:
+    """Enable TF32 on Ampere+ CUDA GPUs for matmul (cuBLAS) and conv (cuDNN).
+
+    On non-Ampere or non-CUDA setups it safely does nothing (and disables flags).
+
+    Returns:
+        bool: True if TF32 is enabled, False otherwise.
+    """
+
+    enabled = False
+
+    # Default to strict FP32 unless we detect Ampere+
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    # Highest = strict FP32; High = allow TF32 on Ampere for matmul
+    torch.set_float32_matmul_precision("highest")
+
+    if torch.cuda.is_available():
+        device = torch.cuda.current_device()
+        major, minor = torch.cuda.get_device_capability(device)
+        if major >= 8:  # Ampere(8.x) / Hopper(9.x)
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.set_float32_matmul_precision("high")
+
+            enabled = True
+
+    return enabled
 
 
 def get_default_device() -> torch.device:
