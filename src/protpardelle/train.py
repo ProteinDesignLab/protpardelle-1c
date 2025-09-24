@@ -244,7 +244,8 @@ class ProtpardelleTrainer:
                     output_device=device.index,
                     broadcast_buffers=False,
                     gradient_as_bucket_view=True,
-                    find_unused_parameters=True,
+                    find_unused_parameters=False,
+                    static_graph=True,
                 )
             else:
                 # Fall back to CPU training with DDP
@@ -413,6 +414,9 @@ class ProtpardelleTrainer:
             DataLoader: The training dataloader.
         """
 
+        if debug:
+            num_workers = 0
+
         # Initialize and combine training datasets. The StochasticMixedSampler will handle
         # sampling from the combined datasets according to specified mixing ratios.
         train_datasets = [
@@ -452,6 +456,7 @@ class ProtpardelleTrainer:
             shuffle=False,  # the sampler takes care of shuffling
             sampler=sampler,
             drop_last=True,
+            prefetch_factor=4 if num_workers > 0 else None,
             persistent_workers=num_workers > 0 and not debug,
         )
 
@@ -773,6 +778,10 @@ def train(
         RuntimeError: If wandb initialization fails.
     """
 
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+
     config = load_config(config_path, TrainingConfig)
 
     if device is None:
@@ -897,10 +906,10 @@ def train(
                     disable=not trainer.is_main_process,
                 )
                 for input_dict in progress:
-                    input_dict = {
-                        k: v.to(trainer.device) for k, v in input_dict.items()
+                    input_dict: dict[str, torch.Tensor] = {
+                        k: v.to(trainer.device, non_blocking=True)
+                        for k, v in input_dict.items()
                     }
-                    input_dict["step"] = total_steps
                     log_dict = trainer.train_step(input_dict)
                     log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
                     log_dict["epoch"] = epoch
