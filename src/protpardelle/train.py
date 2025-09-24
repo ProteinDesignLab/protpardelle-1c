@@ -911,7 +911,10 @@ def train(
             trainer.device,
         )
         logger.info(
-            "Training configuration: %s, %s, %s", config_path, output_dir, project_name
+            "Training configuration: config_path %s, output_dir %s, project_name %s",
+            config_path,
+            output_dir,
+            project_name,
         )
 
     # Create output directories and save config
