@@ -14,6 +14,8 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float, Int
+from numpy.ma.core import MaskedArray
+from torch.distributions import Categorical
 from torch.utils.data import (
     DataLoader,
     Dataset,
@@ -320,6 +322,7 @@ def make_crop_cond_mask_and_recenter_coords(
     chain_index: Int[torch.Tensor, "B L"] | None = None,
     contiguous_prob: float = 0.05,
     discontiguous_prob: float = 0.9,
+    multichain_prob: float = 0.0,
     sidechain_prob: float = 0.9,
     sidechain_only_prob: float = 0.0,
     sidechain_tip_prob: float = 0.0,
@@ -328,7 +331,6 @@ def make_crop_cond_mask_and_recenter_coords(
     dist_threshold: float = 8.0,
     recenter_coords: bool = True,
     add_coords_noise: float = 0.0,
-    multichain_prob: float = 0.0,
     hotspot_min: int = 3,
     hotspot_max: int = 8,
     hotspot_dropout: float = 0.1,
@@ -336,7 +338,7 @@ def make_crop_cond_mask_and_recenter_coords(
 ) -> tuple[
     Float[torch.Tensor, "B L A 3"],
     Float[torch.Tensor, "B L A"],
-    Float[torch.Tensor, "B L A"],
+    Float[torch.Tensor, "B L"],
 ]:
     """Generate a random motif crop from a batch of protein structures.
 
@@ -352,6 +354,9 @@ def make_crop_cond_mask_and_recenter_coords(
             motif. Defaults to 0.05.
         discontiguous_prob (float, optional): Probability of sampling a
             discontiguous motif. Defaults to 0.9.
+        multichain_prob (float, optional): Probability of using the multichain
+            scaffolding task (motif is one entire chain; scaffold is the partner
+            chain). Defaults to 0.0.
         sidechain_prob (float, optional): Probability of including sidechain
             coordinates in the motif information. Defaults to 0.9.
         sidechain_only_prob (float, optional): Probability of including only
@@ -370,9 +375,6 @@ def make_crop_cond_mask_and_recenter_coords(
             the motif center of mass is at the origin. Defaults to True.
         add_coords_noise (float, optional): Standard deviation of Gaussian noise
             added to motif coordinates for regularization. Defaults to 0.0.
-        multichain_prob (float, optional): Probability of using the multichain
-            scaffolding task (motif is one entire chain; scaffold is the partner
-            chain). Defaults to 0.0.
         hotspot_min (int, optional): Minimum number of hotspots for the multichain
             task. Defaults to 3.
         hotspot_max (int, optional): Maximum number of hotspots for the multichain
@@ -388,108 +390,89 @@ def make_crop_cond_mask_and_recenter_coords(
             - coords_out: Cropped (and optionally recentered/noised) coordinates.
             - crop_cond_mask: Binary mask indicating atoms included in the motif
             crop/conditioning.
-            - hotspot_mask: Binary mask indicating hotspot atoms.
+            - hotspot_mask: Binary mask per residue indicating motif hotspots.
     """
 
     B, L, A = atom_mask.shape
     device = atom_mask.device
-    seq_mask = atom_mask[..., 1]
-    num_res = seq_mask.sum(-1)
-    masks = []
-    all_hotspot_masks = torch.zeros((B, L), device=device)
+    seq_mask = atom_mask[..., 1]  # (B, L)
+    hotspot_mask = torch.zeros((B, L), device=device)
+    residue_counts: list[int] = seq_mask.int().sum(-1).tolist()
+    masks: list[Float[torch.Tensor, "L A"]] = []
 
-    for i, nr in enumerate(num_res):
-        nr = nr.int().item()
+    for b, num_res in enumerate(residue_counts):
         mask = torch.zeros((L, A), device=device)
-        if chain_index is not None and chain_index[i].sum(-1) > 0:
-            conditioning_type = torch.distributions.Categorical(
-                torch.tensor(
-                    [
-                        contiguous_prob,
-                        discontiguous_prob,
-                        multichain_prob,
-                        1.0 - contiguous_prob - discontiguous_prob - multichain_prob,
-                    ]
-                )
-            ).sample()
-            conditioning_type = ["contiguous", "discontiguous", "multichain", "none"][
-                conditioning_type
-            ]
+
+        is_multichain = (chain_index is not None) and bool(chain_index[b].sum().item())
+        if is_multichain:
+            none_prob = 1.0 - contiguous_prob - discontiguous_prob - multichain_prob
+            probs = torch.tensor(
+                [contiguous_prob, discontiguous_prob, multichain_prob, none_prob]
+            )
+            labels = ("contiguous", "discontiguous", "multichain", "none")
         else:
-            conditioning_type = torch.distributions.Categorical(
-                torch.tensor(
-                    [
-                        0.05,
-                        0.9,
-                        0.05,
-                    ]
-                )
-            ).sample()
-            conditioning_type = ["contiguous", "discontiguous", "none"][
-                conditioning_type
-            ]
+            none_prob = 1.0 - contiguous_prob - discontiguous_prob
+            probs = torch.tensor([contiguous_prob, discontiguous_prob, none_prob])
+            labels = ("contiguous", "discontiguous", "none")
+        conditioning_idx = int(Categorical(probs).sample().item())
+        conditioning_type = labels[conditioning_idx]
 
         if conditioning_type == "contiguous":
-            span_len = torch.randint(
-                1, min(max_span_len, nr), (1,), device=device
-            ).item()
-            span_start = torch.randint(0, nr - span_len, (1,), device=device)
+            span_len = np.random.randint(1, min(max_span_len, num_res))
+            span_start = np.random.randint(0, num_res - span_len)
             mask[span_start : span_start + span_len, :] = 1
         elif conditioning_type == "discontiguous":
             # Extract CB atoms coordinates for the i-th example
-            cb_atoms = atom_coords[i, :, 3]
+            cb_atoms = atom_coords[b, :, 3, :]
             # Pairwise distances between CB atoms
-            cb_distances = torch.cdist(cb_atoms, cb_atoms)
-            close_mask = (
-                cb_distances <= dist_threshold
-            )  # Mask for selecting close CB atoms
+            cb_dists = torch.cdist(cb_atoms, cb_atoms)  # (L, L)
 
-            random_residue = torch.randint(0, nr, (1,), device=device).squeeze()
-            cb_dist_i = cb_distances[random_residue] + 1e3 * (1 - seq_mask[i])
-            close_mask = cb_dist_i <= dist_threshold
-            num_neighbors = close_mask.sum().int()
-
-            # pick how many neighbors (up to 10)
-            num_sele = torch.randint(
-                2,
-                num_neighbors.clamp(min=3, max=max_discontiguous_res + 1),
-                (1,),
-                device=device,
+            random_residue = np.random.randint(0, num_res)
+            cb_dist_i = cb_dists[random_residue] + (1 - seq_mask[b]) * 1e3
+            close_mask: Float[torch.Tensor, "L"] = (cb_dist_i <= dist_threshold).float()
+            num_neighbors = int(
+                close_mask.sum().clamp(min=3, max=max_discontiguous_res + 1).item()
             )
+
+            # Pick how many neighbors (up to 10)
+            num_sele = np.random.randint(2, num_neighbors)
 
             # Select the indices of CB atoms that are close together
             idxs = torch.arange(L, device=device)[close_mask.bool()]
-            idxs = idxs[torch.randperm(len(idxs))[:num_sele]]
+            idxs = idxs[torch.randperm(idxs.shape[0])[:num_sele]]
 
-            if len(idxs) > 0:
+            if idxs.shape[0]:
                 mask[idxs] = 1
         # Keep one chain as the motif, generate the other chain.
-        elif conditioning_type == "multichain":  # check if actually multichain
-            chain_as_motif = np.random.choice(torch.unique(chain_index[i]).cpu())
-            idx_as_motif = (chain_index[i] == chain_as_motif) & (seq_mask[i] != 0)
+        elif conditioning_type == "multichain":
+            assert chain_index is not None
+            chain_as_motif = np.random.choice(
+                torch.unique(chain_index[b]).cpu().numpy()
+            )
+            idx_as_motif = (chain_index[b] == chain_as_motif) & (seq_mask[b] != 0)
             mask[idx_as_motif] = 1
 
-            # generate hotspot input (which idx_as_motif are closest to the chain to generate)
-            ca_atoms = atom_coords[i, :, 1]
+            # Generate hotspot input (which idx_as_motif are closest to the chain to generate)
+            ca_atoms = atom_coords[b, :, 1, :]
             ca_distances = torch.cdist(ca_atoms, ca_atoms)
-            x = chain_index[i]
+            x = chain_index[b]
             chain_dist = (x[:, None] - x[None, :]).abs()
             intrachain_mask = chain_dist == 0
-            intrachain_mask[nr:] = 1
-            intrachain_mask[:, nr:] = 1
+            intrachain_mask[num_res:] = 1
+            intrachain_mask[:, num_res:] = 1
             ca_distances[intrachain_mask] = 999.0
             flat_indices = torch.argsort(ca_distances.flatten())
             ii, jj = torch.unravel_index(flat_indices, chain_dist.shape)
             contact_idx_pairs = list(zip(ii.tolist(), jj.tolist()))
             num_hotspots = np.random.choice(np.arange(hotspot_min * 2, hotspot_max * 2))
 
-            # randomly drop out hotspot 10% of the time
+            # Randomly drop out hotspot 10% of the time
             if np.random.rand() < 1 - hotspot_dropout:
                 for pair in contact_idx_pairs[:num_hotspots]:
                     idx_hotspot = min(pair) if chain_as_motif == 0 else max(pair)
-                    all_hotspot_masks[i, idx_hotspot] = 1
+                    hotspot_mask[b, idx_hotspot] = 1
 
-            # include some paratope residues as part of the motif
+            # Include some paratope residues as part of the motif
             if np.random.rand() < paratope_prob:
                 for pair in contact_idx_pairs[:num_hotspots]:
                     idx_paratope = max(pair) if chain_as_motif == 0 else min(pair)
@@ -498,19 +481,19 @@ def make_crop_cond_mask_and_recenter_coords(
                         max(
                             torch.sum(idx_as_motif).item(),
                             idx_paratope - flanking_width,
-                        ) : min(idx_paratope + flanking_width, nr)
+                        ) : min(idx_paratope + flanking_width, num_res)
                     ] = 1
 
         if np.random.rand() < sidechain_prob:  # keep all crop-cond coords unmasked
             if np.random.rand() < sidechain_only_prob:
-                mask[:, (0, 1, 2, 4)] = 0
+                mask[:, residue_constants.backbone_idxs] = 0
             if np.random.rand() < sidechain_tip_prob and aatype is not None:
-                # determine tip atoms by amino acid type
+                # Determine tip atoms by amino acid type
                 motif_idx = torch.nonzero(mask.sum(-1)).flatten()
-                for mi in motif_idx:
-                    aatype_int = aatype[i][mi]
+                for m in motif_idx:
+                    aatype_int = int(aatype[b, m].item())
                     motif_aatype_str = residue_constants.restype_1to3[
-                        residue_constants.order_restype[aatype_int.item()]
+                        residue_constants.order_restype[aatype_int]
                     ]
 
                     # Original Protpardelle tip atom definition, also used in La-Proteina
@@ -522,30 +505,33 @@ def make_crop_cond_mask_and_recenter_coords(
                     ]
 
                     nontip_idx = np.delete(np.arange(37), tip_atom_idx_atom37)
-                    mask[mi, nontip_idx] = 0
-
-        else:  # discard everything that is not backbone N, CA, C, O
-            mask[:, 3] = 0
-            mask[:, 5:] = 0
+                    mask[m, nontip_idx] = 0
+        else:
+            # Discard everything that is not backbone N, CA, C, O
+            mask[:, residue_constants.sidechain_idxs] = 0
 
         masks.append(mask)
 
-    crop_cond_mask = torch.stack(masks)
-    crop_cond_mask = crop_cond_mask * atom_mask
+    crop_cond_mask = torch.stack(masks) * atom_mask
 
     if recenter_coords:
         motif_masked_array = get_masked_coords_array(atom_coords, crop_cond_mask)
-        cond_coords_center = motif_masked_array.mean((1, 2))
-        motif_mask = torch.tensor(1 - cond_coords_center.mask).to(crop_cond_mask)
-        means = torch.tensor(cond_coords_center.data).to(atom_coords) * motif_mask
-        coords_out = atom_coords - rearrange(means, "b c -> b 1 1 c")
+        cond_coords_center: MaskedArray = motif_masked_array.mean((1, 2))
+        motif_mask = torch.tensor(
+            1 - cond_coords_center.mask, device=device, dtype=torch.float
+        )
+        mean_coords = (
+            torch.tensor(cond_coords_center.data, device=device, dtype=torch.float)
+            * motif_mask
+        )
+        coords_out = atom_coords - mean_coords[:, None, None, :]
     else:
         coords_out = atom_coords
 
     if add_coords_noise > 0:
         coords_out = coords_out + add_coords_noise * torch.randn_like(coords_out)
 
-    return coords_out, crop_cond_mask, all_hotspot_masks
+    return coords_out, crop_cond_mask, hotspot_mask
 
 
 class PDBDataset(Dataset):
