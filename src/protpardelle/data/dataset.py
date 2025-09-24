@@ -21,6 +21,7 @@ from torch.utils.data import (
     RandomSampler,
     Sampler,
 )
+from torch.utils.data._utils.collate import default_collate
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -536,6 +537,38 @@ def make_crop_cond_mask_and_recenter_coords(
         coords_out = coords_out + add_coords_noise * torch.randn_like(coords_out)
 
     return coords_out, crop_cond_mask, hotspot_mask
+
+
+def make_training_collate_fn(config: TrainingConfig):
+    """Create a collate_fn that applies training-time augmentations on CPU."""
+
+    def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+        batch_dict: dict[str, torch.Tensor] = default_collate(batch)
+
+        if config.train.crop_conditional:
+            coords = batch_dict["coords_in"]
+            atom_mask = batch_dict["atom_mask"]
+            aatype = batch_dict.get("aatype")
+            chain_index = batch_dict.get("chain_index")
+
+            coords_out, crop_cond_mask, hotspot_mask = (
+                make_crop_cond_mask_and_recenter_coords(
+                    atom_coords=coords,
+                    atom_mask=atom_mask,
+                    aatype=aatype,
+                    chain_index=chain_index,
+                    **vars(config.train.crop_cond),
+                )
+            )
+
+            batch_dict["coords_in"] = coords_out
+            batch_dict["crop_cond_mask"] = crop_cond_mask
+            batch_dict["hotspot_mask"] = hotspot_mask
+            batch_dict["struct_crop_cond"] = coords_out * crop_cond_mask.unsqueeze(-1)
+
+        return batch_dict
+
+    return collate_fn
 
 
 class PDBDataset(Dataset):

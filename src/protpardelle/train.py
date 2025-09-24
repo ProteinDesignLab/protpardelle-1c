@@ -37,6 +37,7 @@ from protpardelle.data.dataset import (
     StochasticMixedSampler,
     calc_sigma_data,
     make_crop_cond_mask_and_recenter_coords,
+    make_training_collate_fn,
 )
 from protpardelle.utils import (
     StrPath,
@@ -539,6 +540,7 @@ class ProtpardelleTrainer:
             drop_last=True,
             prefetch_factor=4 if self.num_workers > 0 else None,
             persistent_workers=self.num_workers > 0,
+            collate_fn=make_training_collate_fn(self.config),
         )
 
         return dataloader
@@ -574,16 +576,22 @@ class ProtpardelleTrainer:
                 raise NotImplementedError(
                     "Crop conditioning with all atom loss not implemented"
                 )
-            atom_coords, crop_cond_mask, hotspot_mask = (
-                make_crop_cond_mask_and_recenter_coords(
-                    atom_coords=atom_coords,
-                    atom_mask=atom_mask,
-                    aatype=aatype,
-                    chain_index=chain_index,
-                    **vars(self.config.train.crop_cond),
+
+            crop_cond_mask = input_dict.get("crop_cond_mask")
+            struct_crop_cond = input_dict.get("struct_crop_cond")
+            hotspot_mask = input_dict.get("hotspot_mask")
+
+            if (crop_cond_mask is None) or (struct_crop_cond is None):
+                atom_coords, crop_cond_mask, hotspot_mask = (
+                    make_crop_cond_mask_and_recenter_coords(
+                        atom_coords=atom_coords,
+                        atom_mask=atom_mask,
+                        aatype=aatype,
+                        chain_index=chain_index,
+                        **vars(self.config.train.crop_cond),
+                    )
                 )
-            )
-            struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
+                struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
             if "hotspots" not in self.config.model.conditioning_style:
                 hotspot_mask = None  # type: ignore
         else:
