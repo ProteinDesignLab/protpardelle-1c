@@ -155,7 +155,9 @@ class Model:
     struct_model_checkpoint: str
     mpnn_model_checkpoint: str
     crop_conditional: bool
-    conditioning_style: Literal["concat", "noise_residual", "concat_and_noise_residual"]
+    conditioning_style: Literal[
+        "concat", "noise_residual", "concat_and_noise_residual"
+    ]  # this should be always present
     # conditioning_style: str
     compute_loss_on_all_atoms: bool
     struct_model: StructModel

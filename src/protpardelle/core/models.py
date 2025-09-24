@@ -395,15 +395,7 @@ class CoordinateDenoiser(nn.Module):
 
         num_channels = self.struct_config.n_channel
         num_noise_channels = num_channels * self.struct_config.noise_cond_mult
-        num_motif_channels = (
-            num_channels * self.struct_config.motif_cond_mult
-            if (
-                "motif_cond_mult" in self.struct_config
-                and "conditioning_style" in config.model
-                and "separate_motif_track" in config.model.conditioning_style
-            )
-            else None
-        )
+        num_motif_channels = None
 
         self.net = modules.TimeCondUViT(
             seq_len=config.data.fixed_size,
@@ -421,26 +413,12 @@ class CoordinateDenoiser(nn.Module):
             position_embedding_type=self.struct_config.uvit.position_embedding_type,
             position_embedding_max=self.struct_config.uvit.position_embedding_max,
             noise_residual=config.model.crop_conditional
-            and "conditioning_style" in config.model
             and "noise_residual" in config.model.conditioning_style,
             ssadj_cond=config.model.crop_conditional
-            and "conditioning_style" in config.model
             and "ssadj" in config.model.conditioning_style,
-            attn_dropout=(
-                self.struct_config.uvit.attn_dropout
-                if "attn_dropout" in self.struct_config.uvit
-                else 0.0
-            ),
-            out_dropout=(
-                self.struct_config.uvit.out_dropout
-                if "out_dropout" in self.struct_config.uvit
-                else 0.0
-            ),
-            ff_dropout=(
-                self.struct_config.uvit.ff_dropout
-                if "ff_dropout" in self.struct_config.uvit
-                else 0.1
-            ),
+            attn_dropout=0.0,
+            out_dropout=0.0,
+            ff_dropout=0.1,
             dit=self.struct_config.arch == "dit",
         )
         self.noise_block = modules.NoiseConditioningBlock(
@@ -499,10 +477,7 @@ class CoordinateDenoiser(nn.Module):
             sse_cond = torch.zeros_like(residue_index, dtype=torch.long)
 
         if self.config.model.crop_conditional:
-            if (
-                "conditioning_style" in self.config.model
-                and "concat" in self.config.model.conditioning_style
-            ):
+            if "concat" in self.config.model.conditioning_style:
                 if struct_crop_cond is None:
                     struct_crop_cond = torch.zeros_like(noisy_coords)
                 else:
@@ -530,7 +505,7 @@ class CoordinateDenoiser(nn.Module):
             else:
                 emb = torch.cat([emb, struct_self_cond], dim=-1)
 
-            if "conditioning_style" in self.config.model and (
+            if (
                 "noise_residual" in self.config.model.conditioning_style
                 or "separate_motif_track" in self.config.model.conditioning_style
             ):
@@ -546,10 +521,7 @@ class CoordinateDenoiser(nn.Module):
         else:
             emb = torch.cat([emb, struct_self_cond], dim=-1)
 
-        if (
-            "conditioning_style" in self.config.model
-            and "ssadj" in self.config.model.conditioning_style
-        ):
+        if "ssadj" in self.config.model.conditioning_style:
             sse_cond = F.one_hot(sse_cond, num_classes=3)
             sse_cond = sse_cond.unsqueeze(-2).expand(
                 -1, -1, emb.shape[-2], -1
@@ -694,16 +666,19 @@ class Protpardelle(nn.Module):
 
         # Diffusion-related
         self.sigma_data = self.struct_model.sigma_data
-        self.training_noise_schedule = partial(
-            diffusion.noise_schedule,
-            sigma_data=self.sigma_data,
-            **vars(config.diffusion.training),
-        )
         self.sampling_noise_schedule_default = self.make_sampling_noise_schedule()
 
         if device is None:
             device = get_default_device()
         self.to(device)
+
+    def training_noise_schedule(
+        self,
+        timestep: Float[torch.Tensor, "..."],
+    ) -> Float[torch.Tensor, "..."]:
+        return diffusion.noise_schedule(
+            timestep, sigma_data=self.sigma_data, **vars(self.config.diffusion.training)
+        )
 
     @property
     def device(self) -> torch.device:
