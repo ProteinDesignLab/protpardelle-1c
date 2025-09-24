@@ -779,32 +779,6 @@ def train(
     # Load config
     config = load_config(config_path, TrainingConfig)
 
-    # Load datasets
-    datasets = load_datasets(config)
-
-    # Auto calculate sigma data if needed
-    if config.data.auto_calc_sigma_data:
-        sigma_data: float | None = None
-        if distributed.is_main:
-
-            dataset = ConcatDataset(datasets)
-            sigma_data = calc_sigma_data(
-                dataset, config, num_workers=config.data.num_workers
-            )
-
-        if distributed.ddp_enabled:
-            sigma_tensor = torch.zeros(1, device=resolved_device)
-            if distributed.is_main:
-                assert sigma_data is not None
-                sigma_tensor[0] = sigma_data
-            dist.broadcast(sigma_tensor, src=0)
-            sigma_data = float(sigma_tensor.item())
-        else:
-            assert sigma_data is not None
-
-        # Override the config value
-        config.data.sigma_data = sigma_data
-
     # Determine per-process batch size
     global_batch_size = config.train.batch_size
     if distributed.ddp_enabled:
@@ -848,6 +822,28 @@ def train(
             global_batch_size,
             global_num_workers,
         )
+
+    # Load datasets
+    datasets = load_datasets(config)
+
+    # Auto calculate sigma data if needed
+    if config.data.auto_calc_sigma_data:
+        sigma_data: float | None = None
+        if distributed.is_main:
+            dataset = ConcatDataset(datasets)
+            sigma_data = calc_sigma_data(dataset, config, num_workers=local_num_workers)
+        if distributed.ddp_enabled:
+            sigma_tensor = torch.zeros(1, device=resolved_device)
+            if distributed.is_main:
+                assert sigma_data is not None
+                sigma_tensor[0] = sigma_data
+            dist.broadcast(sigma_tensor, src=0)
+            sigma_data = float(sigma_tensor.item())
+        else:
+            assert sigma_data is not None
+
+        # Override the config value
+        config.data.sigma_data = sigma_data
 
     # Initialize wandb
     output_dir = norm_path(output_dir)

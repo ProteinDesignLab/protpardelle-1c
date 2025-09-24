@@ -260,7 +260,7 @@ def calc_sigma_data(
         pin_memory=False,
         shuffle=True,
         drop_last=False,
-        prefetch_factor=0,
+        prefetch_factor=None,
         persistent_workers=False,
     )
 
