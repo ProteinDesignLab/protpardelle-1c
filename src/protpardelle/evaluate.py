@@ -7,7 +7,7 @@ from collections import defaultdict
 
 import numpy as np
 import torch
-from jaxtyping import Float
+from jaxtyping import Float, Int
 
 from protpardelle.common import residue_constants
 from protpardelle.data.align import (
@@ -43,16 +43,16 @@ def _insert_chain_gaps(
 
 
 def compute_self_consistency(
-    comparison_structures: list[torch.Tensor],  # can be sampled or ground truth
-    trimmed_chain_index: torch.Tensor | None = None,
+    comparison_structures: list[Float[torch.Tensor, "L A 3"]],
+    trimmed_chain_index: Int[torch.Tensor, "B L"] | None = None,
     sampled_sequences: list[str] | None = None,
     num_seqs: int = 1,
     motif_idx: list[list[int]] | None = None,
-    motif_coords: torch.Tensor | None = None,
-    motif_aatypes: torch.Tensor | None = None,
+    motif_coords: Float[torch.Tensor, "B M A 3"] | None = None,
+    motif_aatypes: Int[torch.Tensor, "B M"] | None = None,
     allatom: bool = False,
-    atom_mask: torch.Tensor | None = None,
-    motif_atom_mask: torch.Tensor | None = None,
+    atom_mask: Float[torch.Tensor, "B L A"] | None = None,
+    motif_atom_mask: Float[torch.Tensor, "B M A"] | None = None,
 ):
 
     aux = defaultdict(list)
