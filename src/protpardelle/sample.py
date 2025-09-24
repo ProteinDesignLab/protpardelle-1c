@@ -488,7 +488,7 @@ def generate(
 def sample(
     sampling_yaml_path: Path,
     project_name: str = "protpardelle-1c-sampling",
-    motif_dir: Path = Path("motifs/nanobody"),
+    motif_dir: Path = Path("examples/motifs/nanobody"),
     motif_pdb: Path | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
@@ -555,6 +555,12 @@ def sample(
             runner_cfg["ssadj"],
         )
     ):
+        if motif_cfg is None and motif_pdb is None:
+            raise ValueError(
+                "Either motif_cfg in the config or motif_pdb must be specified."
+            )
+        if motif_cfg is not None and motif_pdb is not None:
+            raise ValueError("Only one of motif_cfg or motif_pdb can be specified.")
         if motif_cfg is None:
             if motif_pdb is not None:
                 motif_fps.append(motif_pdb)
