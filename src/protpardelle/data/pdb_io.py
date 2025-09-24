@@ -200,13 +200,17 @@ def load_feats_from_pdb(
 
     Args:
         pdb_path (StrPath): The path to PDB or mmcif file
-        bb_atoms (tuple[str, ...], optional): List of backbone atom names to load. Defaults to ("N", "CA", "C", "O").
+        bb_atoms (tuple[str, ...], optional): List of backbone atom names to load.
+            Defaults to ("N", "CA", "C", "O").
         chain_id (str | None, optional): Chain ID to load. Defaults to None.
-        chain_residx_gap (int, optional): Residue index gap for chain breaks for PDBs with multiple chains. Defaults to 200.
-        include_pos_feats (bool, optional): If True, include chain_id_mapping and residue_index_orig in feats for specifying specific positions. Defaults to False.
+        chain_residx_gap (int, optional): Residue index gap for chain breaks for PDBs
+            with multiple chains. Defaults to 200.
+        include_pos_feats (bool, optional): If True, include chain_id_mapping and residue_index_orig
+            in feats for specifying specific positions. Defaults to False.
 
     Returns:
-        tuple[dict[str, Any], Hetero]: A tuple of (feats, hetero) where feats is a dictionary of model input features and hetero is a Hetero object.
+        tuple[dict[str, Any], Hetero]: A tuple of (feats, hetero) where feats is
+            a dictionary of model input features and hetero is a Hetero object.
     """
 
     protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
