@@ -255,23 +255,29 @@ class ProtpardelleTrainer:
                 Defaults to None.
         """
 
-        self.is_main = distributed.is_main
-        self.ddp_enabled = distributed.ddp_enabled
+        # Store config
+        self.config = config
+
+        # Store distributed context
         self.distributed = distributed
+        self.is_main = self.distributed.is_main
+        self.ddp_enabled = self.distributed.ddp_enabled
+
+        # Determine batch size and num_workers
         self.batch_size = (
             batch_size_override
             if batch_size_override is not None
-            else config.train.batch_size
+            else self.config.train.batch_size
         )
         self.num_workers = (
             num_workers_override
             if num_workers_override is not None
-            else config.data.num_workers
+            else self.config.data.num_workers
         )
 
         # Initialize model
-        model = Protpardelle(config, device)
-        if self.distributed.ddp_enabled:
+        model = Protpardelle(self.config, device)
+        if self.ddp_enabled:
             logger.info(
                 "Initialized DDP rank=%d local_rank=%d world_size=%d",
                 self.distributed.rank,
@@ -306,10 +312,7 @@ class ProtpardelleTrainer:
 
         # Initialize optimizer, scheduler, and scaler
         self.optimizer, self.scheduler = self._load_optimizer_and_scheduler()
-        self.scaler = GradScaler(device=device, enabled=config.train.use_amp)  # type: ignore
-
-        # Store config
-        self.config = config
+        self.scaler = GradScaler(device=device, enabled=self.config.train.use_amp)  # type: ignore
 
     @property
     def module(self) -> Protpardelle:
@@ -456,7 +459,7 @@ class ProtpardelleTrainer:
         # Set seeds if no rng provided
         seed = self.config.train.seed
         if seed is not None:
-            if self.distributed.ddp_enabled:
+            if self.ddp_enabled:
                 seed += self.distributed.rank
             seed_everything(
                 seed, freeze_cuda=True
@@ -519,10 +522,8 @@ class ProtpardelleTrainer:
             datasets,
             self.config.data.mixing_ratios,
             batch_size=self.batch_size,
-            num_replicas=(
-                self.distributed.world_size if self.distributed.ddp_enabled else 1
-            ),
-            rank=self.distributed.rank if self.distributed.ddp_enabled else 0,
+            num_replicas=(self.distributed.world_size if self.ddp_enabled else 1),
+            rank=self.distributed.rank if self.ddp_enabled else 0,
             seed=self.config.train.seed,
         )
 
@@ -613,7 +614,9 @@ class ProtpardelleTrainer:
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
         # Some backbone atoms may be missing; mask them to zeros
-        bb_atom_mask = bb_atom_mask * atom_mask  # float masks; multiply instead of boolean ops
+        bb_atom_mask = (
+            bb_atom_mask * atom_mask
+        )  # float masks; multiply instead of boolean ops
         if self.config.model.task == "backbone":
             noised_coords = noised_coords * bb_atom_mask.unsqueeze(-1)
         elif self.config.model.task == "ai-allatom":
@@ -783,15 +786,11 @@ def train(
     if config.data.auto_calc_sigma_data:
         sigma_data: float | None = None
         if distributed.is_main:
-            logger.info(
-                "Automatically computing sigma_data for %d examples",
-                config.data.n_examples_for_sigma_data,
-            )
+
             dataset = ConcatDataset(datasets)
             sigma_data = calc_sigma_data(
                 dataset, config, num_workers=config.data.num_workers
             )
-            logger.info("Computed sigma_data: %.4f", sigma_data)
 
         if distributed.ddp_enabled:
             sigma_tensor = torch.zeros(1, device=resolved_device)

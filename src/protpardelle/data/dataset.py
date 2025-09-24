@@ -260,6 +260,8 @@ def calc_sigma_data(
         pin_memory=False,
         shuffle=True,
         drop_last=False,
+        prefetch_factor=0,
+        persistent_workers=False,
     )
 
     collected_coords = []
@@ -268,6 +270,11 @@ def calc_sigma_data(
 
     num_batches = math.ceil(
         config.data.n_examples_for_sigma_data / config.train.batch_size
+    )
+    num_examples = num_batches * config.train.batch_size
+    logger.info(
+        "Automatically computing sigma_data for %d examples",
+        num_examples,
     )
     for i, inputs in tqdm(
         enumerate(sigma_dataloader), desc="Collecting data", total=num_batches
@@ -307,6 +314,8 @@ def calc_sigma_data(
     # Estimate sigma_data
     masked_coords = get_masked_coords_array(coords, atom_mask)
     sigma_data = float(masked_coords.std())
+
+    logger.info("Computed sigma_data: %.4f", sigma_data)
 
     return sigma_data
 
