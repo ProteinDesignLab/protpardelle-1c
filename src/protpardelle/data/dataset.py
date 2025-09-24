@@ -188,23 +188,19 @@ def apply_random_se3(
     return atom_coords
 
 
-def uniform_rand_rotation(
-    batch_size: int, seed: int | None = None
-) -> Float[torch.Tensor, "B 3 3"]:
+def uniform_rand_rotation(batch_size: int) -> Float[torch.Tensor, "B 3 3"]:
     """Creates a rotation matrix uniformly at random in SO(3).
 
     Uses quaternionic multiplication to generate independent rotation matrices for each batch.
 
     Args:
         batch_size (int): The number of rotation matrices to generate.
-        seed (int | None, optional): Random seed for reproducibility. Defaults to None.
 
     Returns:
         torch.Tensor: The generated rotation matrices.
     """
 
-    rng = torch.Generator().manual_seed(seed) if seed is not None else None
-    q = torch.randn(batch_size, 4, generator=rng)
+    q = torch.randn(batch_size, 4)
     q = q / torch.norm(q, dim=1, keepdim=True)
     rotation = torch.zeros(batch_size, 3, 3)
 
@@ -797,9 +793,10 @@ class StochasticMixedSampler(Sampler[int]):
         self.primary_sampler_length = len(self.primary_sampler)
 
         remaining_per_batch = self.batch_size - self.primary_samples_per_batch
-        batches_per_epoch = int(
-            np.ceil(self.primary_sampler_length / self.primary_samples_per_batch)
+        batches_per_epoch = math.ceil(
+            self.primary_sampler_length / self.primary_samples_per_batch
         )
+
         total_augmented_needed = max(remaining_per_batch * batches_per_epoch, 1)
 
         self.augmented_samplers = [
@@ -836,10 +833,6 @@ class StochasticMixedSampler(Sampler[int]):
         primary_iter = iter(self.primary_sampler)
         augmented_iters = [iter(sampler) for sampler in self.augmented_samplers]
 
-        rng = np.random.default_rng(
-            self.seed + self.epoch if self.seed is not None else None
-        )
-
         while True:
             batch_indices: list[int] = []
 
@@ -853,7 +846,7 @@ class StochasticMixedSampler(Sampler[int]):
             if remaining_size > 0 and len(self.augmented_samplers) > 0:
                 probs = self.mixing_ratios[1:]
                 probs = probs / probs.sum()
-                allocations = rng.multinomial(remaining_size, probs)
+                allocations = np.random.multinomial(remaining_size, probs)
                 for aug_idx, count in enumerate(allocations):
                     if count == 0:
                         continue
@@ -872,7 +865,8 @@ class StochasticMixedSampler(Sampler[int]):
             yield from batch_indices
 
     def __len__(self) -> int:
-        batches_per_epoch = int(
-            np.ceil(self.primary_sampler_length / self.primary_samples_per_batch)
+        batches_per_epoch = math.ceil(
+            self.primary_sampler_length / self.primary_samples_per_batch
         )
+
         return batches_per_epoch * self.batch_size
