@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from jaxtyping import Float, Int
+from torch.distributions import Categorical
 from torch.types import Device
 from tqdm.auto import tqdm
 
@@ -783,21 +784,42 @@ class Protpardelle(nn.Module):
         seq_crop_cond: Int[torch.Tensor, "B L"] | None = None,  # motif aatypes
         run_struct_model: bool = True,
         run_mpnn_model: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[
+        Float[torch.Tensor, "B L A 3"],
+        Float[torch.Tensor, "B L V"],
+        Float[torch.Tensor, "B L A 3"],
+        Float[torch.Tensor, "B L V"],
+    ]:
         """Main forward function for denoising/co-design.
 
-        Arguments:
-            noisy_coords: noisy array of xyz coordinates.
-            noise_level: std of noise for each example in the batch
-            seq_mask: mask indicating which indexes contain data.
-            residue_index: residue ordering.
-            struct_self_cond: denoised coordinates from the previous step, scaled
-                down by sigma data.
-            struct_crop_cond: unnoised coordinates. unscaled (scaled down by sigma
-                data inside the denoiser)
-            seq_self_cond: mpnn-predicted sequence logprobs from the previous step.
-            run_struct_model: flag to optionally not run structure denoiser.
-            run_mpnn_model: flag to optionally not run MiniMPNN.
+        Args:
+            noisy_coords (torch.Tensor): Noisy array of xyz coordinates.
+            noise_level (torch.Tensor): Std of noise for each example in the batch.
+            seq_mask (torch.Tensor): Mask indicating which indexes contain data.
+            residue_index (torch.Tensor): Residue ordering.
+            chain_index (torch.Tensor | None, optional): Chain index. Defaults to None.
+            hotspot_mask (torch.Tensor | None, optional): Hotspot mask. Defaults to None.
+            struct_self_cond (torch.Tensor | None, optional): Denoised coordinates from the previous step,
+                scaled down by sigma data. Defaults to None.
+            struct_crop_cond (torch.Tensor | None, optional): Unnoised coordinates,
+                unscaled (scaled down by sigma data inside the denoiser). Defaults to None.
+            sse_cond (torch.Tensor | None, optional): Secondary structure elements conditioning.
+                Defaults to None.
+            adj_cond (torch.Tensor | None, optional): Adjacency conditioning. Defaults to None.
+            seq_self_cond (torch.Tensor | None, optional): MPNN-predicted sequence logprobs
+                from the previous step. Defaults to None.
+            seq_crop_cond (torch.Tensor | None, optional): Motif aatypes conditioning.
+                Defaults to None.
+            run_struct_model (bool, optional): Flag to optionally not run structure denoiser.
+                Defaults to True.
+            run_mpnn_model (bool, optional): Flag to optionally not run MiniMPNN. Defaults to True.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]: A tuple of:
+                - Denoised coordinates
+                - MPNN-predicted sequence logprobs
+                - struct self conditioning
+                - seq self conditioning
         """
 
         # Coordinate denoiser
@@ -853,26 +875,40 @@ class Protpardelle(nn.Module):
         (only inputs required to begin sampling).
 
         Args:
-        - prot_lens_per_chain: tensor of protein lengths for each chain (batch size, num_chains)
-        - length_ranges_per_chain: tensor of min and max protein lengths for each chain (num_chains, 2) if prot_lens_per_chain is None
-        - num_samples: number of samples to generate if providing length_ranges_per_chain
-        - chain_residx_gap: gap between chains in residue indices (defaults to model config)
+            prot_lens_per_chain (torch.Tensor | None, optional): A tensor of protein lengths
+                for each chain (batch size, num_chains)
+            length_ranges_per_chain (torch.Tensor | None, optional): A tensor of min and max protein lengths
+                for each chain (num_chains, 2) if prot_lens_per_chain is None
+            num_samples (int | None, optional): The number of samples to generate
+                if providing length_ranges_per_chain
+            chain_residx_gap (int | None, optional): The gap between chains in residue indices
+                (defaults to model config)
+
+        Raises:
+            ValueError: If both prot_lens_per_chain and length_ranges_per_chain are None.
+            ValueError: If num_samples is None when providing length_ranges_per_chain.
 
         Returns:
-        - seq_mask: sequence mask (batch size, max_len)
-        - residue_index: residue indices (batch size, max_len)
-        - chain_index: chain ids (batch size, max_len)
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor]: A tuple of:
+                - seq_mask: sequence mask
+                - residue_index: residue indices
+                - chain_index: chain ids
         """
+
         # Ensure only one of prot_lens_per_chain or length_ranges_per_chain is provided
-        assert (prot_lens_per_chain is None) != (
-            length_ranges_per_chain is None
-        ), f"Only one of prot_lens_per_chain or length_ranges_per_chain should be provided. Got prot_lens_per_chain={prot_lens_per_chain} and length_ranges_per_chain={length_ranges_per_chain}"
+        if not ((prot_lens_per_chain is None) ^ (length_ranges_per_chain is None)):
+            raise ValueError(
+                "Exactly one of prot_lens_per_chain or length_ranges_per_chain must be provided. "
+                f"Got prot_lens_per_chain={prot_lens_per_chain} and "
+                f"length_ranges_per_chain={length_ranges_per_chain}"
+            )
 
         # Make protein lengths by sampling from provided ranges
         if length_ranges_per_chain is not None:
-            assert (
-                num_samples is not None
-            ), "Must provide num_samples if providing length_ranges_per_chain"
+            if num_samples is None:
+                raise ValueError(
+                    "Must provide num_samples if providing length_ranges_per_chain"
+                )
             prot_lens_per_chain = torch.stack(
                 [
                     torch.randint(low=start, high=end + 1, size=(num_samples,))
@@ -915,6 +951,7 @@ class Protpardelle(nn.Module):
         # Apply sequence mask
         residue_index = residue_index.to(self.device) * mask
         chain_index = chain_index.to(self.device) * mask
+
         return mask, residue_index, chain_index
 
     def sample(
@@ -1209,7 +1246,7 @@ class Protpardelle(nn.Module):
             new_xt = xt_in + step
             return new_xt
 
-        def sample_aatype(logprobs, tol: float = 1e-8):
+        def sample_aatype(logprobs, tol: float = 1e-6) -> torch.Tensor:
             # Top-p truncation
             probs = F.softmax(logprobs.clone(), dim=-1)
             sorted_prob, sorted_idxs = torch.sort(probs, descending=True)
@@ -1225,15 +1262,16 @@ class Protpardelle(nn.Module):
             )
 
             # Apply temperature and disallowed AAs and sample
-            assert temperature >= 0.0
-            scaled_logits = orig_probs.clamp(min=tol).log() / (temperature + 1e-4)
+            if temperature <= 0:
+                raise ValueError("Temperature must be positive")
+            scaled_logits = orig_probs.clamp(min=tol).log() / (temperature + tol)
             if disallow_aas:
                 unwanted_mask = torch.zeros(scaled_logits.shape[-1]).to(scaled_logits)
                 unwanted_mask[disallow_aas] = 1
-                scaled_logits -= unwanted_mask * 1e3
+                scaled_logits = scaled_logits - unwanted_mask * 1e3
             orig_probs = F.softmax(scaled_logits, dim=-1)
-            categorical = torch.distributions.Categorical(probs=orig_probs)
-            samp_aatype = categorical.sample()
+            samp_aatype = Categorical(probs=orig_probs).sample()
+
             return samp_aatype
 
         def design_with_fullmpnn(
