@@ -414,7 +414,7 @@ def make_crop_cond_mask_and_recenter_coords(
         conditioning_type = labels[conditioning_idx]
 
         if conditioning_type == "contiguous":
-            span_len = np.random.randint(1, min(max_span_len, num_res))
+            span_len = np.random.randint(1, min(max_span_len + 1, num_res))
             span_start = np.random.randint(0, num_res - span_len)
             mask[span_start : span_start + span_len, :] = 1
         elif conditioning_type == "discontiguous":
