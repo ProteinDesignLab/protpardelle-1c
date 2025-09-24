@@ -127,7 +127,7 @@ def save_samples(
         samp_save_name = save_dir / f"sample_{save_name}_{idx}.pdb"
 
         if bb_only:
-            coords_to_save = coords_to_save[:, (0, 1, 2, 4), :]
+            coords_to_save = coords_to_save[:, residue_constants.backbone_idxs, :]
 
         write_coords_to_pdb(
             coords_to_save,

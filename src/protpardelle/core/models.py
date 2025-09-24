@@ -113,19 +113,15 @@ def apply_crop_cond_strategy(
     ]
     crop_cond_coords = coords.clone()
 
-    # Indices: backbone atoms are [0, 1, 2, 4]; sidechain is complement (3 and 5:)
-    backbone_idxs = [0, 1, 2, 4]
-    sidechain_idxs = [3] + list(range(5, 37))
-
     if strategy == "backbone":
         # Zero all sidechain atoms globally
-        crop_cond_coords[:, :, sidechain_idxs] = 0
+        crop_cond_coords[:, :, residue_constants.sidechain_idxs] = 0
     elif strategy == "sidechain":
         # Zero backbone atoms globally
-        crop_cond_coords[:, :, backbone_idxs] = 0
+        crop_cond_coords[:, :, residue_constants.backbone_idxs] = 0
     elif strategy == "sidechain-tip":
         # Zero backbone atoms globally
-        crop_cond_coords[:, :, backbone_idxs] = 0
+        crop_cond_coords[:, :, residue_constants.backbone_idxs] = 0
 
         # For motif residues, keep only tip atoms for that residue type
         for b, (idxs, aatypes) in enumerate(zip(motif_idx, motif_aatype)):
