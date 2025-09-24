@@ -562,10 +562,6 @@ def sample(
             runner_cfg["ssadj"],
         )
     ):
-        if motif_cfg is None and motif_pdb is None:
-            raise ValueError(
-                "Either motif_cfg in the config or motif_pdb must be specified."
-            )
         if motif_cfg is not None and motif_pdb is not None:
             raise ValueError("Only one of motif_cfg or motif_pdb can be specified.")
         if motif_cfg is None:
