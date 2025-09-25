@@ -376,9 +376,7 @@ class CoordinateDenoiser(nn.Module):
         self.sigma_data = config.data.sigma_data
         self.num_atoms = config.model.struct_model.n_atoms
 
-        self.bb_idxs = [
-            residue_constants.atom_order[atom] for atom in ["N", "CA", "C", "O"]
-        ]
+        self.bb_idxs = residue_constants.backbone_idxs.copy()
         num_xyz = (
             9
             if config.model.crop_conditional

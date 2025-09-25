@@ -5,7 +5,7 @@ sampling:
   noise_schedule:
     _partial_: true
     _target_: "protpardelle.core.diffusion.noise_schedule"
-    s_max: 80 # start applying schurn after this noise level
+    s_max: 80.0 # start applying schurn after this noise level
     s_min: 0.001 # stop applying schurn after this noise level
   motif_file_path: # input motif, can also be a directory of motifs
   tip_atom_conditioning: false # reconstruction and replacement guidance applied to tip atoms
@@ -64,7 +64,7 @@ sampling:
     noise_schedule:
       _partial_: true
       _target_: "protpardelle.core.diffusion.noise_schedule"
-      s_max: 80
+      s_max: 80.0
       s_min: 0.001
 
 hydra:

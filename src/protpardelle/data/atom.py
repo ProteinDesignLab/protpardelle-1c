@@ -237,10 +237,7 @@ def bb_coords_to_atom37_coords(
 
     device = bb_coords.device
     atom37_coords = torch.zeros((bb_coords.shape[0], 37, 3), device=device)
-    bb_idxs = [
-        residue_constants.atom_order[atom_name] for atom_name in ["N", "CA", "C", "O"]
-    ]
-    atom37_coords[:, bb_idxs] = bb_coords
+    atom37_coords[:, residue_constants.backbone_idxs] = bb_coords
 
     return atom37_coords
 

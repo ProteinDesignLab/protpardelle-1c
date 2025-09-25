@@ -1019,8 +1019,9 @@ def train(
     finally:
         if wandb_run is not None:
             wandb.finish()
-        if trainer.is_main and (run_dir is not None):
+        if trainer.is_main:
             assert log_dir is not None
+            assert run_dir is not None
             # Copy the entire wandb run directory to the log_dir for safekeeping
             subprocess.run(["cp", "-r", str(run_dir), str(log_dir)], check=False)
             logger.info(

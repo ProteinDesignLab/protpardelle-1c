@@ -46,12 +46,7 @@ class Train:
     grad_clip_val: float
     weight_decay: float
 
-    n_eval_samples: int
-    length_ranges_per_chain: list[list[int]]
-    sc_num_seqs: int
-    eval_loss_t: list[float]
     self_cond_train_prob: float
-    subsample_eval_set: float
 
     crop_conditional: bool
     crop_cond: CropCond
