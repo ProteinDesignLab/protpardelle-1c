@@ -13,7 +13,6 @@ train:
   clip_grad_norm: True
   grad_clip_val: 1.0
   weight_decay: 0.0
-  n_eval_samples: 10
   sc_num_seqs: 4
   self_cond_train_prob: 0.9
   subsample_eval_set: 0.05
