@@ -526,16 +526,14 @@ def make_crop_cond_mask_and_recenter_coords(
     crop_cond_mask = torch.stack(masks) * atom_mask
 
     if recenter_coords:
-        coords_out = recenter_coords_with_crop_cond_mask(
+        atom_coords = recenter_coords_with_crop_cond_mask(
             atom_coords=atom_coords, crop_cond_mask=crop_cond_mask
         )
-    else:
-        coords_out = atom_coords
 
     if add_coords_noise > 0:
-        coords_out = coords_out + add_coords_noise * torch.randn_like(coords_out)
+        atom_coords = atom_coords + add_coords_noise * torch.randn_like(atom_coords)
 
-    return coords_out, crop_cond_mask, hotspot_mask
+    return atom_coords, crop_cond_mask, hotspot_mask
 
 
 class PDBDataset(Dataset):
@@ -625,18 +623,19 @@ class PDBDataset(Dataset):
             else len(self.pdb_keys)
         )
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         pdb_key = self.pdb_keys[idx]
         data = self.get_item(pdb_key)
         # For now, replace dataloading errors with a random pdb. 50 tries
         for _ in range(50):
             if data is not None:
                 return data
+            logger.debug("Reloading a different PDB example to replace %s", pdb_key)
             pdb_key = self.pdb_keys[np.random.randint(len(self.pdb_keys))]
             data = self.get_item(pdb_key)
         raise ValueError("Failed to load data example after 50 tries.")
 
-    def get_item(self, pdb_key: str) -> dict[str, Any] | None:
+    def get_item(self, pdb_key: str) -> dict[str, torch.Tensor] | None:
         example = {}
 
         chain_id = None

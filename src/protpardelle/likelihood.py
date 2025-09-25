@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 import typer
+from jaxtyping import Float
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -35,10 +36,21 @@ logger = get_logger(__name__)
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
 
-def get_backbone_mask(atom_mask):
+def get_backbone_mask(
+    atom_mask: Float[torch.Tensor, "... 37"],
+) -> Float[torch.Tensor, "... 37"]:
+    """Get the backbone mask from the atom mask.
+
+    Args:
+        atom_mask (torch.Tensor): The atom mask of shape (..., 37).
+
+    Returns:
+        torch.Tensor: The backbone mask of shape (..., 37).
+    """
+
     backbone_mask = torch.zeros_like(atom_mask)
-    for atom in ("N", "CA", "C", "O"):
-        backbone_mask[..., residue_constants.atom_order[atom]] = 1
+    backbone_mask[..., residue_constants.backbone_idxs] = 1
+
     return backbone_mask
 
 
