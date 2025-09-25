@@ -48,7 +48,6 @@ class Train:
 
     n_eval_samples: int
     sc_num_seqs: int
-    eval_loss_t: list[float]
     self_cond_train_prob: float
     subsample_eval_set: float
 

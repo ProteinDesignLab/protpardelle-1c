@@ -16,7 +16,6 @@ train:
   weight_decay: 0.0
   n_eval_samples: 10
   sc_num_seqs: 4
-  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
   self_cond_train_prob: 0.9
   subsample_eval_set: 0.05
   crop_conditional: True
