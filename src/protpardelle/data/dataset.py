@@ -842,18 +842,23 @@ class StochasticMixedSampler(Sampler[int]):
 
         while True:
             batch_indices: list[int] = []
+            primary_exhausted = False
 
             for _ in range(self.primary_samples_per_batch):
                 sample = next(primary_iter, None)
                 if sample is None:
-                    return
+                    primary_exhausted = True
+                    break
                 batch_indices.append(sample + self.offsets[0])
+
+            if not batch_indices:
+                return
 
             remaining_size = self.batch_size - len(batch_indices)
             if remaining_size > 0 and len(self.augmented_samplers) > 0:
                 probs = self.mixing_ratios[1:]
                 probs = probs / probs.sum()
-                allocations = np.random.multinomial(remaining_size, probs)
+                allocations = np.random.multinomial(remaining_size, probs).tolist()
                 for aug_idx, count in enumerate(allocations):
                     if count == 0:
                         continue
@@ -866,12 +871,15 @@ class StochasticMixedSampler(Sampler[int]):
                         batch_indices.append(sample + self.offsets[aug_idx + 1])
                     augmented_iters[aug_idx] = iterator
 
-            if not batch_indices:
-                return
-
             yield from batch_indices
 
+            if primary_exhausted:
+                return
+
     def __len__(self) -> int:
+        if not self.augmented_samplers:
+            return self.primary_sampler_length
+
         batches_per_epoch = math.ceil(
             self.primary_sampler_length / self.primary_samples_per_batch
         )
