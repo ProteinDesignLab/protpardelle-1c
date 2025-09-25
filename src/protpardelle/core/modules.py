@@ -17,7 +17,6 @@ from torch import broadcast_tensors, einsum
 from torch.amp import autocast
 from torch.optim.lr_scheduler import LRScheduler
 
-from protpardelle.common import residue_constants
 from protpardelle.integrations.protein_mpnn import ProteinMPNN
 from protpardelle.utils import get_logger, unsqueeze_trailing_dims
 
@@ -82,15 +81,12 @@ class RelativePositionalEncoding(nn.Module):
         attn_dim: int = 8,
         max_rel_idx: int = 32,
         relchain: bool = False,
-        cyclic: bool = False,
     ) -> None:
         super().__init__()
-
         self.max_rel_idx = max_rel_idx
         self.num_relpos = 2 * self.max_rel_idx + 1
         self.linear = nn.Linear(self.num_relpos, attn_dim)
         self.relchain = relchain
-        self.cyclic = cyclic
 
     def forward(self, index: torch.Tensor) -> torch.Tensor:
         """Compute relative positional encodings.
@@ -103,13 +99,7 @@ class RelativePositionalEncoding(nn.Module):
         """
 
         if self.relchain:
-            if self.cyclic:
-                logger.warning(
-                    "Cyclic relative positions are only supported for residues; will be ignored here."
-                )
             d_ij = (index.unsqueeze(-1) != index.unsqueeze(-2)).float()
-        elif self.cyclic:
-            d_ij = circular_relpos(index)
         else:
             d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
         device = d_ij.device
@@ -146,7 +136,7 @@ def apply_rotary_emb(
     start_index: int = 0,
     scale: float = 1.0,
     seq_dim: int = -2,
-) -> torch.Tensor:
+) -> Float[torch.Tensor, "B H L D"]:
     if t.ndim == 3:
         seq_len = t.shape[seq_dim]
         freqs = freqs[:, -seq_len:].to(t)
@@ -205,7 +195,7 @@ class RotaryEmbedding(nn.Module):
 
         self.freqs_for = freqs_for
 
-        if exists(custom_freqs):
+        if custom_freqs is not None:
             freqs = custom_freqs
         elif freqs_for == "lang":
             freqs = 1.0 / (
@@ -263,7 +253,7 @@ class RotaryEmbedding(nn.Module):
         B: int,
         device,
         dtype,
-        offset=0,
+        offset: int = 0,
     ) -> Float[torch.Tensor, "B L"]:
         """
         Get sequence position for rotary embeddings depending on whether residue index is used or not.
@@ -283,9 +273,9 @@ class RotaryEmbedding(nn.Module):
         t: Float[torch.Tensor, "B H L D"],
         residx: Int[torch.Tensor, "B L"],
         chain_index: Int[torch.Tensor, "B L"] | None,
-        seq_dim=None,
-        offset=0,
-    ):
+        seq_dim: int | None = None,
+        offset: int = 0,
+    ) -> Float[torch.Tensor, "B H L D"]:
         seq_dim = default(seq_dim, self.default_seq_dim)
 
         assert (
@@ -308,19 +298,19 @@ class RotaryEmbedding(nn.Module):
         )
 
         if seq_dim == -3:
-            freqs = rearrange(freqs, "b n d -> b n 1 d")
+            freqs = freqs.unsqueeze(-2)
 
         return apply_rotary_emb(freqs, t, seq_dim=seq_dim)
 
     def get_scale(self, t: torch.Tensor, seq_len: int | None = None, offset=0):
         assert self.use_xpos
 
-        should_cache = self.cache_if_possible and exists(seq_len)
+        should_cache = self.cache_if_possible and (seq_len is not None)
 
         if (
             should_cache
-            and exists(self.cached_scales)
-            and (seq_len + offset) <= self.cached_scales.shape[0]
+            and (self.cached_scales is not None)
+            and ((seq_len + offset) <= self.cached_scales.shape[0])
         ):
             return self.cached_scales[offset : (offset + seq_len)]
 
@@ -361,19 +351,19 @@ class RotaryEmbedding(nn.Module):
         self,
         t: Float[torch.Tensor, "B L"],  # sequence positions
         chain_index: Float[torch.Tensor, "B L"] | None = None,
-        seq_len=None,
-        offset=0,
+        seq_len: int | None = None,
+        offset: int = 0,
     ) -> Float[torch.Tensor, "B L N"]:
         should_cache = (
             self.cache_if_possible
-            and not self.learned_freq
-            and exists(seq_len)
-            and self.freqs_for != "pixel"
+            and (not self.learned_freq)
+            and (seq_len is not None)
+            and (self.freqs_for != "pixel")
         )
 
         if (
             should_cache
-            and exists(self.cached_freqs)
+            and (self.cached_freqs is not None)
             and (offset + seq_len) <= self.cached_freqs.shape[0]
         ):
             return self.cached_freqs[offset : (offset + seq_len)].detach()
@@ -464,12 +454,8 @@ class NoiseEmbedding(nn.Module):
 # https://github.com/lucidrains/recurrent-interface-network-pytorch
 
 
-def exists(x):
-    return x is not None
-
-
 def default(val, d):
-    if exists(val):
+    if val is not None:
         return val
     return d() if callable(d) else d
 
@@ -597,7 +583,7 @@ class TimeCondAttention(nn.Module):
         self.out_dropout = nn.Dropout(out_dropout)
         self.dit = dit
 
-        if exists(time_cond_dim):
+        if time_cond_dim is not None:
             if self.dit:
                 self.time_cond = nn.Sequential(
                     nn.SiLU(), nn.Linear(time_cond_dim, dim * 3)
@@ -611,7 +597,7 @@ class TimeCondAttention(nn.Module):
             nn.init.zeros_(self.time_cond[-1].bias)
 
         # add motif conditioning track
-        if exists(motif_cond_dim):
+        if motif_cond_dim is not None:
             self.motif_cond = nn.Sequential(
                 nn.SiLU(), nn.Linear(motif_cond_dim, dim * 2)
             )
@@ -653,38 +639,37 @@ class TimeCondAttention(nn.Module):
 
     def forward(
         self,
-        x,
+        x: Float[torch.Tensor, "B L D"],
         residx: Float[torch.Tensor, "B L"],
-        context=None,
-        time=None,
-        motif=None,
-        attn_bias=None,
-        seq_mask=None,
-        chain_index=None,
-    ):
+        context: Float[torch.Tensor, "B L D"] | None = None,
+        time: Float[torch.Tensor, "B L"] | None = None,
+        motif: Float[torch.Tensor, "B M D"] | None = None,
+        attn_bias: Float[torch.Tensor, "B H L L"] | None = None,
+        seq_mask: Float[torch.Tensor, "B L"] | None = None,
+        chain_index: Float[torch.Tensor, "B L"] | None = None,
+    ) -> Float[torch.Tensor, "B L D"]:
         # attn_bias is b, c, i, j
         h = self.heads
-        has_context = exists(context)
 
         context = default(context, x)
 
         x = self.norm(x)
 
-        if exists(time):
+        if time is not None:
             if self.dit:
                 scale, shift, alpha_1 = self.time_cond(time).chunk(3, dim=-1)
             else:
                 scale, shift = self.time_cond(time).chunk(2, dim=-1)
             x = (x * (scale + 1)) + shift
 
-        if exists(motif):
+        if motif is not None:
             motif_scale_shift = self.sigmoid(self.motif_gate(motif)) * self.motif_cond(
                 motif
             )
             scale, shift = motif_scale_shift.chunk(2, dim=-1)
             x = (x * (scale + 1)) + shift
 
-        if has_context:
+        if context is not None:
             context = self.norm_context(context)
 
         if seq_mask is not None:
@@ -717,7 +702,7 @@ class TimeCondAttention(nn.Module):
         out = rearrange(out, "b h n d -> b n (h d)")
         out = self.to_out(out)
 
-        if self.dit and exists(time):
+        if self.dit and (time is not None):
             out = out * (alpha_1 + 1)
 
         if seq_mask is not None:
@@ -749,7 +734,7 @@ class TimeCondFeedForward(nn.Module):
         self.dit = dit
         inner_dim = int(dim * mult)
 
-        if exists(time_cond_dim):
+        if time_cond_dim is not None:
             if self.dit:
                 self.time_cond = nn.Sequential(
                     nn.SiLU(),
@@ -764,7 +749,7 @@ class TimeCondFeedForward(nn.Module):
             nn.init.zeros_(self.time_cond[-1].weight)
             nn.init.zeros_(self.time_cond[-1].bias)
 
-        if exists(motif_cond_dim):
+        if motif_cond_dim is not None:
             # add motif conditioning track
             self.motif_cond = nn.Sequential(
                 nn.SiLU(),
@@ -796,14 +781,14 @@ class TimeCondFeedForward(nn.Module):
             x = self.linear_in(x)
             x = self.nonlinearity(x)
 
-        if exists(time):
+        if time is not None:
             if self.dit:
                 scale, shift, alpha_2 = self.time_cond(time).chunk(3, dim=-1)
             else:
                 scale, shift = self.time_cond(time).chunk(2, dim=-1)
             x = (x * (scale + 1)) + shift
 
-        if exists(motif):
+        if motif is not None:
             motif_scale_shift = self.sigmoid(self.motif_gate(motif)) * self.motif_cond(
                 motif
             )
@@ -814,12 +799,12 @@ class TimeCondFeedForward(nn.Module):
             x = self.linear_in(x)
             x = self.nonlinearity(x)
 
-        if exists(self.dropout):
+        if self.dropout is not None:
             x = self.dropout(x)
 
         x = self.linear_out(x)
 
-        if self.dit and exists(time):
+        if self.dit and (time is not None):
             x = x * (alpha_2 + 1)
 
         return x
@@ -850,7 +835,6 @@ class TimeCondTransformer(nn.Module):
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
         dit: bool = False,
-        cyclic: bool = False,
     ) -> None:
         super().__init__()
 
@@ -875,7 +859,7 @@ class TimeCondTransformer(nn.Module):
         if "relative" in position_embedding_type:
             self.relpos = nn.Sequential(
                 RelativePositionalEncoding(
-                    attn_dim=heads, max_rel_idx=position_embedding_max, cyclic=cyclic
+                    attn_dim=heads, max_rel_idx=position_embedding_max, relchain=False
                 ),
                 Rearrange("b i j d -> b d i j"),
             )
@@ -993,7 +977,6 @@ class TimeCondUViT(nn.Module):
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
         dit: bool = False,
-        cyclic: bool = False,
     ) -> None:
         super().__init__()
 
@@ -1076,7 +1059,6 @@ class TimeCondUViT(nn.Module):
             out_dropout=out_dropout,
             ff_dropout=ff_dropout,
             dit=dit,
-            cyclic=cyclic,
         )
         self.from_patch = nn.Sequential(
             LayerNorm(dim),
@@ -1233,8 +1215,6 @@ class NoiseConditionalProteinMPNN(nn.Module):
         self.num_neighbors = num_neighbors
         self.vocab_size = vocab_size
         self.time_cond_dim = time_cond_dim
-        self.bb_idxs_if_atom37 = residue_constants.backbone_idxs.copy()
-        self.ca_idxs_if_atom37 = [1]  # CA only
 
         self.mpnn = ProteinMPNN(
             num_letters=vocab_size,
