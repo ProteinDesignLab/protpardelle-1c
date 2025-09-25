@@ -27,9 +27,9 @@ def atom14_mask_from_aatype(
     """
 
     device = aatype.device
-    source_mask = torch.from_numpy(
-        residue_constants.restype_atom14_mask.astype(np.float32)
-    ).to(device)
+    source_mask = torch.as_tensor(
+        residue_constants.restype_atom14_mask, dtype=torch.float, device=device
+    )
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
@@ -54,9 +54,9 @@ def atom37_mask_from_aatype(
     """
 
     device = aatype.device
-    source_mask = torch.from_numpy(
-        residue_constants.restype_atom37_mask.astype(np.float32)
-    ).to(device)
+    source_mask = torch.as_tensor(
+        residue_constants.restype_atom37_mask, dtype=torch.float, device=device
+    )
     bb_atoms = source_mask[residue_constants.restype_order["G"]].unsqueeze(0)
     # Use only the first 20 plus bb atoms for X, mask
     source_mask = torch.cat([source_mask[:-1], bb_atoms, bb_atoms], 0)
@@ -81,9 +81,9 @@ def atom73_mask_from_aatype(
     """
 
     device = aatype.device
-    source_mask = torch.from_numpy(
-        residue_constants.restype_atom73_mask.astype(np.float32)
-    ).to(device)
+    source_mask = torch.as_tensor(
+        residue_constants.restype_atom73_mask, dtype=torch.float, device=device
+    )
     atom_mask = source_mask[aatype]
 
     if seq_mask is not None:

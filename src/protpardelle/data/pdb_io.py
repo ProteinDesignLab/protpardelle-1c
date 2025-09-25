@@ -215,11 +215,12 @@ def load_feats_from_pdb(
     protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
 
     feats = {}
-    feats["bb_coords"] = torch.from_numpy(
-        protein_obj.atom_positions[:, residue_constants.backbone_idxs]
-    ).float()
+    feats["bb_coords"] = torch.as_tensor(
+        protein_obj.atom_positions[:, residue_constants.backbone_idxs],
+        dtype=torch.float,
+    )
     for k, v in vars(protein_obj).items():
-        feats[k] = torch.from_numpy(v).float()
+        feats[k] = torch.as_tensor(v, dtype=torch.float)
     feats["aatype"] = feats["aatype"].long()
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index

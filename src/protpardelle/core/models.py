@@ -1045,10 +1045,18 @@ class Protpardelle(nn.Module):
             motif_feats, hetero_obj = load_feats_from_pdb(
                 motif_file_path, include_pos_feats=True
             )
-            het_atom_pos = torch.tensor(
-                [pos for res in hetero_obj.hetero_atom_positions for pos in res],
-                device=seq_mask.device,
-            )
+            het_atom_pos_list = [
+                pos for res in hetero_obj.hetero_atom_positions for pos in res
+            ]
+            if het_atom_pos_list:
+                het_atom_pos = torch.as_tensor(
+                    np.asarray(het_atom_pos_list, dtype=np.float32),
+                    device=seq_mask.device,
+                )
+            else:
+                het_atom_pos = torch.empty(
+                    (0, 3), device=seq_mask.device
+                )
             all_motif_feats.append(motif_feats)
             all_het_atom_pos.append(het_atom_pos)
 
