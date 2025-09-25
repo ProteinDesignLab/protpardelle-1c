@@ -47,7 +47,6 @@ class Train:
     weight_decay: float
 
     self_cond_train_prob: float
-    subsample_eval_set: float
 
     crop_conditional: bool
     crop_cond: CropCond

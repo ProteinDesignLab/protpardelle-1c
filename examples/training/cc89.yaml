@@ -15,7 +15,6 @@ train:
   grad_clip_val: 1.0
   weight_decay: 0.0
   self_cond_train_prob: 0.9
-  subsample_eval_set: 0.05
   crop_conditional: True
   crop_cond:
     contiguous_prob: 0.05
