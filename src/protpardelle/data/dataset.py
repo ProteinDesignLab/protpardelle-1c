@@ -630,7 +630,7 @@ class PDBDataset(Dataset):
         for _ in range(50):
             if data is not None:
                 return data
-            logger.warning("Reloading a different PDB example to replace %s", pdb_key)
+            logger.debug("Reloading a different PDB example to replace %s", pdb_key)
             pdb_key = self.pdb_keys[np.random.randint(len(self.pdb_keys))]
             data = self.get_item(pdb_key)
         raise ValueError("Failed to load data example after 50 tries.")
