@@ -193,7 +193,6 @@ def read_pdb(
 
 def load_feats_from_pdb(
     pdb_path: StrPath,
-    bb_atoms: tuple[str, ...] = ("N", "CA", "C", "O"),
     chain_id: str | None = None,
     chain_residx_gap: int = 200,
     include_pos_feats: bool = False,
@@ -201,9 +200,7 @@ def load_feats_from_pdb(
     """Load model input features from a PDB file or mmcif file.
 
     Args:
-        pdb_path (StrPath): The path to PDB or mmcif file
-        bb_atoms (tuple[str, ...], optional): List of backbone atom names to load.
-            Defaults to ("N", "CA", "C", "O").
+        pdb_path (StrPath): The path to PDB or mmcif file.
         chain_id (str | None, optional): Chain ID to load. Defaults to None.
         chain_residx_gap (int, optional): Residue index gap for chain breaks for PDBs
             with multiple chains. Defaults to 200.
@@ -218,11 +215,12 @@ def load_feats_from_pdb(
     protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
 
     feats = {}
-    feats["bb_coords"] = torch.from_numpy(
-        protein_obj.atom_positions[:, residue_constants.backbone_idxs]
-    ).float()
+    feats["bb_coords"] = torch.as_tensor(
+        protein_obj.atom_positions[:, residue_constants.backbone_idxs],
+        dtype=torch.float,
+    )
     for k, v in vars(protein_obj).items():
-        feats[k] = torch.from_numpy(v).float()
+        feats[k] = torch.as_tensor(v, dtype=torch.float)
     feats["aatype"] = feats["aatype"].long()
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index

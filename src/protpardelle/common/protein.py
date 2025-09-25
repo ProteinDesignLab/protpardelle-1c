@@ -75,7 +75,7 @@ class Hetero:
     """Heteroatoms representation."""
 
     hetero_atom_positions: list[
-        list[float]
+        list[np.ndarray]
     ]  # list of length len(ncaa) storing variable number of atom coordinates per array
     hetero_aatype: list[str]  # list of aatypes (three letter)
     hetero_atom_types: list[list[str]]  # list of list of atom types per ncaa

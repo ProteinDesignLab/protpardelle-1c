@@ -712,14 +712,12 @@ class ProtpardelleTrainer:
                     -1
                 )
 
-            noise_level_fp32 = noise_level.float()
             sigma_fp32 = torch.tensor(
-                self.module.sigma_data,
+                self.config.data.sigma_data,
                 device=self.device,
-                dtype=torch.float,
             )
-            denom = (noise_level_fp32 * sigma_fp32).square().clamp(min=tol)
-            loss_weight = (noise_level_fp32.square() + sigma_fp32.square()) / denom
+            denom = (noise_level * sigma_fp32).square().clamp(min=tol)
+            loss_weight = (noise_level.square() + sigma_fp32.square()) / denom
 
             struct_loss = masked_mse_loss(
                 atom_coords, denoised_coords, struct_loss_mask, loss_weight
