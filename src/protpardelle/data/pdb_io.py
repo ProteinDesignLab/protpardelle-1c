@@ -82,18 +82,21 @@ def read_pdb(
 
     pdb_path = norm_path(pdb_path)
 
-    if Path(pdb_path).suffix == ".cif":
+    if pdb_path.suffix == ".cif":
         parser = MMCIFParser(QUIET=True, auth_chains=True, auth_residues=False)
     else:
         parser = PDBParser(QUIET=True)
 
     structure = parser.get_structure("protein", pdb_path)
     num_models = len(structure)
-    logger.debug(
-        "PDB file %s has %d models, only the first one will be used.",
-        pdb_path,
-        num_models,
-    )
+    if num_models > 1:
+        logger.warning(
+            "PDB file %s has %d models, only the first one will be used.",
+            pdb_path,
+            num_models,
+        )
+    if num_models == 0:
+        logger.error("PDB file %s has no models.", pdb_path)
     model = next(structure.get_models())
 
     atom_positions = []
