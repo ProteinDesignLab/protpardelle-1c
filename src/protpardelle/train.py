@@ -9,8 +9,10 @@ import os
 import random
 import subprocess
 import sys
+from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import torch
@@ -25,6 +27,7 @@ from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader
+from torch.utils.data._utils.collate import default_collate
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -37,7 +40,6 @@ from protpardelle.data.dataset import (
     StochasticMixedSampler,
     calc_sigma_data,
     make_crop_cond_mask_and_recenter_coords,
-    make_training_collate_fn,
 )
 from protpardelle.utils import (
     StrPath,
@@ -506,6 +508,42 @@ class ProtpardelleTrainer:
             sum(p.numel() for p in self.module.parameters() if p.requires_grad),
         )
 
+    def make_training_collate_fn(
+        self,
+    ) -> Callable[[list[dict[str, torch.Tensor]]], dict[str, torch.Tensor]]:
+        """Create a collate_fn that applies training-time augmentations on CPU."""
+
+        def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+            batch_dict = cast(dict[str, torch.Tensor], default_collate(batch))
+
+            if self.config.train.crop_conditional:
+
+                atom_coords = batch_dict["coords_in"]
+                atom_mask = batch_dict["atom_mask"]
+                aatype = batch_dict["aatype"]
+                chain_index = batch_dict["chain_index"]
+
+                # Pre-compute crop conditioning mask and recentered coords for efficiency
+                atom_coords, crop_cond_mask, hotspot_mask = (
+                    make_crop_cond_mask_and_recenter_coords(
+                        atom_coords=atom_coords,
+                        atom_mask=atom_mask,
+                        aatype=aatype,
+                        chain_index=chain_index,
+                        **vars(self.config.train.crop_cond),
+                    )
+                )
+                struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
+
+                batch_dict["coords_in"] = atom_coords
+                batch_dict["crop_cond_mask"] = crop_cond_mask
+                batch_dict["struct_crop_cond"] = struct_crop_cond
+                batch_dict["hotspot_mask"] = hotspot_mask
+
+            return batch_dict
+
+        return collate_fn
+
     def get_dataloader(self, datasets: list[PDBDataset]) -> DataLoader:
         """Get the training dataloader.
 
@@ -540,7 +578,7 @@ class ProtpardelleTrainer:
             drop_last=True,
             prefetch_factor=4 if self.num_workers > 0 else None,
             persistent_workers=self.num_workers > 0,
-            collate_fn=make_training_collate_fn(self.config),
+            collate_fn=self.make_training_collate_fn(),
         )
 
         return dataloader
@@ -581,17 +619,11 @@ class ProtpardelleTrainer:
             struct_crop_cond = input_dict.get("struct_crop_cond")
             hotspot_mask = input_dict.get("hotspot_mask")
 
-            if (crop_cond_mask is None) or (struct_crop_cond is None):
-                atom_coords, crop_cond_mask, hotspot_mask = (
-                    make_crop_cond_mask_and_recenter_coords(
-                        atom_coords=atom_coords,
-                        atom_mask=atom_mask,
-                        aatype=aatype,
-                        chain_index=chain_index,
-                        **vars(self.config.train.crop_cond),
-                    )
-                )
-                struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
+            # If using correct data loader and collate_fn, these should never be None
+            assert all(
+                x is not None for x in [crop_cond_mask, struct_crop_cond, hotspot_mask]
+            )
+
             if "hotspots" not in self.config.model.conditioning_style:
                 hotspot_mask = None  # type: ignore
         else:

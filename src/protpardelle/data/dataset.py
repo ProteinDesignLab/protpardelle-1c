@@ -21,7 +21,6 @@ from torch.utils.data import (
     RandomSampler,
     Sampler,
 )
-from torch.utils.data._utils.collate import default_collate
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
@@ -527,48 +526,14 @@ def make_crop_cond_mask_and_recenter_coords(
     crop_cond_mask = torch.stack(masks) * atom_mask
 
     if recenter_coords:
-        coords_out = recenter_coords_with_crop_cond_mask(
+        atom_coords = recenter_coords_with_crop_cond_mask(
             atom_coords=atom_coords, crop_cond_mask=crop_cond_mask
         )
-    else:
-        coords_out = atom_coords
 
     if add_coords_noise > 0:
-        coords_out = coords_out + add_coords_noise * torch.randn_like(coords_out)
+        atom_coords = atom_coords + add_coords_noise * torch.randn_like(atom_coords)
 
-    return coords_out, crop_cond_mask, hotspot_mask
-
-
-def make_training_collate_fn(config: TrainingConfig):
-    """Create a collate_fn that applies training-time augmentations on CPU."""
-
-    def collate_fn(batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
-        batch_dict: dict[str, torch.Tensor] = default_collate(batch)
-
-        if config.train.crop_conditional:
-            coords = batch_dict["coords_in"]
-            atom_mask = batch_dict["atom_mask"]
-            aatype = batch_dict.get("aatype")
-            chain_index = batch_dict.get("chain_index")
-
-            coords_out, crop_cond_mask, hotspot_mask = (
-                make_crop_cond_mask_and_recenter_coords(
-                    atom_coords=coords,
-                    atom_mask=atom_mask,
-                    aatype=aatype,
-                    chain_index=chain_index,
-                    **vars(config.train.crop_cond),
-                )
-            )
-
-            batch_dict["coords_in"] = coords_out
-            batch_dict["crop_cond_mask"] = crop_cond_mask
-            batch_dict["hotspot_mask"] = hotspot_mask
-            batch_dict["struct_crop_cond"] = coords_out * crop_cond_mask.unsqueeze(-1)
-
-        return batch_dict
-
-    return collate_fn
+    return atom_coords, crop_cond_mask, hotspot_mask
 
 
 class PDBDataset(Dataset):
@@ -658,18 +623,19 @@ class PDBDataset(Dataset):
             else len(self.pdb_keys)
         )
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         pdb_key = self.pdb_keys[idx]
         data = self.get_item(pdb_key)
         # For now, replace dataloading errors with a random pdb. 50 tries
         for _ in range(50):
             if data is not None:
                 return data
+            logger.warning("Reloading a different PDB example to replace %s", pdb_key)
             pdb_key = self.pdb_keys[np.random.randint(len(self.pdb_keys))]
             data = self.get_item(pdb_key)
         raise ValueError("Failed to load data example after 50 tries.")
 
-    def get_item(self, pdb_key: str) -> dict[str, Any] | None:
+    def get_item(self, pdb_key: str) -> dict[str, torch.Tensor] | None:
         example = {}
 
         chain_id = None
