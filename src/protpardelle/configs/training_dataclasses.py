@@ -46,7 +46,6 @@ class Train:
     grad_clip_val: float
     weight_decay: float
 
-    sc_num_seqs: int
     self_cond_train_prob: float
     subsample_eval_set: float
 
