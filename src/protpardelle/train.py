@@ -561,8 +561,8 @@ class ProtpardelleTrainer:
             datasets,
             self.config.data.mixing_ratios,
             batch_size=self.batch_size,
-            num_replicas=(self.distributed.world_size if self.ddp_enabled else 1),
-            rank=self.distributed.rank if self.ddp_enabled else 0,
+            num_replicas=self.distributed.world_size,
+            rank=self.distributed.rank,
             seed=self.config.train.seed,
         )
 
