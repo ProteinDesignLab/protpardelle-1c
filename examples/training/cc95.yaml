@@ -59,7 +59,7 @@ diffusion:
   sampling:
     function: "uniform"
     s_min: 0.001
-    s_max: 80
+    s_max: 80.0
 
 model:
   task: "backbone" # 'backbone', 'allatom', 'seqdes', 'codesign'
