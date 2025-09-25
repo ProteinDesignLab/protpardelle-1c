@@ -420,14 +420,14 @@ class NoiseEmbedding(nn.Module):
         self.max_positions = max_positions
         self.endpoint = endpoint
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: Float[torch.Tensor, "B L"]) -> Float[torch.Tensor, "B L "]:
         """Forward pass for noise embedding.
 
         Args:
-            x (torch.Tensor): Input tensor. (B, N)
+            x (torch.Tensor): Input tensor.
 
         Returns:
-            torch.Tensor: Output tensor. (B, N, C)
+            torch.Tensor: Output tensor.
         """
 
         device = x.device
@@ -461,22 +461,22 @@ def default(val, d):
 
 
 def posemb_sincos_1d(
-    patches: torch.Tensor,
+    patches: Float[torch.Tensor, "B L D"],
     temperature: float = 10000.0,
-    residue_index: torch.Tensor | None = None,
-) -> torch.Tensor:
+    residue_index: Int[torch.Tensor, "B L"] | None = None,
+) -> Float[torch.Tensor, "B L D"]:
     """1D sine-cosine positional embedding."""
 
-    B, L, C = patches.shape
+    _, L, D = patches.shape
     device = patches.device
 
     if residue_index is None:
         residue_index = torch.arange(L, device=device)
 
-    if C % 2 != 0:
+    if D % 2 != 0:
         raise ValueError("feature dimension must be multiple of 2 for sincos emb")
 
-    omega = torch.arange(C // 2, device=device) / (C // 2 - 1)
+    omega = torch.arange(D // 2, device=device) / (D // 2 - 1)
     omega = 1.0 / (temperature**omega)
 
     residue_index = residue_index.unsqueeze(-1) * omega
