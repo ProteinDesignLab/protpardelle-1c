@@ -3,7 +3,6 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -150,7 +149,7 @@ def read_pdb(
             else:
                 # If residue has amino acid backbone atoms, treat it as a noncanonical motif residue
                 # Otherwise, treat as a ligand/metal for clash loss
-                resemble_atoms = ["N", "CA", "C", "O"]
+                resemble_atoms = residue_constants.backbone_atoms.copy()
                 for atom in res:
                     if atom.name in resemble_atoms:
                         resemble_atoms.remove(atom.name)
@@ -219,9 +218,8 @@ def load_feats_from_pdb(
     protein_obj, hetero_obj, chain_id_mapping = read_pdb(pdb_path, chain_id=chain_id)
 
     feats = {}
-    bb_idxs = [residue_constants.atom_order[atom] for atom in bb_atoms]
     feats["bb_coords"] = torch.from_numpy(
-        protein_obj.atom_positions[:, bb_idxs]
+        protein_obj.atom_positions[:, residue_constants.backbone_idxs]
     ).float()
     for k, v in vars(protein_obj).items():
         feats[k] = torch.from_numpy(v).float()
@@ -283,7 +281,7 @@ def feats_to_pdb_str(
         atom_mask = atom37_mask_from_aatype(aatype)
     if aatype is None:
         assert atom_mask is not None
-        seq_mask = atom_mask[:, residue_constants.atom_order["CA"]]
+        seq_mask = atom_mask[:, 1]  # use CA atom to indicate residue presence
         aatype = seq_mask * residue_constants.restype_order["G"]
 
     if residue_index is None:

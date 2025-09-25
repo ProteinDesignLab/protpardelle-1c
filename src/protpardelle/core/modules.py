@@ -1233,10 +1233,8 @@ class NoiseConditionalProteinMPNN(nn.Module):
         self.num_neighbors = num_neighbors
         self.vocab_size = vocab_size
         self.time_cond_dim = time_cond_dim
-        self.bb_idxs_if_atom37 = [
-            residue_constants.atom_order[atom] for atom in ["N", "CA", "C", "O"]
-        ]
-        self.ca_idxs_if_atom37 = [residue_constants.atom_order[atom] for atom in ["CA"]]
+        self.bb_idxs_if_atom37 = residue_constants.backbone_idxs.copy()
+        self.ca_idxs_if_atom37 = [1]  # CA only
 
         self.mpnn = ProteinMPNN(
             num_letters=vocab_size,

@@ -476,7 +476,7 @@ atom_type_num = len(atom_types)  # := 37.
 backbone_atoms = ["N", "CA", "C", "O"]
 sidechain_atoms = [a for a in atom_types if a not in backbone_atoms]
 backbone_idxs = [atom_order[a] for a in backbone_atoms]
-sidechain_idxs = [i for i in range(atom_type_num) if i not in backbone_idxs]
+sidechain_idxs = [atom_order[a] for a in sidechain_atoms]
 
 # A compact atom encoding with 14 columns
 # pylint: disable=line-too-long
