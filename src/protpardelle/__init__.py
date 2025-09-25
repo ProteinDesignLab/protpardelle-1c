@@ -7,4 +7,4 @@ It provides tools for unconditional and conditional protein design at both all-a
 Authors: Tianyu Lu, Richard Shuai, Petr Kouba, Zhaoyang Li, Yilin Chen, Akio Shirali, Jinho Kim, Po-Ssu Huang
 """
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
