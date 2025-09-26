@@ -5,7 +5,6 @@ Authors: Alex Chu, Richard Shuai, Zhaoyang Li
 
 from typing import Literal
 
-import numpy as np
 import torch
 from jaxtyping import Float, Int
 

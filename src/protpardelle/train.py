@@ -25,6 +25,7 @@ import yaml
 from torch.amp import GradScaler, autocast
 from torch.distributed.elastic.multiprocessing.errors import record
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import LRScheduler
 from torch.types import Device
 from torch.utils.data import ConcatDataset, DataLoader
 from torch.utils.data._utils.collate import default_collate
@@ -32,7 +33,6 @@ from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants
 from protpardelle.configs import TrainingConfig
-from protpardelle.core import modules
 from protpardelle.core.models import Protpardelle
 from protpardelle.data.atom import atom37_mask_from_aatype, dummy_fill_noise_coords
 from protpardelle.data.dataset import (
@@ -56,6 +56,10 @@ from protpardelle.utils import (
 logger = get_logger(__name__)
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
+
+
+########################################
+# Distributed training utilities
 
 
 @dataclass
@@ -84,7 +88,7 @@ class DistributedContext:
         return cls(rank=0, local_rank=0, world_size=1)
 
 
-def _resolve_device_with_distributed(
+def resolve_device_with_distributed(
     requested_device: torch.device,
 ) -> tuple[torch.device, DistributedContext]:
     """Initialize torch.distributed if launched with multiple processes.
@@ -129,7 +133,7 @@ def _resolve_device_with_distributed(
     )
 
 
-def _cleanup_distributed(distributed: DistributedContext) -> None:
+def cleanup_distributed(distributed: DistributedContext) -> None:
     """Tear down the distributed process group if it was initialized."""
 
     if not distributed.ddp_enabled:
@@ -145,7 +149,7 @@ def _cleanup_distributed(distributed: DistributedContext) -> None:
             logger.debug("Failed to destroy process group cleanly: %s", e)
 
 
-def _log_distributed_mean(
+def log_distributed_mean(
     log_dict: dict[str, float],
     device: torch.device,
     distributed: DistributedContext,
@@ -160,6 +164,10 @@ def _log_distributed_mean(
     dist.all_reduce(values, op=dist.ReduceOp.AVG)
 
     return {k: values[i].item() for i, k in enumerate(keys)}
+
+
+########################################
+# Loss functions
 
 
 def masked_cross_entropy_loss(
@@ -216,6 +224,10 @@ def masked_mse_loss(
     return mse
 
 
+########################################
+# Data loading
+
+
 def load_datasets(config: TrainingConfig) -> list[PDBDataset]:
     """Load the training datasets."""
     datasets = [
@@ -233,6 +245,52 @@ def load_datasets(config: TrainingConfig) -> list[PDBDataset]:
     ]
 
     return datasets
+
+
+########################################
+
+
+class LinearWarmupCosineDecay(LRScheduler):
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        max_lr: float,
+        warmup_steps: int = 1000,
+        decay_steps: int = 1000000,
+        min_lr: float = 1e-6,
+        **kwargs,
+    ) -> None:
+
+        self.max_lr = max_lr
+        self.min_lr = min_lr
+        self.warmup_steps = warmup_steps
+        self.decay_steps = decay_steps
+        self.total_steps = warmup_steps + decay_steps
+
+        super().__init__(optimizer, **kwargs)  # call init at the end
+
+    def get_lr(self) -> list[float]:
+        """Compute the current learning rate for all param groups."""
+
+        # Handle warmup (if any)
+        if (self.warmup_steps > 0) and (self.last_epoch < self.warmup_steps):
+            progress = self.last_epoch / max(1, self.warmup_steps)
+            curr_lr = progress * self.max_lr
+        # Cosine decay phase
+        elif (self.decay_steps > 0) and (self.last_epoch < self.total_steps):
+            # Fraction of decay completed (0 at start of decay, 1 at end)
+            decay_progress = (self.last_epoch - self.warmup_steps) / max(
+                1, self.decay_steps
+            )
+            time = decay_progress * np.pi
+            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
+                1.0 + float(np.cos(time))
+            )
+        else:
+            curr_lr = self.min_lr
+
+        # Return LR for each param group
+        return [curr_lr for _ in self.optimizer.param_groups]
 
 
 class ProtpardelleTrainer:
@@ -337,11 +395,11 @@ class ProtpardelleTrainer:
 
     def _load_optimizer_and_scheduler(
         self,
-    ) -> tuple[torch.optim.Adam, modules.LinearWarmupCosineDecay]:
+    ) -> tuple[torch.optim.Adam, LinearWarmupCosineDecay]:
         """Load the optimizer and scheduler.
 
         Returns:
-            tuple[torch.optim.Adam, modules.LinearWarmupCosineDecay]: The optimizer and scheduler.
+            tuple[torch.optim.Adam, LinearWarmupCosineDecay]: The optimizer and scheduler.
         """
 
         if self.module.task == "seqdes":
@@ -356,7 +414,7 @@ class ProtpardelleTrainer:
             lr=self.config.train.lr,
             weight_decay=self.config.train.weight_decay,
         )
-        scheduler = modules.LinearWarmupCosineDecay(
+        scheduler = LinearWarmupCosineDecay(
             optimizer,
             self.config.train.lr,
             warmup_steps=self.config.train.warmup_steps,
@@ -778,6 +836,10 @@ class ProtpardelleTrainer:
         return log_dict
 
 
+########################################
+# Training loop
+
+
 @record
 def train(
     config_path: StrPath,
@@ -799,12 +861,13 @@ def train(
         exp_name (str | None, optional): Experiment name for logging. Defaults to None.
         debug (bool, optional): Whether to enable debug mode. Defaults to False.
 
-    Raises: ...  # TODO
+    Raises:
+        ValueError: If the batch size is not divisible by the number of distributed processes.
+        RuntimeError: If wandb initialization fails.
     """
 
     # Enable TF32 on Ampere+ GPUs for faster training
-    tf32_enabled = enable_tf32_if_available()
-    if tf32_enabled:
+    if enable_tf32_if_available():
         logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
 
     # Set and resolve device with DDP if applicable
@@ -812,7 +875,7 @@ def train(
         requested_device = get_default_device()
     else:
         requested_device = torch.device(device)
-    resolved_device, distributed = _resolve_device_with_distributed(requested_device)
+    resolved_device, distributed = resolve_device_with_distributed(requested_device)
 
     # Load config
     config = load_config(config_path, TrainingConfig)
@@ -995,7 +1058,7 @@ def train(
                     log_dict = trainer.train_step(input_dict)
                     log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
                     log_dict["epoch"] = epoch
-                    log_dict = _log_distributed_mean(
+                    log_dict = log_distributed_mean(
                         log_dict, trainer.device, distributed
                     )
 
@@ -1027,7 +1090,7 @@ def train(
                 run_name,
                 run_id,
             )
-        _cleanup_distributed(distributed)
+        cleanup_distributed(distributed)
 
 
 @app.command()

@@ -15,7 +15,6 @@ from einops.layers.torch import Rearrange
 from jaxtyping import Float, Int
 from torch import broadcast_tensors, einsum
 from torch.amp import autocast
-from torch.optim.lr_scheduler import LRScheduler
 
 from protpardelle.integrations.protein_mpnn import ProteinMPNN
 from protpardelle.utils import get_logger, unsqueeze_trailing_dims
@@ -1154,49 +1153,6 @@ class TimeCondUViT(nn.Module):
 
 
 ########################################
-
-
-class LinearWarmupCosineDecay(LRScheduler):
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        max_lr: float,
-        warmup_steps: int = 1000,
-        decay_steps: int = 1000000,
-        min_lr: float = 1e-6,
-        **kwargs,
-    ) -> None:
-
-        self.max_lr = max_lr
-        self.min_lr = min_lr
-        self.warmup_steps = warmup_steps
-        self.decay_steps = decay_steps
-        self.total_steps = warmup_steps + decay_steps
-
-        super().__init__(optimizer, **kwargs)  # call init at the end
-
-    def get_lr(self) -> list[float]:
-        """Compute the current learning rate for all param groups."""
-
-        # Handle warmup (if any)
-        if (self.warmup_steps > 0) and (self.last_epoch < self.warmup_steps):
-            progress = self.last_epoch / max(1, self.warmup_steps)
-            curr_lr = progress * self.max_lr
-        # Cosine decay phase
-        elif (self.decay_steps > 0) and (self.last_epoch < self.total_steps):
-            # Fraction of decay completed (0 at start of decay, 1 at end)
-            decay_progress = (self.last_epoch - self.warmup_steps) / max(
-                1, self.decay_steps
-            )
-            time = decay_progress * np.pi
-            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
-                1.0 + float(np.cos(time))
-            )
-        else:
-            curr_lr = self.min_lr
-
-        # Return LR for each param group
-        return [curr_lr for _ in self.optimizer.param_groups]
 
 
 class NoiseConditionalProteinMPNN(nn.Module):
