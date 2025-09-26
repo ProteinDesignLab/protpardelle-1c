@@ -16,6 +16,8 @@ motif_contigs:
   - null
 total_lengths:
   - [[128, 128]]
+cyclic_chains:
+  - null
 hotspots:
   - null
 ssadj:

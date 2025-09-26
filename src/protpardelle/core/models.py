@@ -1063,9 +1063,7 @@ class Protpardelle(nn.Module):
                     device=seq_mask.device,
                 )
             else:
-                het_atom_pos = torch.empty(
-                    (0, 3), device=seq_mask.device
-                )
+                het_atom_pos = torch.empty((0, 3), device=seq_mask.device)
             all_motif_feats.append(motif_feats)
             all_het_atom_pos.append(het_atom_pos)
 
@@ -1944,7 +1942,7 @@ class Protpardelle(nn.Module):
                             seq_mask=seq_mask,
                             residue_index=residue_index,
                             chain_index=chain_index,
-                            
+                            cyclic_mask=cyclic_mask,
                             hotspot_mask=hotspot_mask,
                             struct_self_cond=(
                                 x_self_cond

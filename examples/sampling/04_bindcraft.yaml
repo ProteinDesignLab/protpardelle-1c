@@ -67,6 +67,26 @@ total_lengths:
   - [[101, 101], [136, 136], [60, 100]]
   - [[115, 115], [75, 115]]
 
+cyclic_chains:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+
 hotspots:
   - "A33,A95,A98,A102"
   - "A37,A39,A49,A98"
