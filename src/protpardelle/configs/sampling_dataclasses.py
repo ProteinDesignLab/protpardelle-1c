@@ -32,3 +32,4 @@ class SamplingConfig:
     search_space: SearchSpace
     ssadj: list[int | None]
     total_lengths: list[list[list[int]] | None]
+    cyclic_chains: list[list[str] | None]
