@@ -4,7 +4,7 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
 import copy
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 from einops.layers.torch import Rearrange
 from jaxtyping import Float, Int
-from torch import broadcast_tensors, einsum
+from torch import einsum
 from torch.amp import autocast
 
 from protpardelle.integrations.protein_mpnn import ProteinMPNN
@@ -22,54 +22,147 @@ from protpardelle.utils import get_logger, unsqueeze_trailing_dims
 logger = get_logger(__name__)
 
 
-def circular_relpos(
-    index: torch.Tensor,
-    cyc_mask: torch.Tensor | None = None,
-    ring_size: int | torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Compute shortest signed circular relative positions on a ring.
+def build_cyclic_harmonics(
+    pair_dim: int, ring_size: int, device: torch.device
+) -> Float[torch.Tensor, "D L"]:
+    r"""Build cyclic harmonics for rotary embeddings.
 
-    Force d_ij to be in [-floor(L/2), ..., +ceil(L/2)-1]. If L is even,
-    ties at +L/2 are mapped to -L/2 for a unique convention.
+    Constructs pair_dim harmonics k_i for a given ring size L, with frequencies
+    \omega_i = 2\pi k_i / L.
+
+    Uses a simple and robust "wrap-around" scheme to cover the [1, floor(L/2)] frequency band,
+    avoiding aliasing.
 
     Args:
-        index (torch.Tensor): Absolute positions. (B, N)
-        cyc_mask (torch.Tensor | None, optional): Sequence mask for cyclic peptides.
-            Defaults to None. (B, N)
-        ring_size (int | torch.Tensor | None, optional): Ring size. Defaults to None. (B,)
+        pair_dim (int): Half of the feature dimension to be rotated.
+        ring_size (int): Ring size.
+        device (torch.device): Device to create the tensor on.
 
     Returns:
-        torch.Tensor: Circular relative positions. (B, N, N)
+        torch.Tensor: Cyclic harmonics tensor of shape (pair_dim, ring_size).
     """
 
-    B, N = index.shape
-    device = index.device
+    max_k = max(1, ring_size // 2)
 
-    if ring_size is None:
-        L = (
-            cyc_mask.sum(dim=-1)
-            if cyc_mask is not None
-            else torch.full((B,), N, device=device)
-        )
-    elif isinstance(ring_size, int):
-        L = torch.full((B,), ring_size, device=device)
-    elif isinstance(ring_size, torch.Tensor):
-        assert ring_size.shape == (B,)
-        L = ring_size.to(device)
-    else:
-        raise ValueError("ring_size must be None, int, or torch.Tensor of shape (B,)")
-    L = L.view(B, 1, 1)  # (B, 1, 1) for broadcasting
+    k = torch.arange(1, pair_dim + 1, device=device)
+    k = torch.ones_like(k) if max_k == 1 else 1 + (k - 1) % max_k
 
-    # Pairwise raw differences of absolute positions
-    d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)  # (B, N, N)
+    return (2 * np.pi * k.float()) / ring_size
 
-    # Wrap to shortest signed distance on the ring of size L (per batch)
-    half = L // 2
-    d_ij = ((d_ij + half) % L) - half
 
-    # For even L: map +L/2 -> -L/2 to make the range symmetric and unique
-    even = L % 2 == 0
-    d_ij = torch.where(even & (d_ij == half), d_ij - L, d_ij)
+def compute_ring_size_per_token(
+    cyclic_mask: Float[torch.Tensor, "B L"],
+    chain_index: Int[torch.Tensor, "B L"] | None,
+) -> Float[torch.Tensor, "B L"]:
+    """Compute the ring size for each token in the sequence.
+
+    For each token, return the cyclic length (ring_size) of its chain, computed
+    as the number of True entries in cyclic_mask on that chain. Non-cyclic tokens receive 0.
+
+    Args:
+        cyclic_mask (torch.Tensor): Cyclic mask.
+        chain_index (torch.Tensor | None, optional): Chain indices. Defaults to None.
+
+    Returns:
+        torch.Tensor: Ring size per token.
+    """
+
+    B = cyclic_mask.shape[0]
+    device = cyclic_mask.device
+
+    if chain_index is None:
+        chain_index = torch.zeros_like(cyclic_mask, dtype=torch.long)
+
+    num_chains = torch.unique(chain_index).numel()
+    assert (
+        num_chains == torch.max(chain_index).item() + 1
+    ), "chain_index should be 0-indexed, consecutive integers"
+
+    # counts[b, c] = number of cyclic tokens in batch b that belong to chain c
+    counts = torch.zeros(B, num_chains, dtype=torch.long, device=device)
+    counts.scatter_add_(
+        dim=1, index=chain_index, src=cyclic_mask.long()
+    )  # batched bincount
+
+    # ring_size[b, l] = counts[b, chain_index[b, l]]
+    ring_size = counts.gather(dim=1, index=chain_index)
+
+    # non-cyclic tokens should be 0
+    ring_size = ring_size * cyclic_mask
+
+    return ring_size
+
+
+def circular_relpos_per_chain(
+    residue_index: Int[torch.Tensor, "B L"],
+    cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+    chain_index: Int[torch.Tensor, "B L"] | None = None,
+) -> Float[torch.Tensor, "B L L"]:
+    """Signed circular relative positions per chain.
+
+    - If (i, j) are on the same chain and both positions are cyclic:
+        - Use the chain's cyclic length L to wrap the linear difference to the
+        shortest signed arc in [-ceil(L/2)+1, +floor(L/2)] or [-floor(L/2), +ceil(L/2)-1].
+        - In even rings, ties at L/2 are resolved by the sign of the original
+        difference so that d_ij = -d_ji.
+    - Otherwise (different chains or at least one non-cyclic): return the linear difference
+        residue_index[i] - residue_index[j].
+
+    Args:
+        residue_index (torch.Tensor): Residue indices.
+        cyclic_mask (torch.Tensor | None, optional): Cyclic mask. Defaults to None.
+        chain_index (torch.Tensor | None, optional): Chain indices. Defaults to None.
+
+    Returns:
+        torch.Tensor: Circular relative positions.
+    """
+
+    # Use (i - j) to match the existing convention
+    # different from the macrocycle-offset in RFpeptides/AfCycDesign
+    dist = residue_index.unsqueeze(-1) - residue_index.unsqueeze(-2)  # (B, L, L)
+
+    if cyclic_mask is None:
+        return dist
+
+    if chain_index is None:
+        chain_index = torch.zeros_like(residue_index, dtype=torch.long)  # (B, L)
+
+    # Per-token ring size (0 for non-cyclic)
+    ring_size_per_token = compute_ring_size_per_token(
+        cyclic_mask=cyclic_mask, chain_index=chain_index
+    )  # (B, L)
+
+    # Cyclic pairs are same-chain AND both positions marked cyclic
+    same_chain = chain_index.unsqueeze(-1) == chain_index.unsqueeze(-2)  # (B, L, L)
+    cyclic_pair = (
+        cyclic_mask.unsqueeze(-1) * cyclic_mask.unsqueeze(-2) * same_chain
+    ).bool()
+
+    # Avoid div/mod by zero: only wrap on cyclic pairs; 1 is a harmless placeholder elsewhere
+    ring_size_pair = torch.where(
+        cyclic_pair,
+        ring_size_per_token.unsqueeze(-1),
+        torch.ones_like(ring_size_per_token.unsqueeze(-1)),
+    )  # (B, L, L)
+
+    # Wrap to shortest signed arc
+    # half = floor(L/2); keep values <= half as-is; values > half become negative
+    half = ring_size_pair // 2  # floor(L/2)
+    dist_mod = torch.remainder(dist, ring_size_pair)  # in [0, L-1]
+    d_wrapped = torch.where(dist_mod <= half, dist_mod, dist_mod - ring_size_pair)
+
+    # Range is now [-ceil(L/2)+1, +floor(L/2)] by construction.
+
+    # Even rings: tie at L/2 -> use original sign to keep antisymmetry (d_ij = -d_ji)
+    even = ring_size_pair % 2 == 0
+    tie = even & (dist_mod == half)
+
+    # dist < 0  -> +L/2 ;  dist >= 0 -> -L/2
+    d_wrapped = torch.where(tie & (dist < 0), -half, d_wrapped)
+    d_wrapped = torch.where(tie & (dist >= 0), half, d_wrapped)
+
+    # Use wrapped values only on cyclic pairs; elsewhere keep linear differences
+    d_ij = torch.where(cyclic_pair, d_wrapped, dist)  # (B, L, L)
 
     return d_ij
 
@@ -87,26 +180,42 @@ class RelativePositionalEncoding(nn.Module):
         self.linear = nn.Linear(self.num_relpos, attn_dim)
         self.relchain = relchain
 
-    def forward(self, index: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        residue_index: Int[torch.Tensor, "B L"],
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+    ) -> Float[torch.Tensor, "B L L D"]:
         """Compute relative positional encodings.
 
+        When cyclic_mask is given, automatically use circular relative positions
+        for pairs within cyclic chains; otherwise, keep the original behavior.
+
         Args:
-            index (torch.Tensor): Absolute positions. (B, L)
+            residue_index (torch.Tensor): Residue indices.
+            cyclic_mask (torch.Tensor | None, optional): Cyclic mask. Defaults to None.
+            chain_index (torch.Tensor | None, optional): Chain indices. Defaults to None.
 
         Returns:
-            torch.Tensor: Relative positional encodings. (B, L, L, C)
+            torch.Tensor: Relative positional encodings.
         """
 
         if self.relchain:
-            d_ij = (index.unsqueeze(-1) != index.unsqueeze(-2)).float()
+            # Chain-level relative encoding: same/different chain binary encoding
+            d_ij = (residue_index.unsqueeze(-1) != residue_index.unsqueeze(-2)).float()
         else:
-            d_ij = index.unsqueeze(-1) - index.unsqueeze(-2)
+            # Cyclic relative encoding
+            d_ij = circular_relpos_per_chain(
+                residue_index, cyclic_mask=cyclic_mask, chain_index=chain_index
+            )
+
         device = d_ij.device
 
         v_bins = torch.arange(self.num_relpos, device=device) - self.max_rel_idx
         idxs = torch.abs(d_ij.unsqueeze(-1) - v_bins[None, None]).argmin(-1)
         p_ij = F.one_hot(idxs, num_classes=self.num_relpos).float()
-        embeddings = self.linear(p_ij)
+
+        embeddings = self.linear(p_ij)  # (B, L, L, D)
 
         return embeddings
 
@@ -248,111 +357,40 @@ class RotaryEmbedding(nn.Module):
     def get_seq_pos(
         self,
         seq_len: int,
+        batch_size: int,
         residx: Float[torch.Tensor, "B L"],
-        B: int,
-        device,
-        dtype,
+        device: torch.device,
         offset: int = 0,
     ) -> Float[torch.Tensor, "B L"]:
+        """Get sequence position for rotary embeddings depending on whether residue index is used or not.
+
+        Args:
+            seq_len (int): length of the sequence (for if not using residue index)
+            batch_size (int): batch size
+            residx (torch.Tensor): residue index (for if using residue index)
+            device (torch.device): device to create the tensor on
+            offset (int, optional): offset to add to the sequence position. Defaults to 0.
+
+        Returns:
+            seq_pos: sequence position tensor.
         """
-        Get sequence position for rotary embeddings depending on whether residue index is used or not.
-        - seq_len: length of the sequence (for if not using residue index)
-        - residx: residue index (for if using residue index)
-        - B: batch size
-        """
+
         if self.use_residx:
             seq_pos = residx
         else:
-            seq_pos = torch.arange(seq_len, device=device, dtype=dtype) + offset
-            seq_pos = seq_pos.unsqueeze(0).expand(B, -1)
+            seq_pos = torch.arange(seq_len, device=device) + offset
+            seq_pos = seq_pos.unsqueeze(0).expand(batch_size, -1)
+
         return seq_pos / self.interpolate_factor
 
-    def rotate_queries_or_keys(
-        self,
-        t: Float[torch.Tensor, "B H L D"],
-        residx: Int[torch.Tensor, "B L"],
-        chain_index: Int[torch.Tensor, "B L"] | None,
-        seq_dim: int | None = None,
-        offset: int = 0,
-    ) -> Float[torch.Tensor, "B H L D"]:
-        seq_dim = default(seq_dim, self.default_seq_dim)
-
-        assert (
-            not self.use_xpos
-        ), "you must use .rotate_queries_and_keys method instead and pass in both queries and keys, for length extrapolatable rotary embeddings"
-
-        device, dtype, seq_len, B = t.device, t.dtype, t.shape[seq_dim], t.shape[0]
-
-        seq_pos = self.get_seq_pos(
-            seq_len=seq_len,
-            residx=residx,
-            B=B,
-            device=device,
-            dtype=dtype,
-            offset=offset,
-        )
-
-        freqs = self.forward(
-            seq_pos, seq_len=seq_len, offset=offset, chain_index=chain_index
-        )
-
-        if seq_dim == -3:
-            freqs = freqs.unsqueeze(-2)
-
-        return apply_rotary_emb(freqs, t, seq_dim=seq_dim)
-
-    def get_scale(self, t: torch.Tensor, seq_len: int | None = None, offset=0):
-        assert self.use_xpos
-
-        should_cache = self.cache_if_possible and (seq_len is not None)
-
-        if (
-            should_cache
-            and (self.cached_scales is not None)
-            and ((seq_len + offset) <= self.cached_scales.shape[0])
-        ):
-            return self.cached_scales[offset : (offset + seq_len)]
-
-        scale = 1.0
-        if self.use_xpos:
-            power = (t - len(t) // 2) / self.scale_base
-            scale = self.scale ** rearrange(power, "n -> n 1")
-            scale = torch.cat((scale, scale), dim=-1)
-
-        if should_cache:
-            self.tmp_store("cached_scales", scale)
-
-        return scale
-
-    def get_axial_freqs(self, *dims):
-        Colon = slice(None)
-        all_freqs = []
-
-        for ind, dim in enumerate(dims):
-            if self.freqs_for == "pixel":
-                pos = torch.linspace(-1, 1, steps=dim, device=self.device)
-            else:
-                pos = torch.arange(dim, device=self.device)
-
-            freqs = self.forward(pos, seq_len=dim)
-
-            all_axis = [None] * len(dims)
-            all_axis[ind] = Colon
-
-            new_axis_slice = (Ellipsis, *all_axis, Colon)
-            all_freqs.append(freqs[new_axis_slice])
-
-        all_freqs = broadcast_tensors(*all_freqs)
-        return torch.cat(all_freqs, dim=-1)
-
     @autocast("cuda", enabled=False)
-    def forward(
+    def _forward(
         self,
         t: Float[torch.Tensor, "B L"],  # sequence positions
         chain_index: Float[torch.Tensor, "B L"] | None = None,
         seq_len: int | None = None,
         offset: int = 0,
-    ) -> Float[torch.Tensor, "B L N"]:
+    ) -> Float[torch.Tensor, "B L D"]:
         should_cache = (
             self.cache_if_possible
             and (not self.learned_freq)
@@ -393,6 +431,71 @@ class RotaryEmbedding(nn.Module):
             self.tmp_store("cached_freqs", freqs.detach())
 
         return freqs
+
+    @autocast("cuda", enabled=False)
+    def forward(
+        self,
+        t: Float[torch.Tensor, "B L"],  # sequence positions
+        chain_index: Int[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+        seq_len: int | None = None,
+        offset: int = 0,
+    ) -> Float[torch.Tensor, "B L D"]:
+        r"""Cyclic rotary embeddings.
+
+        Return angle tensor matching the shape of self.forward (B, L, D). Tokens with
+        cyclic_mask == 1.0 use ring harmonics \omega_i = 2\pi k_i / L_{\text{chain}};
+        all other tokens keep the standard RoPE angles.
+        """
+
+        # Compute standard angles first to preserve the baseline behaviour for non-cyclic tokens
+        std_freqs = self._forward(
+            t, chain_index=chain_index, seq_len=seq_len, offset=offset
+        )  # (B, L, D)
+
+        if cyclic_mask is None:
+            return std_freqs
+
+        is_cyclic = cyclic_mask > 0  # boolean mask of cyclic positions
+
+        if not is_cyclic.any():
+            return std_freqs
+
+        D = std_freqs.shape[-1]
+        assert D % 2 == 0, "feature dimension must be multiple of 2 for RoPE"
+        pair_dim = D // 2
+        device = std_freqs.device
+
+        # Compute the ring size per token (zero for non-cyclic positions)
+        ring_size_per_token = compute_ring_size_per_token(
+            cyclic_mask=cyclic_mask, chain_index=chain_index
+        )  # (B, L)
+
+        # Start from the standard angles and overwrite cyclic tokens in-place
+        mix_freqs = std_freqs.clone()
+        # Reduce positions modulo ring size for cyclic tokens (stability & correctness)
+        # Note: clamp(min=1) avoids mod-by-zero on non-cyclic tokens (masked out anyway).
+        divisor = ring_size_per_token.clamp(min=1)
+        if t.is_floating_point():
+            divisor = divisor.to(t.dtype)
+        t_mod = torch.where(is_cyclic, torch.remainder(t, divisor), t)
+
+        unique_ring_size_list = torch.unique(ring_size_per_token[is_cyclic]).tolist()
+        for ring_size in unique_ring_size_list:
+            sel = (
+                ring_size_per_token == ring_size
+            ) & is_cyclic  # Tokens in this batch whose ring size equals ring_size
+            if not sel.any():
+                continue
+            omega = build_cyclic_harmonics(
+                pair_dim, ring_size=ring_size, device=device
+            )  # \omega_i
+            # \theta = position * \omega, where position = t[b, sel]
+            theta_pairs = t_mod[sel].unsqueeze(-1) * omega
+            theta_full = repeat(theta_pairs, "n p -> n (p r)", r=2)
+            mix_freqs[sel] = theta_full
+
+        return mix_freqs  # (B, L, D)
 
 
 ########################################
@@ -453,10 +556,18 @@ class NoiseEmbedding(nn.Module):
 # https://github.com/lucidrains/recurrent-interface-network-pytorch
 
 
-def default(val, d):
-    if val is not None:
-        return val
-    return d() if callable(d) else d
+def get_value_or_default(value: Any, default: Any) -> Any:
+    """Get the value or default.
+
+    Args:
+        value (Any): The value to check.
+        default (Any): The default value to return if value is None.
+
+    Returns:
+        Any: The original value if not None, otherwise the default value.
+    """
+
+    return value if value is not None else default
 
 
 def posemb_sincos_1d(
@@ -568,13 +679,14 @@ class TimeCondAttention(nn.Module):
         motif_cond_dim: int | None = None,
         attn_bias_dim: int | None = None,
         rotary_embedding_module: RotaryEmbedding | None = None,
+        num_cyclic_heads: int = 0,
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         dit: bool = False,
     ) -> None:
         super().__init__()
         hidden_dim = dim_head * heads
-        dim_context = default(dim_context, dim)
+        dim_context = get_value_or_default(dim_context, dim)
 
         self.time_cond = None
 
@@ -604,26 +716,27 @@ class TimeCondAttention(nn.Module):
             nn.init.zeros_(self.motif_cond[-1].weight)
             nn.init.zeros_(self.motif_cond[-1].bias)
 
-            # add gating
+            # Add gating
             self.motif_gate = nn.Linear(motif_cond_dim, dim * 2)
             self.sigmoid = nn.Sigmoid()
 
             nn.init.zeros_(self.motif_gate.weight)
             nn.init.zeros_(self.motif_gate.bias)
 
-        self.scale = dim_head**-0.5
+        self.scale = dim_head ** (-0.5)
         self.heads = heads
 
         self.norm = LayerNorm(dim) if norm else nn.Identity()
         self.norm_context = LayerNorm(dim_context) if norm_context else nn.Identity()
 
-        self.attn_bias_proj = None
         if attn_bias_dim is not None:
             self.attn_bias_proj = nn.Sequential(
-                Rearrange("b a i j -> b i j a"),
+                Rearrange("b d i j -> b i j d"),
                 nn.Linear(attn_bias_dim, heads),
-                Rearrange("b i j a -> b a i j"),
+                Rearrange("b i j h -> b h i j"),
             )
+        else:
+            self.attn_bias_proj = None
 
         self.to_q = nn.Linear(dim, hidden_dim, bias=False)
         self.to_kv = nn.Linear(dim_context, hidden_dim * 2, bias=False)
@@ -636,6 +749,13 @@ class TimeCondAttention(nn.Module):
             self.use_rope = True
             self.rope = rotary_embedding_module
 
+        # Reserve the heads that will use the cyclic rotation (first num_cyclic_heads heads)
+        self.num_cyclic_heads = num_cyclic_heads
+        head_mask = torch.zeros(heads)  # (H,)
+        if self.num_cyclic_heads > 0:
+            head_mask[: self.num_cyclic_heads] = 1.0
+        self.register_buffer("cyclic_head_mask", head_mask, persistent=False)
+
     def forward(
         self,
         x: Float[torch.Tensor, "B L D"],
@@ -646,11 +766,10 @@ class TimeCondAttention(nn.Module):
         attn_bias: Float[torch.Tensor, "B H L L"] | None = None,
         seq_mask: Float[torch.Tensor, "B L"] | None = None,
         chain_index: Float[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
     ) -> Float[torch.Tensor, "B L D"]:
-        # attn_bias is b, c, i, j
-        h = self.heads
 
-        context = default(context, x)
+        context = get_value_or_default(context, x)
 
         x = self.norm(x)
 
@@ -675,24 +794,76 @@ class TimeCondAttention(nn.Module):
             x = x * seq_mask.unsqueeze(-1)
 
         qkv = (self.to_q(x), *self.to_kv(context).chunk(2, dim=-1))
-        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=h), qkv)
+        q, k, v = map(lambda t: rearrange(t, "b n (h d) -> b h n d", h=self.heads), qkv)
 
         q = q * self.scale
 
+        B, _, L, _ = q.shape
+        device = q.device
+
         if self.use_rope:
-            q = self.rope.rotate_queries_or_keys(q, residx, chain_index=chain_index)
-            k = self.rope.rotate_queries_or_keys(k, residx, chain_index=chain_index)
+            # Standard RoPE path
+            seq_pos = self.rope.get_seq_pos(
+                seq_len=L,
+                batch_size=B,
+                residx=residx,
+                device=device,
+                offset=0,
+            )
+            std_freqs = self.rope.forward(
+                seq_pos, seq_len=L, chain_index=chain_index
+            )  # (B, L, D)
+
+            q_std = apply_rotary_emb(std_freqs, q)
+            k_std = apply_rotary_emb(std_freqs, k)
+
+            # When cyclic_mask is provided, compute cyclic RoPE angles and enable them only on the cyclic heads
+            if self.num_cyclic_heads and (cyclic_mask is not None):
+                assert chain_index is not None
+                cyc_freqs = self.rope.forward(
+                    seq_pos,
+                    chain_index=chain_index,
+                    cyclic_mask=cyclic_mask,
+                    seq_len=L,
+                    offset=0,
+                )
+                q_cyc = apply_rotary_emb(cyc_freqs, q)
+                k_cyc = apply_rotary_emb(cyc_freqs, k)
+
+                # Head-level routing: first num_cyclic_heads heads use cyclic rotation, others stay standard
+                cyclic_head_mask = self.cyclic_head_mask.view(1, -1, 1, 1)
+                q = q_std + cyclic_head_mask * (q_cyc - q_std)
+                k = k_std + cyclic_head_mask * (k_cyc - k_std)
+            else:
+                q, k = q_std, k_std
 
         sim = torch.einsum("b h i d, b h j d -> b h i j", q, k)
+
+        # If cyclic heads are active and cyclic_mask exists, mask out pairs outside the same ring for those heads
+        if self.use_rope and (self.num_cyclic_heads > 0) and (cyclic_mask is not None):
+            assert chain_index is not None  # TODO: support chain_index=None case
+            same_chain = chain_index.unsqueeze(-1) == chain_index.unsqueeze(
+                -2
+            )  # (B, L, L)
+            cyc_pair = (
+                cyclic_mask.unsqueeze(-1) * cyclic_mask.unsqueeze(-2) * same_chain
+            ).bool()  # (B, L, L)
+            bad = (~cyc_pair).unsqueeze(1)  # (B, 1, L, L)
+            cyclic_head_mask = self.cyclic_head_mask.view(1, -1, 1, 1)  # (1, H, 1, 1)
+            # Apply a large negative bias only on cyclic heads to suppress cross-chain or non-ring pairs
+            sim = sim.masked_fill(cyclic_head_mask.bool() & bad, -torch.inf)
+
         if attn_bias is not None:
             if self.attn_bias_proj is not None:
                 attn_bias = self.attn_bias_proj(attn_bias)
-            sim += attn_bias
+            assert attn_bias is not None
+            sim = sim + attn_bias
+
         if seq_mask is not None:
             attn_mask = torch.einsum("b i, b j -> b i j", seq_mask, seq_mask).unsqueeze(
                 1
             )
-            sim -= (1 - attn_mask) * 1e6
+            sim = sim.masked_fill(~attn_mask.bool(), -torch.inf)
         attn = sim.softmax(dim=-1)
 
         attn = self.attn_dropout(attn)
@@ -830,6 +1001,7 @@ class TimeCondTransformer(nn.Module):
             "none",
         ] = "rotary",
         position_embedding_max: int = 32,
+        num_cyclic_heads: int = 0,
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
@@ -879,6 +1051,7 @@ class TimeCondTransformer(nn.Module):
             motif_cond_dim=motif_cond_dim,
             attn_bias_dim=attn_bias_dim,
             rotary_embedding_module=self.rope,
+            num_cyclic_heads=num_cyclic_heads,
             attn_dropout=attn_dropout,
             out_dropout=out_dropout,
             dit=dit,
@@ -901,15 +1074,27 @@ class TimeCondTransformer(nn.Module):
 
     def forward(
         self,
-        x: Float[torch.Tensor, "B L D"],
-        time=None,
-        motif=None,
-        attn_bias=None,
-        context=None,
-        seq_mask=None,
-        residue_index=None,
-        chain_index=None,
-    ):
+        x: torch.Tensor,
+        time: torch.Tensor | None = None,
+        motif: torch.Tensor | None = None,
+        attn_bias: torch.Tensor | None = None,
+        seq_mask: torch.Tensor | None = None,
+        residue_index: torch.Tensor | None = None,
+        chain_index: torch.Tensor | None = None,
+        cyclic_mask: torch.Tensor | None = None,
+        context: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Drop-in replacement.
+        Interface notes:
+        1) If `pos_emb_type` contains "relchain", add the same-versus-different-chain bias.
+        2) If `pos_emb_type` contains "relative", add the residue_index-based relative bias.
+            - With both cyclic_mask and chain_index, use circular distances for pairs on the same ring
+                and keep linear offsets elsewhere (see RelativePositionalEncoding.forward).
+        3) Accumulate the resulting positional bias into attn_bias.
+        4) Pass cyclic_mask to each attention layer via a temporary attribute for cyclic RoPE and masking.
+        """
+
         if self.pos_emb_type == "absolute":
             pos_emb = posemb_sincos_1d(x)
             x = x + pos_emb
@@ -917,21 +1102,46 @@ class TimeCondTransformer(nn.Module):
             assert residue_index is not None
             pos_emb = posemb_sincos_1d(x, residue_index=residue_index)
             x = x + pos_emb
-        if "relchain" in self.pos_emb_type:
-            assert chain_index is not None
-            pos_emb = self.relchain(chain_index)
-            attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
-        if "relative" in self.pos_emb_type:
-            assert residue_index is not None
-            if "pos_emb" in locals():  # TODO: avoid this
-                pos_emb += self.relpos(residue_index)
-            else:
-                pos_emb = self.relpos(residue_index)
-            attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
+        else:
+            # Accumulate positional bias without overriding an existing attn_bias
+            pos_bias = None
+
+            # 1) Optional chain-level bias (same vs different chain)
+            if "relchain" in self.pos_emb_type:
+                if chain_index is None:
+                    raise ValueError("relchain positional bias requires `chain_index`.")
+                chain_bias = self.relchain(
+                    chain_index
+                )  # Expected shape: (B, H, L, L) or broadcastable to that shape
+                pos_bias = chain_bias if pos_bias is None else (pos_bias + chain_bias)
+
+            # 2) Relative positional bias; wrap distances per ring when cyclic_mask is provided
+            if "relative" in self.pos_emb_type:
+                if residue_index is None:
+                    raise ValueError(
+                        "relative positional bias requires `residue_index`."
+                    )
+                assert isinstance(self.relpos, nn.Sequential)
+
+                # Submodule 0 is RelativePositionalEncoding, which consumes index/chain_index/cyclic_mask
+                # Submodule 1 rearranges to (B, heads, L, L)
+                rel_core = self.relpos[0]
+                rel_rearr = self.relpos[1]
+                rel_bias_core = rel_core(
+                    residue_index, chain_index=chain_index, cyclic_mask=cyclic_mask
+                )  # (B, L, L, heads)
+                relpos_bias = rel_rearr(rel_bias_core)  # (B, heads, L, L)
+
+                pos_bias = relpos_bias if pos_bias is None else (pos_bias + relpos_bias)
+
+            # Merge the accumulated pos_bias into the overall attn_bias
+            if pos_bias is not None:
+                attn_bias = pos_bias if attn_bias is None else (attn_bias + pos_bias)
+
         if seq_mask is not None:
             x = x * seq_mask.unsqueeze(-1)
 
-        # Begin transformer layers
+        # Core loop: expose cyclic_mask to the attention layer
         for attn, ff in self.layers:
             x = x + attn(
                 x,
@@ -942,6 +1152,7 @@ class TimeCondTransformer(nn.Module):
                 attn_bias=attn_bias,
                 seq_mask=seq_mask,
                 chain_index=chain_index,
+                cyclic_mask=cyclic_mask,
             )
             x = x + ff(x, time=time, motif=motif)
 
@@ -976,6 +1187,7 @@ class TimeCondUViT(nn.Module):
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
         dit: bool = False,
+        num_cyclic_heads: int = 0,
     ) -> None:
         super().__init__()
 
@@ -1054,6 +1266,7 @@ class TimeCondUViT(nn.Module):
             attn_bias_dim=attn_bias_dim,
             position_embedding_type=position_embedding_type,
             position_embedding_max=position_embedding_max,
+            num_cyclic_heads=num_cyclic_heads,
             attn_dropout=attn_dropout,
             out_dropout=out_dropout,
             ff_dropout=ff_dropout,
@@ -1092,18 +1305,19 @@ class TimeCondUViT(nn.Module):
     def forward(
         self,
         coords: Float[torch.Tensor, "B L A 3"],
-        time_cond,
-        motif_cond=None,
-        pair_bias=None,
-        seq_mask=None,
-        residue_index=None,
-        chain_index=None,
-    ) -> torch.Tensor:
+        time_cond: Float[torch.Tensor, "B L A T"] | None = None,
+        motif_cond: Float[torch.Tensor, "B L A M"] | None = None,
+        pair_bias: Float[torch.Tensor, "B L A A"] | None = None,
+        seq_mask: Float[torch.Tensor, "B L A 1"] | None = None,
+        residue_index: Float[torch.Tensor, "B L"] | None = None,
+        chain_index: Float[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+    ) -> Float[torch.Tensor, "B L A D"]:
 
         if self.num_conv_layers > 0:  # pad up to even dims
             coords = F.pad(coords, (0, 0, 0, 0, 0, 1, 0, 0))
 
-        x = rearr_coords = rearrange(coords, "b n a c -> b c n a")
+        x = rearr_coords = rearrange(coords, "b l a x -> b x l a")
         hidden_states = []
         for i, layer in enumerate(self.down_conv):
             for block in layer:
@@ -1132,6 +1346,7 @@ class TimeCondUViT(nn.Module):
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
+            cyclic_mask=cyclic_mask,
         )
 
         x = self.from_patch(x)
