@@ -71,7 +71,7 @@ def _reconstruct_motif_indices(total_len: int, seglens: Sequence[int]) -> np.nda
 
 
 @pytest.mark.parametrize(
-    "spec,length_range,n_samples,constraints",
+    "spec,length_range,num_samples,constraints",
     [
         (
             "5-20;A16-35;10-25;A52-71;5-20",
