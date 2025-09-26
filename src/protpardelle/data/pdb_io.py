@@ -101,7 +101,9 @@ def read_pdb(
         logger.error("PDB file %s has no models.", pdb_path)
 
     if detect_thioether(structure):
-        structure = convert_thioether(structure)
+        structure, cyclic_chains = convert_thioether(structure)
+    else:
+        cyclic_chains = []
 
     model = next(structure.get_models())
 
@@ -175,9 +177,23 @@ def read_pdb(
                 hetero_atom_types.append(h_atom_types)
 
     # Chain IDs are usually characters so map these to ints.
-    unique_chain_ids = np.unique(chain_ids)
+    unique_chain_ids = sorted(set(chain_ids))
     chain_id_mapping = {cid: n for n, cid in enumerate(unique_chain_ids)}
-    chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])
+    chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])  # (L,)
+
+    # Parse cyclic chains
+    cyclic_mask = np.zeros_like(chain_index, dtype=bool)
+    for cyclic_chain in cyclic_chains:
+        if cyclic_chain not in chain_id_mapping:
+            logger.warning(
+                "Cyclic chain %s not found in the structure's chain IDs %s.",
+                cyclic_chain,
+                list(chain_id_mapping.keys()),
+            )
+        else:
+            cyclic_chain_idx = chain_id_mapping[cyclic_chain]
+            cyclic_mask |= chain_index == cyclic_chain_idx
+    cyclic_mask = cyclic_mask.astype(float)
 
     prot = Protein(
         atom_positions=np.array(atom_positions),
@@ -185,6 +201,7 @@ def read_pdb(
         aatype=np.array(aatype),
         residue_index=np.array(residue_index),
         chain_index=chain_index,
+        cyclic_mask=cyclic_mask,
         b_factors=np.array(b_factors),
     )
     het = Hetero(
@@ -228,6 +245,7 @@ def load_feats_from_pdb(
     )
     for k, v in vars(protein_obj).items():
         feats[k] = torch.as_tensor(v, dtype=torch.float)
+    assert "cyclic_mask" in feats  # TODO: test and remove
     feats["aatype"] = feats["aatype"].long()
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index
@@ -296,12 +314,15 @@ def feats_to_pdb_str(
     if b_factors is None:
         b_factors = torch.ones_like(atom_mask)
 
+    cyclic_mask = torch.zeros_like(chain_index)
+
     prot = Protein(
         atom_positions=tensor_to_ndarray(atom_coords),
         atom_mask=tensor_to_ndarray(atom_mask),
         aatype=tensor_to_ndarray(aatype),
         residue_index=tensor_to_ndarray(residue_index),
         chain_index=tensor_to_ndarray(chain_index),
+        cyclic_mask=tensor_to_ndarray(cyclic_mask),
         b_factors=tensor_to_ndarray(b_factors),
     )
     pdb_str = to_pdb(prot, chain_id_mapping=chain_id_mapping)

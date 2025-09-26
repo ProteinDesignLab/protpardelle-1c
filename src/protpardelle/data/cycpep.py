@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 import numpy as np
 from Bio.PDB import (
@@ -200,11 +200,6 @@ def read_thioether(pdb_path: str) -> Tuple[Structure.Structure, List[str]]:
     return out, converted
 
 
-from typing import Set
-
-from Bio.PDB import Structure
-
-
 def detect_thioether(structure: Structure.Structure) -> bool:
     """
     Quickly detect whether a Structure contains at least one 'thioether' chain,
@@ -262,20 +257,28 @@ def detect_thioether(structure: Structure.Structure) -> bool:
     return False
 
 
-def convert_thioether(structure: Structure.Structure) -> Structure.Structure:
+def convert_thioether(
+    structure: Structure.Structure,
+) -> Tuple[Structure.Structure, List[str]]:
     """
     Convert all DTR…CYS thioether chains into pure native chains (GLY1, TRP2, …, ALA_last).
     Returns converted_structure.
     """
+
     out = Structure.Structure("pure")
+
+    converted: List[str] = []
 
     for model in structure:
         new_model = Model.Model(model.id)
         for chain in model:
-            new_chain, _ = _build_chain_native_from_thioether(chain)
+            new_chain, did = _build_chain_native_from_thioether(chain)
             new_model.add(new_chain)
+            if did:
+                converted.append(chain.id)
         out.add(new_model)
-    return out
+
+    return out, converted
 
 
 # ---------- inverse: native -> thioether ----------

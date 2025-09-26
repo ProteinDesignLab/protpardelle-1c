@@ -40,6 +40,7 @@ FEATURES_1D = (
     "atom_mask",
     "residue_index",
     "chain_index",
+    "cyclic_mask",
     "fluctuation",
     "displacement",
     "sse",

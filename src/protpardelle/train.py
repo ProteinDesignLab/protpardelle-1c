@@ -662,6 +662,7 @@ class ProtpardelleTrainer:
         aatype = input_dict["aatype"]
         atom_mask = input_dict["atom_mask"]
         chain_index = input_dict["chain_index"]
+        cyclic_mask = input_dict["cyclic_mask"]
         residue_index = input_dict["residue_index"]
 
         batch_size = atom_coords.shape[0]
@@ -727,6 +728,7 @@ class ProtpardelleTrainer:
             "seq_mask": seq_mask,
             "residue_index": residue_index,
             "chain_index": chain_index,
+            "cyclic_mask": cyclic_mask,
             "hotspot_mask": hotspot_mask,
             "struct_crop_cond": struct_crop_cond,
             "sse_cond": sse_cond,
@@ -1055,6 +1057,7 @@ def train(
                         )  # non_blocking for pin_memory
                         for k, v in input_dict.items()
                     }
+                    assert "cyclic_mask" in input_dict  # TODO: test and remove
                     log_dict = trainer.train_step(input_dict)
                     log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
                     log_dict["epoch"] = epoch

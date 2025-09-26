@@ -57,6 +57,10 @@ class Protein:
     # belongs to.
     chain_index: np.ndarray  # [num_res]
 
+    # Binary mask indicating which residues are part of cyclic chains. 1.0 if the residue
+    # is part of a cyclic chain, 0.0 otherwise.
+    cyclic_mask: np.ndarray  # [num_res]
+
     # B-factors, or temperature factors, of each residue (in sq. angstroms units),
     # representing the displacement of the residue from its ground truth mean
     # value.
