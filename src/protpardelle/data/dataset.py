@@ -660,6 +660,8 @@ class PDBDataset(Dataset):
                 raise ValueError(f"Cluster {pdb_key} does not exist!")
             pdb = df_subset.sample(n=1)["pdb_name"].values[0]
             data_file = f"{self.pdb_path}/interface_cifs/{pdb}"
+        elif "tufts_thioether" in self.pdb_path:  # tufts thioether dataset
+            data_file = f"{self.pdb_path}/minimized_D_pdbs/{pdb_key}"
         else:
             raise ValueError("Invalid pdb path.")
 

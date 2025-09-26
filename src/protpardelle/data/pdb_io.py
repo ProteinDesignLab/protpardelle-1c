@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from Bio.PDB import MMCIFParser, PDBParser
+from Bio.PDB import MMCIFParser, PDBParser, Structure
 from einops import rearrange
 
 from protpardelle.common import residue_constants
@@ -19,6 +19,7 @@ from protpardelle.common.protein import (
     to_pdb,
 )
 from protpardelle.data.atom import atom37_mask_from_aatype
+from protpardelle.data.cycpep import convert_thioether, detect_thioether
 from protpardelle.utils import StrPath, get_logger, norm_path, tensor_to_ndarray
 
 logger = get_logger(__name__)
@@ -87,6 +88,8 @@ def read_pdb(
         parser = PDBParser(QUIET=True)
 
     structure = parser.get_structure("protein", pdb_path)
+    assert isinstance(structure, Structure.Structure)
+
     num_models = len(structure)
     if num_models > 1:
         logger.warning(
@@ -96,6 +99,10 @@ def read_pdb(
         )
     if num_models == 0:
         logger.error("PDB file %s has no models.", pdb_path)
+
+    if detect_thioether(structure):
+        structure = convert_thioether(structure)
+
     model = next(structure.get_models())
 
     atom_positions = []
