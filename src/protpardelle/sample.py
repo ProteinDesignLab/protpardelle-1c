@@ -23,7 +23,6 @@ from Bio import SeqIO
 from hydra import compose, initialize_config_dir
 from jaxtyping import Float, Int
 from omegaconf import OmegaConf
-from torch.types import Device
 from tqdm.auto import tqdm
 
 from protpardelle.common import residue_constants

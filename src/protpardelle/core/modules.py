@@ -1181,13 +1181,13 @@ class TimeCondUViT(nn.Module):
         conv_skip_connection: bool = False,
         position_embedding_type: str = "rotary",
         position_embedding_max: int = 32,
+        num_cyclic_heads: int = 0,
         noise_residual: bool = False,  # Not used
         ssadj_cond: bool = False,
         attn_dropout: float = 0.0,
         out_dropout: float = 0.0,
         ff_dropout: float = 0.1,
         dit: bool = False,
-        num_cyclic_heads: int = 0,
     ) -> None:
         super().__init__()
 

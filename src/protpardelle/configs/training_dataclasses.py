@@ -120,6 +120,7 @@ class UViT:
     ]
     # position_embedding_type: str
     position_embedding_max: int
+    num_cyclic_heads: int
 
 
 @dataclass

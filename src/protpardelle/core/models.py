@@ -410,6 +410,7 @@ class CoordinateDenoiser(nn.Module):
             motif_cond_dim=num_motif_channels,
             position_embedding_type=self.struct_config.uvit.position_embedding_type,
             position_embedding_max=self.struct_config.uvit.position_embedding_max,
+            num_cyclic_heads=self.struct_config.uvit.num_cyclic_heads,
             noise_residual=config.model.crop_conditional
             and "noise_residual" in config.model.conditioning_style,
             ssadj_cond=config.model.crop_conditional
@@ -430,7 +431,8 @@ class CoordinateDenoiser(nn.Module):
         seq_mask: Float[torch.Tensor, "B L"],
         residue_index: Int[torch.Tensor, "B L"] | None = None,
         chain_index: Int[torch.Tensor, "B L"] | None = None,
-        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Float[torch.Tensor, "B L"] | None = None,
         struct_self_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
         struct_crop_cond: Float[torch.Tensor, "B L 37 3"] | None = None,
         sse_cond: Int[torch.Tensor, "B L"] | None = None,
@@ -445,6 +447,7 @@ class CoordinateDenoiser(nn.Module):
             seq_mask (torch.Tensor): A mask indicating valid sequence elements.
             residue_index (torch.Tensor | None, optional): The residue indices for each sequence element. Defaults to None.
             chain_index (torch.Tensor | None, optional): The chain indices for each sequence element. Defaults to None.
+            cyclic_mask (torch.Tensor | None, optional): A mask indicating cyclic regions. Defaults to None.
             hotspot_mask (torch.Tensor | None, optional): A mask indicating hotspot regions. Defaults to None.
             struct_self_cond (torch.Tensor | None, optional): The self-conditioning features. Defaults to None.
             struct_crop_cond (torch.Tensor | None, optional): The crop-conditioning features. Defaults to None.
@@ -533,6 +536,7 @@ class CoordinateDenoiser(nn.Module):
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
+            cyclic_mask=cyclic_mask,
             pair_bias=adj_cond,
         )
 
@@ -744,7 +748,8 @@ class Protpardelle(nn.Module):
         seq_mask: Float[torch.Tensor, "B L"],
         residue_index: Int[torch.Tensor, "B L"],
         chain_index: Int[torch.Tensor, "B L"] | None = None,
-        hotspot_mask: Int[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
+        hotspot_mask: Float[torch.Tensor, "B L"] | None = None,
         struct_self_cond: Float[torch.Tensor, "B L A 3"] | None = None,
         struct_crop_cond: Float[torch.Tensor, "B L A 3"] | None = None,
         sse_cond: Int[torch.Tensor, "B L"] | None = None,
@@ -767,6 +772,7 @@ class Protpardelle(nn.Module):
             seq_mask (torch.Tensor): Mask indicating which indexes contain data.
             residue_index (torch.Tensor): Residue ordering.
             chain_index (torch.Tensor | None, optional): Chain index. Defaults to None.
+            cyclic_mask (torch.Tensor | None, optional): Cyclic mask. Defaults to None.
             hotspot_mask (torch.Tensor | None, optional): Hotspot mask. Defaults to None.
             struct_self_cond (torch.Tensor | None, optional): Denoised coordinates from the previous step,
                 scaled down by sigma data. Defaults to None.
@@ -799,6 +805,7 @@ class Protpardelle(nn.Module):
                 seq_mask,
                 residue_index=residue_index,
                 chain_index=chain_index,
+                cyclic_mask=cyclic_mask,
                 hotspot_mask=hotspot_mask,
                 struct_self_cond=struct_self_cond,
                 struct_crop_cond=struct_crop_cond,
@@ -928,6 +935,7 @@ class Protpardelle(nn.Module):
         seq_mask: Float[torch.Tensor, "B L"],
         residue_index: Int[torch.Tensor, "B L"],
         chain_index: Int[torch.Tensor, "B L"] | None = None,
+        cyclic_mask: Float[torch.Tensor, "B L"] | None = None,
         hotspots: str | list[str] | None = None,
         sse_cond: Int[torch.Tensor, "B L"] | None = None,
         adj_cond: Int[torch.Tensor, "B L L"] | None = None,
@@ -969,6 +977,7 @@ class Protpardelle(nn.Module):
         seq_mask: mask defining the number and lengths of proteins to be sampled.
         residue_index: residue index of proteins to be sampled.
         chain_index: integers denoting different chains, e.g. 0, 0, 1, 1 denotes two chains of two residues each
+        cyclic_mask: mask denoting cyclic regions.
         hotspots: {chain}{residx} list or comma-delimited string indicating hotspot residues, e.g. A33,A95,A98,A102
         sse_cond: integer denoting the secondary structure class, corresponds to ordering in scripts/make_secstruc_adj.py
         adj_cond: block-adjacency matrix indicating contact of secondary structure elements, obtained from scripts/make_secstruc_adj.py
@@ -1765,6 +1774,7 @@ class Protpardelle(nn.Module):
                             seq_mask=seq_mask,
                             residue_index=residue_index,
                             chain_index=chain_index,
+                            cyclic_mask=cyclic_mask,
                             hotspot_mask=hotspot_mask,
                             struct_self_cond=(
                                 x_self_cond
@@ -1934,6 +1944,7 @@ class Protpardelle(nn.Module):
                             seq_mask=seq_mask,
                             residue_index=residue_index,
                             chain_index=chain_index,
+                            
                             hotspot_mask=hotspot_mask,
                             struct_self_cond=(
                                 x_self_cond

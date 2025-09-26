@@ -85,6 +85,7 @@ model:
       conv_skip_connection: False
       position_embedding_type: "relative"
       position_embedding_max: 32
+      num_cyclic_heads: 2
   mpnn_model:
     use_self_conditioning: True
     label_smoothing: 0.1
