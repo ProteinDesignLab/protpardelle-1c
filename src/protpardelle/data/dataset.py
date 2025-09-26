@@ -53,6 +53,7 @@ FEATURES_FLOAT = (
     "atom_positions",
     "atom_mask",
     "seq_mask",
+    "cyclic_mask",
     "fluctuation",
     "displacement",
 )

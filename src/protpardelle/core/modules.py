@@ -819,7 +819,6 @@ class TimeCondAttention(nn.Module):
 
             # When cyclic_mask is provided, compute cyclic RoPE angles and enable them only on the cyclic heads
             if self.num_cyclic_heads and (cyclic_mask is not None):
-                assert chain_index is not None
                 cyc_freqs = self.rope.forward(
                     seq_pos,
                     chain_index=chain_index,
@@ -840,7 +839,7 @@ class TimeCondAttention(nn.Module):
         sim = torch.einsum("b h i d, b h j d -> b h i j", q, k)
 
         # If cyclic heads are active and cyclic_mask exists, mask out pairs outside the same ring for those heads
-        if self.use_rope and (self.num_cyclic_heads > 0) and (cyclic_mask is not None):
+        if self.use_rope and self.num_cyclic_heads and (cyclic_mask is not None):
             assert chain_index is not None  # TODO: support chain_index=None case
             same_chain = chain_index.unsqueeze(-1) == chain_index.unsqueeze(
                 -2
@@ -848,10 +847,14 @@ class TimeCondAttention(nn.Module):
             cyc_pair = (
                 cyclic_mask.unsqueeze(-1) * cyclic_mask.unsqueeze(-2) * same_chain
             ).bool()  # (B, L, L)
-            bad = (~cyc_pair).unsqueeze(1)  # (B, 1, L, L)
-            cyclic_head_mask = self.cyclic_head_mask.view(1, -1, 1, 1)  # (1, H, 1, 1)
-            # Apply a large negative bias only on cyclic heads to suppress cross-chain or non-ring pairs
-            sim = sim.masked_fill(cyclic_head_mask.bool() & bad, -torch.inf)
+
+            row_is_cyc = (
+                cyclic_mask.unsqueeze(-1).expand_as(cyc_pair).bool()
+            )  # (B, L, L)
+            bad_rows = (~cyc_pair) & row_is_cyc  # (B, L, L)
+
+            head_mask = self.cyclic_head_mask.view(1, -1, 1, 1)  # (1, H, 1, 1)
+            sim = sim.masked_fill(head_mask.bool() & bad_rows.unsqueeze(1), -torch.inf)
 
         if attn_bias is not None:
             if self.attn_bias_proj is not None:
