@@ -72,6 +72,8 @@ def compute_ring_size_per_token(
 
     if chain_index is None:
         chain_index = torch.zeros_like(cyclic_mask, dtype=torch.long)
+    else:
+        chain_index = chain_index.long()  # ensure torch.long
 
     num_chains = torch.unique(chain_index).numel()
     assert (

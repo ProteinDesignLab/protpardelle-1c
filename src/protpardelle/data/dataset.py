@@ -410,7 +410,7 @@ def make_crop_cond_mask_and_recenter_coords(
     device = atom_mask.device
     seq_mask = atom_mask[..., 1]  # (B, L)
     hotspot_mask = torch.zeros((B, L), device=device)
-    residue_counts: list[int] = seq_mask.int().sum(-1).tolist()
+    residue_counts: list[int] = seq_mask.long().sum(-1).tolist()
     masks: list[Float[torch.Tensor, "L A"]] = []
 
     for b, num_res in enumerate(residue_counts):
