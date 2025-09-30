@@ -8,14 +8,12 @@ search_space:
   translations:
     - [0.0, 0.0, 0.0]
 motifs:
-  - D12_402298
+  - 7eow_B_atom_rot_128_A
 motif_contigs:
-  - A2-12;/;100-120 #;/;100-100
+  - A1-128;/;120-120 #;/;100-100
 total_lengths:
-  - [[11, 11], [100, 120]] #, [100, 100]]
+  - [[128, 128], [120, 120]] #, [100, 100]]
 hotspots:
-  - "A5,A6,A8,A9"
-cyclic_chains:
-  - null
+  - "A19,A76,A80,A82"
 ssadj:
   - null
