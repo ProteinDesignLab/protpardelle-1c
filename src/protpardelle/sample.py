@@ -179,6 +179,7 @@ def draw_samples(
     seq_mask: Float[torch.Tensor, "B L"] | None = None,
     residue_index: Float[torch.Tensor, "B L"] | None = None,
     chain_index: Int[torch.Tensor, "B L"] | None = None,
+    cyclic_mask: Int[torch.Tensor, "B L"] | None = None,
     hotspots: str | list[str] | None = None,
     sse_cond: Int[torch.Tensor, "B L"] | None = None,
     adj_cond: Int[torch.Tensor, "B L L"] | None = None,
@@ -222,6 +223,7 @@ def draw_samples(
         seq_mask=seq_mask,
         residue_index=residue_index,
         chain_index=chain_index,
+        cyclic_mask=cyclic_mask,
         hotspots=hotspots,
         sse_cond=sse_cond,
         adj_cond=adj_cond,
@@ -416,6 +418,7 @@ def generate(
             chain_index=(
                 chain_index_input[si:ei] if chain_index_input is not None else None
             ),
+            cyclic_mask=None,  # TODO: support cyclic
             length_ranges_per_chain=length_ranges_per_chain,
             hotspots=hotspots,
             sse_cond=sse_cond,
