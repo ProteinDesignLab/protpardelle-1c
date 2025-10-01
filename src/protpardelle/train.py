@@ -438,7 +438,7 @@ class ProtpardelleTrainer:
         """
 
         checkpoint = {
-            "model": self.module.state_dict(),
+            "model_state_dict": self.module.state_dict(),
             "optimizer": self.optimizer.state_dict(),
             "scheduler": self.scheduler.state_dict(),
             "scaler": self.scaler.state_dict(),
@@ -489,7 +489,7 @@ class ProtpardelleTrainer:
             checkpoint_path, map_location=self.device, weights_only=False
         )
 
-        self.module.load_state_dict(checkpoint["model"])
+        self.module.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         self.scheduler.load_state_dict(checkpoint["scheduler"])
         self.scaler.load_state_dict(checkpoint["scaler"])
