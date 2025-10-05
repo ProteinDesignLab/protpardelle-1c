@@ -1,3 +1,8 @@
+"""Cyclic peptide utilities.
+
+Author: Zhaoyang Li
+"""
+
 from __future__ import annotations
 
 from typing import List, Optional, Set, Tuple

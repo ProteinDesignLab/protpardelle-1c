@@ -1,3 +1,8 @@
+"""Tests for cyclic peptide utilities.
+
+Author: Zhaoyang Li
+"""
+
 import math
 
 import pytest
@@ -63,7 +68,7 @@ def test_build_cyclic_harmonics_band_and_wrap(L, pair_dim):
 def test_compute_ring_size_per_token_vectorized_single_batch():
     L1, L2 = 6, 4
     _, ci, cm = mk_two_chains(L1, L2, cyclic_first=True, cyclic_second=False)
-    ring = compute_ring_size_per_token(ci, cm)
+    ring = compute_ring_size_per_token(cm, ci)
     assert ring.shape == (1, L1 + L2)
     assert torch.all(ring[0, :L1] == L1)  # fully cyclic chain
     assert torch.all(ring[0, L1:] == 0)  # non-cyclic chain
@@ -77,7 +82,7 @@ def test_compute_ring_size_per_token_vectorized_batched_same_L():
     _, ci1, cm1 = mk_single_chain(10, cyclic=True)  # total L=10
     ci = torch.cat([ci0, ci1], dim=0)
     cm = torch.cat([cm0, cm1], dim=0)
-    ring = compute_ring_size_per_token(ci, cm)
+    ring = compute_ring_size_per_token(cm, ci)
     # batch 0 checks
     assert torch.all(ring[0, :6] == 6)
     assert torch.all(ring[0, 6:10] == 0)
@@ -91,7 +96,7 @@ def test_compute_ring_size_per_token_vectorized_batched_same_L():
 def test_noncyclic_is_linear():
     L = 8
     ri, ci, cm = mk_single_chain(L, cyclic=False)
-    D = circular_relpos_per_chain(ri, ci, cm)[0]
+    D = circular_relpos_per_chain(ri, cm, ci)[0]
     expect = ri[0].unsqueeze(-1) - ri[0].unsqueeze(-2)  # (j - i)
     assert torch.equal(D, expect)
 
@@ -99,7 +104,7 @@ def test_noncyclic_is_linear():
 def test_odd_L_shortest_arc_and_antisym():
     L = 9
     ri, ci, cm = mk_single_chain(L, cyclic=True)
-    D = circular_relpos_per_chain(ri, ci, cm)[0]
+    D = circular_relpos_per_chain(ri, cm, ci)[0]
     lo, hi = -(L // 2), (L // 2)  # [-4, +4]
     assert int(D.min()) >= lo and int(D.max()) <= hi
     assert torch.all(D + D.T == 0)
@@ -108,7 +113,7 @@ def test_odd_L_shortest_arc_and_antisym():
 def test_even_L_tie_rule_antisymmetry():
     L = 10
     ri, ci, cm = mk_single_chain(L, cyclic=True)
-    D = circular_relpos_per_chain(ri, ci, cm)[0]
+    D = circular_relpos_per_chain(ri, cm, ci)[0]
     assert D[0].tolist() == [0, -1, -2, -3, -4, -5, 4, 3, 2, 1]
     assert D[0, 5].item() == -L // 2 and D[5, 0].item() == +L // 2
     assert torch.all(D + D.T == 0)
@@ -117,7 +122,7 @@ def test_even_L_tie_rule_antisymmetry():
 def test_multichain_cyclic_vs_linear_and_offblocks():
     L1, L2 = 6, 4
     ri, ci, cm = mk_two_chains(L1, L2, cyclic_first=True, cyclic_second=False)
-    D = circular_relpos_per_chain(ri, ci, cm)[0]
+    D = circular_relpos_per_chain(ri, cm, ci)[0]
 
     # Top-left cyclic block is antisymmetric
     assert torch.all(D[:L1, :L1] + D[:L1, :L1].T == 0)
@@ -146,9 +151,9 @@ def test_batched_equivalence_cyclic_blocks_same_L():
     ci = torch.cat([ci0, ci1], dim=0)
     cm = torch.cat([cm0, cm1], dim=0)
 
-    D_b = circular_relpos_per_chain(ri, ci, cm)
-    D0 = circular_relpos_per_chain(ri0, ci0, cm0)
-    D1 = circular_relpos_per_chain(ri1, ci1, cm1)
+    D_b = circular_relpos_per_chain(ri, cm, ci)
+    D0 = circular_relpos_per_chain(ri0, cm0, ci0)
+    D1 = circular_relpos_per_chain(ri1, cm1, ci1)
     assert torch.equal(D_b[0], D0[0])
     assert torch.equal(D_b[1], D1[0])
 
@@ -163,5 +168,5 @@ def test_device_smoke(device):
     L = 10
     ri, ci, cm = mk_single_chain(L, cyclic=True)
     ri, ci, cm = ri.to(device), ci.to(device), cm.to(device)
-    D = circular_relpos_per_chain(ri, ci, cm)
+    D = circular_relpos_per_chain(ri, cm, ci)
     assert D.shape == (1, L, L)
