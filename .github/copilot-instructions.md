@@ -37,7 +37,25 @@ Main layers:
   - `env.py` - Environment variables and path definitions with auto-detection.
   - `utils.py` - Shared utility functions for seeding, device selection, path normalization.
 
-## 2. Configuration & Execution
+## 2. Environment Setup
+
+**CRITICAL: Always activate the conda environment before running any Python commands.**
+
+```bash
+conda activate protpardelle
+```
+
+This environment contains all required dependencies and must be activated before:
+
+- Running sampling: `python -m protpardelle.sample`
+- Running training: `python -m protpardelle.train`
+- Running likelihood computation: `python -m protpardelle.likelihood`
+- Running evaluation: `python -m protpardelle.evaluate`
+- Running any tests or development scripts
+
+The conda environment should be set up according to the project's dependency requirements (see `pyproject.toml` or environment files in the repository).
+
+## 3. Configuration & Execution
 
 - Configuration is managed through typed dataclasses in `src/protpardelle/configs/`:
   - `running_dataclasses.py` - Runtime configuration classes
@@ -49,7 +67,7 @@ Main layers:
 - Model checkpoints + configs stored under `model_params/` (subfolders `configs/` + `weights/`). Loading expects a config name matching weight stems (e.g. `cc58_epoch416.pth` with `configs/cc58.yaml`).
 - Path detection: `env.py` provides auto-detection of project root via `PROJECT_ROOT_DIR` env var, `pyproject.toml` search, or git root.
 
-## 3. Sampling Workflow (critical path)
+## 4. Sampling Workflow (critical path)
 
 1. Read motif / input structure (if any) via `load_feats_from_pdb` -> features dict.
 2. Build search space (product of user lists) -> each combination calls model inference.
@@ -60,19 +78,19 @@ Main layers:
 
 Key invariants: ensure `residue_index` starts at 1 post normalization; apply `add_chain_gap` only once; keep shape conventions `(B, N, A, 3)` for coords, `(B, N)` for indices/masks.
 
-### 3.1. Likelihood Computation
+### 4.1. Likelihood Computation
 
 - Entry point: `python -m protpardelle.likelihood` for model evaluation and likelihood computation.
 - Uses same model loading and data processing as sampling but computes likelihood scores.
 - Supports both backbone-only and full-atom likelihood computation.
 
-## 4. Training Workflow
+## 5. Training Workflow
 
 - Entry: `python -m protpardelle.train <model_name> <output_dir>` (often submitted via `scripts/train.sbatch`).
 - Datasets assembled from YAML config fields referencing prepared AI-CATH / interface data (see README dataset section). Sampling noise schedule functions: `uniform`, `lognormal`, `mpnn`, `constant` (must match those in `diffusion.noise_schedule`).
 - Losses: masked MSE for coordinates (`masked_mse_loss`) + optionally cross-entropy for sequence tokens (`masked_cross_entropy_loss`). When adding a new loss term, wire it in inside the training loop where `total_loss` is accumulated (search for existing accumulation pattern). Maintain masking semantics (divide by sum(mask) with clamp >=1e-6).
 
-## 5. Data & Tensor Conventions
+## 6. Data & Tensor Conventions
 
 - Atom ordering fixed by `residue_constants.atom_order`; backbone indices stored in `bb_idxs` in `CoordinateDenoiser`.
 - Chain indices are integer (0-based) while chain IDs in PDB are letters. The mapping is reversible via `chain_id_mapping` passed into writers.
@@ -81,7 +99,7 @@ Key invariants: ensure `residue_index` starts at 1 post normalization; apply `ad
 - Cyclic peptides: `cycpep.py` handles cyclic protein structures with specialized utilities for bond formation and ring closure.
 - Sequence processing: `sequence.py` provides utilities for amino acid type conversions with support for different token counts (20, 21, 22).
 
-## 6. Extending the Model
+## 7. Extending the Model
 
 - To add a new conditioning modality (e.g., distance map):
   1. Extend feature construction (likely in `sample.py` and training dataset assembly) producing a tensor aligned with `(B, N, A, 3)` or `(B, N, F)`.
@@ -89,14 +107,14 @@ Key invariants: ensure `residue_index` starts at 1 post normalization; apply `ad
   3. Update forward pass to concat new conditioning before projection into transformer / U-ViT blocks.
 - To add a new noise schedule: implement in `diffusion.noise_schedule` with a new literal name; update any config enumerations and validation.
 
-## 7. Common Pitfalls
+## 8. Common Pitfalls
 
 - Forgetting to normalize `residue_index` (must start at 1) causes relative positional encoding mismatches.
 - Applying `add_chain_gap` twice inflates residue indices and breaks relative chain encodings (search for single call in `load_feats_from_pdb`).
 - Incorrect atom name introduces silent skip during PDB load (`if np.sum(mask) < 0.5: continue`). Provide canonical atoms or they’re dropped.
 - When creating PDBs for backbone-only generation: ensure 4 atoms ordering (`N, CA, C, O`) else `bb_coords_to_pdb_str` may mis-assign residue boundaries.
 
-## 8. Testing & Minimal Verification
+## 9. Testing & Minimal Verification
 
 - Test structure: `tests/` directory contains comprehensive test suite:
   - `test_likelihood.py` - Likelihood computation tests
@@ -107,12 +125,12 @@ Key invariants: ensure `residue_index` starts at 1 post normalization; apply `ad
 - For quick smoke test after changes: load a small model config (e.g. `cc58`), run a single sample with `--num-samples 1 --num-mpnn-seqs 0` and confirm PDB output + no NaNs.
 - Integration tests: Use synthetic coordinates and motif indices following tensor shape conventions `(B, N, A, 3)` for coords, `(B, N)` for indices/masks.
 
-## 9. Style & Dependencies
+## 10. Style & Dependencies
 
 - Python 3.12 / `uv` for dependency pinning; avoid adding large new deps unless essential. Use existing utilities in `utils.py` for seeding, device selection, path normalization.
 - Logging via stdlib `logging`; prefer `logger.info` / `logger.warning` over print.
 
-## 10. When Unsure
+## 11. When Unsure
 
 Reference: `models.py` for forward & sampling loops; `sample.py` for end-to-end pipeline; `pdb_io.py` for I/O conventions. Mirror existing patterns before refactoring. Ask for clarification if introducing API-breaking changes to CLI flags or config keys.
 
@@ -129,7 +147,7 @@ Key reference files:
 - `env.py` - Environment and path management
 - `utils.py` - Shared utility functions
 
-## 11. ASCII only for generated code
+## 12. ASCII only for generated code
 
 - All generated code (source, diffs, patches) must use plain ASCII characters.
 - Allowed: standard punctuation, quotes ' " , parentheses, brackets, braces, hash for comments, backticks for Markdown.
