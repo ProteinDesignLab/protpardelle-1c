@@ -1,0 +1,79 @@
+name: Release
+
+on:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: "Tag to release"
+                required: true
+                type: string
+
+env:
+    PYTHON_VERSION: "3.10"
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+            id-token: write
+
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v3
+              with:
+                  version: "latest"
+
+            - name: Install build dependencies
+              run: |
+                  uv pip install build twine
+
+            - name: Build package
+              run: |
+                  python -m build
+
+            - name: Check package
+              run: |
+                  twine check dist/*
+
+            - name: Publish to PyPI
+              if: ${{ secrets.PYPI_API_TOKEN }}
+              env:
+                  TWINE_USERNAME: __token__
+                  TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+              run: |
+                  twine upload dist/*
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  tag_name: ${{ github.ref_name }}
+                  name: Release ${{ github.ref_name }}
+                  body: |
+                      ## Changes in ${{ github.ref_name }}
+
+                      See the [changelog](CHANGELOG.md) for detailed changes.
+
+                      ## Installation
+
+                      ```bash
+                      pip install protpardelle
+                      ```
+
+                      ## Quick Start
+
+                      See the [README](README.md) for usage examples.
+                  draft: false
+                  prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}

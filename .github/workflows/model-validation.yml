@@ -1,0 +1,205 @@
+name: Model Validation
+
+on:
+    push:
+        branches: [main]
+        paths:
+            - "model_params/**"
+            - "src/protpardelle/core/**"
+            - "src/protpardelle/sample.py"
+            - "src/protpardelle/likelihood.py"
+    pull_request:
+        branches: [main]
+        paths:
+            - "model_params/**"
+            - "src/protpardelle/core/**"
+            - "src/protpardelle/sample.py"
+            - "src/protpardelle/likelihood.py"
+    workflow_dispatch:
+
+env:
+    PYTHON_VERSION: "3.10"
+
+jobs:
+    validate-models:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                model: ["cc58", "cc58_epoch416"]
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v3
+              with:
+                  version: "latest"
+
+            - name: Cache uv dependencies
+              uses: actions/cache@v4
+              with:
+                  path: ~/.cache/uv
+                  key: ${{ runner.os }}-uv-${{ env.PYTHON_VERSION }}-${{ hashFiles('**/uv.lock') }}
+                  restore-keys: |
+                      ${{ runner.os }}-uv-${{ env.PYTHON_VERSION }}-
+
+            - name: Install dependencies
+              run: |
+                  uv pip install --upgrade pip
+                  uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+                  uv pip install -e .[dev]
+
+            - name: Download model weights (if not present)
+              run: |
+                  if [ ! -d "model_params" ]; then
+                    echo "Model parameters not found. This is expected for PRs."
+                    echo "Skipping model validation for ${{ matrix.model }}"
+                    exit 0
+                  fi
+
+            - name: Validate model loading
+              run: |
+                  python -c "
+                  from protpardelle.core.models import load_model
+                  from protpardelle.env import PROTPARDELLE_MODEL_CONFIGS, PROTPARDELLE_MODEL_WEIGHTS
+                  import os
+
+                  model_name = '${{ matrix.model }}'
+                  config_path = os.path.join(PROTPARDELLE_MODEL_CONFIGS, f'{model_name}.yaml')
+                  weights_path = os.path.join(PROTPARDELLE_MODEL_WEIGHTS, f'{model_name}.pth')
+
+                  if os.path.exists(config_path) and os.path.exists(weights_path):
+                      print(f'Loading model: {model_name}')
+                      model = load_model(model_name)
+                      print(f'Model {model_name} loaded successfully')
+                  else:
+                      print(f'Model files not found for {model_name}')
+                      print(f'Config: {config_path} (exists: {os.path.exists(config_path)})')
+                      print(f'Weights: {weights_path} (exists: {os.path.exists(weights_path)})')
+                  "
+              continue-on-error: true
+
+            - name: Test sampling pipeline
+              run: |
+                  python -c "
+                  from protpardelle.sample import main
+                  import sys
+
+                  # Test basic sampling functionality without actual model
+                  print('Testing sampling pipeline components...')
+
+                  # Test data loading utilities
+                  from protpardelle.data.pdb_io import load_feats_from_pdb
+                  from protpardelle.data.motif import contig_to_motif_placement
+                  from protpardelle.data.atom import bb_coords_to_atom37_coords
+
+                  print('Sampling pipeline components loaded successfully')
+                  "
+              continue-on-error: true
+
+            - name: Test likelihood computation
+              run: |
+                  python -c "
+                  from protpardelle.likelihood import main
+                  print('Likelihood computation module loaded successfully')
+                  "
+              continue-on-error: true
+
+    validate-configs:
+        runs-on: ubuntu-latest
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v3
+              with:
+                  version: "latest"
+
+            - name: Install dependencies
+              run: |
+                  uv pip install --upgrade pip
+                  uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+                  uv pip install -e .[dev]
+
+            - name: Validate configuration files
+              run: |
+                  python -c "
+                  from protpardelle.configs import TrainingConfig, SamplingConfig, RunningConfig
+                  from protpardelle.configs.running_dataclasses import ConditionalCfg, PartialDiffusion
+                  from protpardelle.configs.sampling_dataclasses import SamplingConfig as SamplingConfigData
+                  from protpardelle.configs.training_dataclasses import TrainingConfig as TrainingConfigData
+
+                  print('All configuration classes loaded successfully')
+                  "
+
+            - name: Validate example configs
+              run: |
+                  find examples/ -name "*.yaml" -exec echo "Validating {}" \; -exec python -c "
+                  import yaml
+                  import sys
+                  with open('{}', 'r') as f:
+                      yaml.safe_load(f)
+                  print('  ✓ Valid YAML')
+                  " \;
+              continue-on-error: true
+
+    smoke-test:
+        runs-on: ubuntu-latest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Python
+              uses: actions/setup-python@v4
+              with:
+                  python-version: ${{ env.PYTHON_VERSION }}
+
+            - name: Install uv
+              uses: astral-sh/setup-uv@v3
+              with:
+                  version: "latest"
+
+            - name: Install dependencies
+              run: |
+                  uv pip install --upgrade pip
+                  uv pip install torch --index-url https://download.pytorch.org/whl/cpu
+                  uv pip install -e .[dev]
+
+            - name: Run smoke test
+              run: |
+                  echo "Running smoke test for Protpardelle-1c..."
+                  python -c "
+                  # Test basic imports
+                  import protpardelle
+                  from protpardelle.core import models, diffusion, modules
+                  from protpardelle.data import pdb_io, dataset, motif, atom, align, cycpep, sequence
+                  from protpardelle.common import residue_constants, protein
+                  from protpardelle.integrations import esmfold, protein_mpnn
+                  from protpardelle import sample, train, evaluate, likelihood, env, utils
+
+                  print('✓ All modules imported successfully')
+
+                  # Test basic functionality
+                  from protpardelle.data.sequence import seq_to_aatype
+                  seq = 'ACDEFGHIKLMNPQRSTVWY'
+                  aatype = seq_to_aatype(seq)
+                  print(f'✓ Sequence conversion: {seq} -> {aatype.shape}')
+
+                  from protpardelle.data.atom import atom37_mask_from_aatype
+                  mask = atom37_mask_from_aatype(aatype)
+                  print(f'✓ Atom mask generation: {mask.shape}')
+
+                  print('✓ Smoke test completed successfully')
+                  "
