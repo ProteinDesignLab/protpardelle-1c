@@ -1,15 +1,22 @@
 name: Release
 
 on:
-    push:
-        tags:
-            - "v*"
     workflow_dispatch:
         inputs:
             tag:
                 description: "Tag to release"
                 required: true
                 type: string
+            enable_pypi:
+                description: "Enable PyPI publishing"
+                required: false
+                type: boolean
+                default: false
+            enable_github_release:
+                description: "Enable GitHub release creation"
+                required: false
+                type: boolean
+                default: false
 
 env:
     PYTHON_VERSION: "3.10"
@@ -49,20 +56,23 @@ jobs:
                   twine check dist/*
 
             - name: Publish to PyPI
-              if: ${{ secrets.PYPI_API_TOKEN }}
+              if: ${{ inputs.enable_pypi == true && secrets.PYPI_API_TOKEN != '' }}
               env:
                   TWINE_USERNAME: __token__
                   TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
               run: |
+                  echo "🚀 Publishing to PyPI..."
                   twine upload dist/*
+                  echo "✅ Successfully published to PyPI"
 
-            - name: Create GitHub Release
+            - name: Create GitHub Release (Draft)
               uses: softprops/action-gh-release@v2
+              if: ${{ inputs.enable_github_release == true }}
               with:
-                  tag_name: ${{ github.ref_name }}
-                  name: Release ${{ github.ref_name }}
+                  tag_name: ${{ inputs.tag }}
+                  name: Release ${{ inputs.tag }}
                   body: |
-                      ## Changes in ${{ github.ref_name }}
+                      ## Changes in ${{ inputs.tag }}
 
                       See the [changelog](CHANGELOG.md) for detailed changes.
 
@@ -75,5 +85,21 @@ jobs:
                       ## Quick Start
 
                       See the [README](README.md) for usage examples.
-                  draft: false
-                  prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+                  draft: true
+                  prerelease: ${{ contains(inputs.tag, 'rc') || contains(inputs.tag, 'alpha') || contains(inputs.tag, 'beta') }}
+
+            - name: Build Summary
+              run: |
+                  echo "✅ Package built successfully"
+                  echo "📦 Package files created in dist/"
+                  echo ""
+                  echo "🔒 Publishing Status:"
+                  echo "- PyPI Publishing: ${{ inputs.enable_pypi == true && secrets.PYPI_API_TOKEN != '' && 'ENABLED' || 'DISABLED' }}"
+                  echo "- GitHub Release: ${{ inputs.enable_github_release == true && 'ENABLED' || 'DISABLED' }}"
+                  echo ""
+                  if [ "${{ inputs.enable_pypi }}" = "true" ] && [ -z "${{ secrets.PYPI_API_TOKEN }}" ]; then
+                    echo "⚠️  PyPI publishing requested but PYPI_API_TOKEN secret not configured"
+                  fi
+                  if [ "${{ inputs.enable_github_release }}" = "true" ]; then
+                    echo "📝 GitHub release will be created as DRAFT (not published)"
+                  fi
