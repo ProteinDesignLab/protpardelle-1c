@@ -56,11 +56,15 @@ jobs:
                   twine check dist/*
 
             - name: Publish to PyPI
-              if: ${{ inputs.enable_pypi == true && secrets.PYPI_API_TOKEN != '' }}
+              if: ${{ inputs.enable_pypi == true }}
               env:
                   TWINE_USERNAME: __token__
                   TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
               run: |
+                  if [ -z "${{ secrets.PYPI_API_TOKEN }}" ]; then
+                    echo "❌ PyPI publishing requested but PYPI_API_TOKEN secret not configured"
+                    exit 1
+                  fi
                   echo "🚀 Publishing to PyPI..."
                   twine upload dist/*
                   echo "✅ Successfully published to PyPI"
@@ -94,12 +98,20 @@ jobs:
                   echo "📦 Package files created in dist/"
                   echo ""
                   echo "🔒 Publishing Status:"
-                  echo "- PyPI Publishing: ${{ inputs.enable_pypi == true && secrets.PYPI_API_TOKEN != '' && 'ENABLED' || 'DISABLED' }}"
-                  echo "- GitHub Release: ${{ inputs.enable_github_release == true && 'ENABLED' || 'DISABLED' }}"
-                  echo ""
-                  if [ "${{ inputs.enable_pypi }}" = "true" ] && [ -z "${{ secrets.PYPI_API_TOKEN }}" ]; then
-                    echo "⚠️  PyPI publishing requested but PYPI_API_TOKEN secret not configured"
+                  if [ "${{ inputs.enable_pypi }}" = "true" ]; then
+                    if [ -z "${{ secrets.PYPI_API_TOKEN }}" ]; then
+                      echo "- PyPI Publishing: REQUESTED but SECRET NOT CONFIGURED"
+                    else
+                      echo "- PyPI Publishing: ENABLED"
+                    fi
+                  else
+                    echo "- PyPI Publishing: DISABLED"
                   fi
+
                   if [ "${{ inputs.enable_github_release }}" = "true" ]; then
-                    echo "📝 GitHub release will be created as DRAFT (not published)"
+                    echo "- GitHub Release: ENABLED (will be created as DRAFT)"
+                  else
+                    echo "- GitHub Release: DISABLED"
                   fi
+                  echo ""
+                  echo "📝 Note: GitHub releases are created as DRAFT (not published automatically)"
