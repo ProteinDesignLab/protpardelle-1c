@@ -1,70 +1,31 @@
 """Functions for motif contig parsing.
 
-Author: Tianyu Lu
+Authors: Tianyu Lu, Zhaoyang Li
 """
-
-import random
-import string
 
 import numpy as np
 
 
-def motif_placement_to_motif_idx(
-    motif_placement: str, motif_id_to_length: dict[str, int]
-) -> list[int]:
-    """
-    Convert a motif placement string to 0-indexed motif index
-    Also need a mapping from motif segment id to motif segment length
-
-    E.g. "12/B/40/A/41" -> [12, 13, 14, 55, 56, 57, 58]
-    """
-    motif_idx = []
-
-    curr_idx = 0
-
-    for s in motif_placement.split("/"):
-        if s.isalpha():  # motif segment
-            motif_length = motif_id_to_length[s]
-            m_idx = list(range(curr_idx, curr_idx + motif_length))
-            motif_idx.extend(m_idx)
-            curr_idx += motif_length
-        else:  # scaffold segment
-            curr_idx += int(s)
-
-    return motif_idx
-
-
-def motif_idx_to_motif_placement(motif_idx, total_length: int):
-    """
-    Assume each motif index is one chain for linear_sum_assignment based dynamic indexing
-    """
-    idx_sorted = np.argsort(motif_idx)
-    chains = string.ascii_uppercase[: len(motif_idx)]
-    chains = [chains[i] for i in idx_sorted]
-    motif_idx_sorted = np.sort(motif_idx)
-    motif_placement = [str(motif_idx_sorted[0]), chains[0]]
-    for i, idx in enumerate(motif_idx_sorted[1:], start=1):
-        motif_placement.extend((str(idx - motif_idx_sorted[i - 1] - 1), chains[i]))
-    motif_placement.append(str(total_length - motif_idx_sorted[-1] - 1))
-    scaffold_length = sum(int(sl) for sl in motif_placement if not str(sl).isalpha())
-    assert scaffold_length + len(motif_idx) == total_length
-    return "/".join(motif_placement)
-
-
 def remaining_min_possible(
-    num_remaining, parsed_segments, scaffold_indices, current_si
+    num_remaining: int,
+    parsed_segments: list[tuple[str, tuple[str, int, int]]],
+    scaffold_indices: list[int],
+    current_si: int,
 ):
     return sum(
-        parsed_segments[scaffold_indices[current_si + j + 1]][1][0]
+        parsed_segments[scaffold_indices[current_si + j + 1]][1][1]
         for j in range(num_remaining)
     )
 
 
 def remaining_max_possible(
-    num_remaining, parsed_segments, scaffold_indices, current_si
+    num_remaining: int,
+    parsed_segments: list[tuple[str, tuple[str, int, int]]],
+    scaffold_indices: list[int],
+    current_si: int,
 ):
     return sum(
-        parsed_segments[scaffold_indices[current_si + j + 1]][1][1]
+        parsed_segments[scaffold_indices[current_si + j + 1]][1][2]
         for j in range(num_remaining)
     )
 
@@ -99,7 +60,9 @@ def contig_to_motif_placement(contig: str, length_range: list[int], num_samples:
     for typ, p in zip(segment_types, parts):
         if typ == "scaffold":
             start, end = map(int, p.split("-"))
-            parsed_segments.append(("scaffold", (start, end)))
+            parsed_segments.append(
+                ("scaffold", ("A", start, end))
+            )  # "A" is a dummy placeholder
         else:
             chain = p[0]
             start, end = map(int, p[1:].split("-"))
@@ -128,7 +91,7 @@ def contig_to_motif_placement(contig: str, length_range: list[int], num_samples:
         remaining_scaffolds = len(scaffold_indices)
 
         for si, seg_idx in enumerate(scaffold_indices):
-            min_len, max_len = parsed_segments[seg_idx][1]
+            _, min_len, max_len = parsed_segments[seg_idx][1]
 
             if si < len(scaffold_indices) - 1:
                 # Adjust bounds so remaining segments can still fit
