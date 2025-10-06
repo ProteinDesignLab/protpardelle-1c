@@ -155,34 +155,34 @@ We recommend reading and running the example sampling configs under `examples/sa
 
 ```bash
 # Unconditional sampling
-python -m protpardelle.sample examples/sampling/00_unconditional.yaml --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/00_unconditional.yaml --num-samples 8 --num-mpnn-seqs 0
 
 # Partial diffusion
-python -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
 # Motif scaffolding
-python -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
 # MotifBench benchmark
-python -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --num-samples 100 --num-mpnn-seqs 8 --use-wandb
+python3 -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --num-samples 100 --num-mpnn-seqs 8 --use-wandb
 
 # BindCraft benchmark
-python -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --num-samples 100 --num-mpnn-seqs 2 --use-wandb
+python3 -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --num-samples 100 --num-mpnn-seqs 2 --use-wandb
 
 # Multichain
-python -m protpardelle.sample examples/sampling/05_multichain.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/05_multichain.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 
 # Thread in a new sequence given a backbone: experimental feature
-python -m protpardelle.sample examples/sampling/06_fastrelax.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/06_fastrelax.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 
 # Backbone-only La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample examples/sampling/07_rfdiffusion.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
+python3 -m protpardelle.sample examples/sampling/07_rfdiffusion.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # All-atom La-Proteina / RFdiffusion benchmark
-python -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
+python3 -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --motif-dir examples/motifs/rfdiffusion/ --num-samples 200 --num-mpnn-seqs 1 --use-wandb
 
 # Generate structure conditioned on sequence: experimental feature, useful as a decoy generator
-python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
+python3 -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
 ```
 
 ## Sampling Examples
@@ -316,9 +316,9 @@ A copy of the training config and model checkpoints will be saved under the spec
 We provide a script for computing likelihoods and latents as described in [Song _et al._, ICLR 2021](https://arxiv.org/abs/2011.13456)
 
 ```bash
-python -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path examples/motifs/nanobody
-python -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path examples/motifs/nanobody
-python -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path examples/motifs/nanobody
+python3 -m protpardelle.likelihood --model-name cc58 --epoch 416 --pdb-path examples/motifs/nanobody
+python3 -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path examples/motifs/nanobody
+python3 -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path examples/motifs/nanobody
 ```
 
 Previously, all-atom model likelihoods were computed on backbone atoms only. Here we compute all-atom model likelihoods for the all-atom models and backbone-only model likelihoods for the backbone-only models.
