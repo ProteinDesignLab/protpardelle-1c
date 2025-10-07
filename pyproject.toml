@@ -46,12 +46,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-cov", "pre-commit", "ruff", "mypy", "pyright"]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-timeout",
+    "pytest-xdist",
+    "pre-commit",
+    "ruff",
+    "mypy",
+    "pyright",
+]
 viz = ["py3dmol", "matplotlib", "seaborn"]
-
-[tool.pytest.ini_options]
-addopts = "-v -s"
-testpaths = ["tests"]
 
 [tool.setuptools.dynamic]
 version = { attr = "protpardelle.__version__" }
