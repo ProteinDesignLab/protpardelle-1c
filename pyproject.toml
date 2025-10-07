@@ -46,7 +46,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-cov", "pre-commit"]
+dev = ["pytest", "pytest-cov", "pre-commit", "ruff", "mypy", "pyright"]
 viz = ["py3dmol", "matplotlib", "seaborn"]
 
 [tool.pytest.ini_options]
@@ -62,3 +62,51 @@ include = ["protpardelle", "protpardelle.*"]
 
 [tool.setuptools.package-data]
 protpardelle = ["configs/**/*.yaml"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src"]
+extend-exclude = [
+    ".git",
+    ".hg",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svn",
+    ".venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+preview = true
+select = ["E", "F", "I", "B", "UP", "SIM", "C90"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["protpardelle"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.ruff.format]
+preview = true
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.mypy]
+mypy_path = "src"
+files = ["src", "tests"]
+check_untyped_defs = true
+warn_unused_configs = true
+no_implicit_reexport = true
+strict_equality = true
+disallow_any_generics = true
+
+[[tool.mypy.overrides]]
+module = "matplotlib.*,seaborn.*"
+ignore_missing_imports = true
