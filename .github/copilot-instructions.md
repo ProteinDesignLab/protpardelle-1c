@@ -118,7 +118,7 @@ Key invariants: ensure `residue_index` starts at 1 post normalization; apply `ad
 
 - Test structure: `tests/` directory contains comprehensive test suite:
   - `test_likelihood.py` - Likelihood computation tests
-  - `test_evaluate.py` - Evaluation and self-consistency tests  
+  - `test_evaluate.py` - Evaluation and self-consistency tests
   - `test_env.py` - Environment and configuration tests
   - `conftest.py` - Shared test fixtures and configuration
   - `pytest.ini` - Test configuration and settings
@@ -137,7 +137,7 @@ Reference: `models.py` for forward & sampling loops; `sample.py` for end-to-end 
 Key reference files:
 
 - `core/models.py` - Model architecture and sampling loops
-- `sample.py` - End-to-end sampling pipeline  
+- `sample.py` - End-to-end sampling pipeline
 - `data/pdb_io.py` - I/O conventions and PDB handling
 - `data/atom.py` - Atom representation conversions
 - `data/align.py` - Structural alignment utilities
