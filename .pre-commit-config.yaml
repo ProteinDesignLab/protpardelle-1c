@@ -18,4 +18,27 @@ repos:
     rev: v1.18.2
     hooks:
       - id: mypy
-        args: [--python-version=3.12]
+        name: mypy
+        files: .*\.py
+        additional_dependencies:
+          - pandas-stubs
+          - scipy-stubs
+          - types-PyYAML
+          - types-PyYAML
+          - types-aiofiles
+          - types-cachetools
+          - types-python-dateutil
+          - types-python-slugify
+          - types-pytz
+          - types-redis
+          - types-requests
+          - types-six
+          - types-tabulate
+          - types-toml
+          - types-tqdm
+        args:
+          - --ignore-missing-imports
+          - --no-namespace-packages
+          - --enable-incomplete-feature=Unpack
+          - --python-version=3.12
+        entry: mypy

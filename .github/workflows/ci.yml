@@ -33,11 +33,16 @@ jobs:
           use-mamba: true
           auto-activate-base: false
 
-      # The setup script installs uv, torch and protpardelle package; --foldseek triggers a conda install of Foldseek.
-      - name: Install project (uv + torch + package) and Foldseek
+      # The setup script installs uv, torch and protpardelle package
+      - name: Install project (uv + torch + package)
         shell: bash -l {0}
         run: |
-          bash setup.sh --foldseek
+          bash setup.sh --dev
+
+      - name: Install Foldseek
+        shell: bash -l {0}
+        run: |
+          conda install -c conda-forge -c bioconda foldseek -y
 
       # Use dev mode to create the params directory structure without network downloads.
       - name: Prepare model parameters (dev-only; no downloads)

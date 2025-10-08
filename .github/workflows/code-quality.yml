@@ -27,9 +27,9 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v3
-      - name: Install package + dev tools (fast via uv)
-        run: |
-          uv pip install -e ".[dev]"
+
+      - name: Install dev deps into runner Python
+        run: uv pip install --system -e ".[dev]"
+
       - name: Run mypy
-        run: |
-          mypy --python-version 3.12
+        run: mypy --python-version 3.12
