@@ -19,7 +19,7 @@ jobs:
         python-version: ["3.12"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Set up a real Conda env, as your install flow expects conda + mamba.
       # Official action docs: conda-incubator/setup-miniconda.
