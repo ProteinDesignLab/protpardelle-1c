@@ -128,8 +128,8 @@ export LIGANDMPNN_WEIGHTS=/abs/path/to/LigandMPNN
 # Default output directory (optional; defaults to <project_root>/results)
 export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir
 
-# Foldseek binary path (set this if foldseek is not already on PATH)
-export FOLDSEEK_BIN=/abs/path/to/foldseek/bin
+# Foldseek binary path, **one level under the bin directory** (set this if foldseek is not already on PATH)
+export FOLDSEEK_BIN=/abs/path/to/foldseek/bin/foldseek
 ```
 
 ## Available Models
