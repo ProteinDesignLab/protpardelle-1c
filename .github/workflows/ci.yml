@@ -1,28 +1,34 @@
-name: CI
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: ci
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main", "dev"]
   pull_request:
-    branches: ["**"]
-
-# Cancel superseded runs on the same ref
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    branches: ["main", "dev"]
 
 jobs:
-  test:
+  linux:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     strategy:
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.10", "3.11", "3.12"]
+        test-gpu: ["false"] # add GPU testing when available
+    defaults:
+      run:
+        shell: bash -l {0}
+    name: Linux py ${{ matrix.python-version }} tests ${{ matrix.test-gpu }}
 
     steps:
       - uses: actions/checkout@v5
-
-      # Set up a real Conda env, as your install flow expects conda + mamba.
-      # Official action docs: conda-incubator/setup-miniconda.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.x"
       - name: Set up Miniconda (${{ matrix.python-version }})
         uses: conda-incubator/setup-miniconda@v3
         with:
@@ -31,42 +37,44 @@ jobs:
           activate-environment: protpardelle
           channels: conda-forge,bioconda,defaults
           use-mamba: true
-          auto-activate-base: false
-
-      # The setup script installs uv, torch and protpardelle package
-      - name: Install project (uv + torch + package)
-        shell: bash -l {0}
+      - name: Set environment
         run: |
           bash setup.sh --dev
-
-      - name: Install Foldseek
-        shell: bash -l {0}
+      - name: Verify GPU setup
+        if: matrix.test-gpu == true
         run: |
-          conda install -c conda-forge -c bioconda foldseek -y
+          python -c "
+          import torch
+          print(f'PyTorch CUDA available: {torch.cuda.is_available()}')
+          if torch.cuda.is_available():
+              print(f'CUDA devices: {torch.cuda.device_count()}')
+              print(f'Device name: {torch.cuda.get_device_name(0)}')
+          "
 
-      # Use dev mode to create the params directory structure without network downloads.
-      - name: Prepare model parameters (dev-only; no downloads)
-        shell: bash -l {0}
+      - name: Check style
         run: |
-          bash download_model_params.sh --dev
-
-      - name: Show environment
-        shell: bash -l {0}
+          pre-commit run --all-files
+      - name: Run tests (parallel with coverage)
         run: |
-          python -V
-          which python
-          pip list | grep -E '^(torch|protpardelle|ruff|mypy)' || true
-
-      # The pytest.ini defines slow/gpu/requires_model/requires_checkpoint markers; exclude them in CI.
-      - name: Run tests
-        shell: bash -l {0}
-        run: |
-          mkdir -p reports
-          pytest -m "not slow and not gpu and not requires_model and not requires_checkpoint" --junit-xml=reports/junit.xml
-
-      - name: Upload JUnit report
-        if: always()
+          pytest -n auto --dist=loadscope \
+            --cov=protpardelle --cov-report=xml --cov-report=html \
+            tests/
+      - name: Upload code coverage report
         uses: actions/upload-artifact@v4
         with:
-          name: junit-${{ matrix.python-version }}
-          path: reports/junit.xml
+          name: code-coverage-html
+          path: htmlcov
+      - name: Create code coverage markdown report
+        run: |
+          dotnet tool install -g dotnet-reportgenerator-globaltool
+          reportgenerator -reports:coverage.xml -targetdir:coveragereport -reporttypes:'MarkdownSummaryGithub'
+      - name: Write to job summary
+        run: cat coveragereport/SummaryGithub.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Add comment to PR # Only applicable if 'MarkdownSummaryGithub' or one of the other Markdown report types is generated
+        if: github.event_name == 'pull_request'
+        run: gh pr comment $PR_NUMBER --body-file coveragereport/SummaryGithub.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.number }}
+        continue-on-error: true # workflow triggered by PRs from external forks cannot comment
