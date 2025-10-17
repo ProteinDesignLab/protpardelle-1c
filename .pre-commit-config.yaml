@@ -1,44 +1,36 @@
-# Run checks on both commit and push
-default_stages: [commit, push]
-
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: v0.13.3
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.4.0
     hooks:
-      # Run the linter.
+      - id: check-added-large-files
+        args: [--maxkb=40000, --enforce-all]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
       - id: ruff-check
-        args: [--fix, --exit-non-zero-on-fix]
-        types_or: [python, pyi]
-      # Run the formatter.
+        args: [--fix]
       - id: ruff-format
-        types_or: [python, pyi]
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.18.2
     hooks:
       - id: mypy
-        name: mypy
-        files: .*\.py
+        stages: [pre-push]
         additional_dependencies:
-          - pandas-stubs
-          - scipy-stubs
-          - types-PyYAML
-          - types-PyYAML
           - types-aiofiles
           - types-cachetools
           - types-python-dateutil
           - types-python-slugify
           - types-pytz
+          - types-PyYAML
           - types-redis
           - types-requests
           - types-six
           - types-tabulate
           - types-toml
-          - types-tqdm
         args:
           - --ignore-missing-imports
           - --no-namespace-packages
           - --enable-incomplete-feature=Unpack
           - --python-version=3.12
-        entry: mypy
