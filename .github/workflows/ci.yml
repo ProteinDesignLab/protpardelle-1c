@@ -41,6 +41,7 @@ jobs:
         run: |
           bash setup.sh --dev
           bash download_model_params.sh --dev
+          conda install -c bioconda foldseek
       - name: Verify GPU setup
         if: matrix.test-gpu == true
         run: |
