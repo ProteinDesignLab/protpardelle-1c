@@ -141,7 +141,7 @@ select = [
     "RUF", # ruff
 ]
 extend-select = ["W", "PLW"]
-ignore = ["B905", "E203", "E501", "E741"]
+ignore = ["B905", "E203", "E501", "E741", "UP037"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["protpardelle"]
