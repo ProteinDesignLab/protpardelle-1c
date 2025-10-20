@@ -47,13 +47,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "mypy",
+    "pre-commit",
+    "pyright",
     "pytest",
     "pytest-cov",
     "pytest-timeout",
-    "pre-commit",
+    "pytest-xdist",
     "ruff",
-    "mypy",
-    "pyright",
 ]
 viz = ["py3dmol", "matplotlib", "seaborn"]
 
