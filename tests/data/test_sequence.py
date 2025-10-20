@@ -233,7 +233,7 @@ class TestSequenceEdgeCases:
         # The function should be case-sensitive as per standard amino acid notation
         seq_upper = "ACDEFG"
 
-        result_upper = seq_to_aatype(seq_upper)
+        _ = seq_to_aatype(seq_upper)
 
         # Test that lowercase should raise an error
         with pytest.raises(KeyError):
@@ -251,5 +251,5 @@ class TestSequenceEdgeCases:
         """Test with empty batch."""
         seqs = []
 
-        with pytest.raises(ValueError, match="max\\(\\) iterable argument is empty"):
+        with pytest.raises(ValueError, match="max\\(\\) arg is an empty sequence"):
             seq_to_aatype_batched(seqs)
