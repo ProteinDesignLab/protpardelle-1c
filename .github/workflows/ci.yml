@@ -40,6 +40,7 @@ jobs:
       - name: Set environment
         run: |
           bash setup.sh --dev
+          bash download_model_params.sh --dev
       - name: Verify GPU setup
         if: matrix.test-gpu == true
         run: |

@@ -36,4 +36,3 @@ if [[ "$DEV_MODE" == "true" ]]; then
 else
     uv pip install -e .
 fi
-
