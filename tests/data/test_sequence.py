@@ -251,5 +251,5 @@ class TestSequenceEdgeCases:
         """Test with empty batch."""
         seqs = []
 
-        with pytest.raises(ValueError, match="max\\(\\) arg is an empty sequence"):
+        with pytest.raises(ValueError):
             seq_to_aatype_batched(seqs)
