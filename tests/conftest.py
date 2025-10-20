@@ -207,16 +207,3 @@ def set_random_seed(rng_seed: int) -> None:
     """Set random seeds for reproducible tests."""
     torch.manual_seed(rng_seed)
     np.random.seed(rng_seed)
-
-
-# Test markers
-def pytest_configure(config):
-    """Configure pytest markers."""
-    config.addinivalue_line(
-        "markers", "slow: marks tests as slow (deselect with '-m \"not slow\"')"
-    )
-    config.addinivalue_line(
-        "markers", "gpu: marks tests that require GPU (deselect with '-m \"not gpu\"')"
-    )
-    config.addinivalue_line("markers", "integration: marks integration tests")
-    config.addinivalue_line("markers", "unit: marks unit tests")

@@ -4,12 +4,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 import torch
-from jaxtyping import Float, Int
 
 from protpardelle.core.models import (
-    CoordinateDenoiser,
-    MiniMPNN,
-    Protpardelle,
     apply_crop_cond_strategy,
     contig_to_idx,
     fill_motif_seq,
@@ -85,9 +81,7 @@ class TestApplyCropCondStrategy:
         motif_idx = [[1, 2], [3, 4]]
         motif_aatype = [["ALA", "GLY"], ["PHE", "TRP"]]
 
-        result = apply_crop_cond_strategy(
-            coords, motif_idx, motif_aatype, strategy="backbone"
-        )
+        result = apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy="backbone")
 
         assert result.shape == coords.shape
         assert result.dtype == coords.dtype
@@ -99,9 +93,7 @@ class TestApplyCropCondStrategy:
         motif_idx = [[1, 2], [3, 4]]
         motif_aatype = [["ALA", "GLY"], ["PHE", "TRP"]]
 
-        result = apply_crop_cond_strategy(
-            coords, motif_idx, motif_aatype, strategy="sidechain"
-        )
+        result = apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy="sidechain")
 
         assert result.shape == coords.shape
 
@@ -112,9 +104,7 @@ class TestApplyCropCondStrategy:
         motif_idx = [[1, 2], [3, 4]]
         motif_aatype = [["ALA", "GLY"], ["PHE", "TRP"]]
 
-        result = apply_crop_cond_strategy(
-            coords, motif_idx, motif_aatype, strategy="sidechain-tip"
-        )
+        result = apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy="sidechain-tip")
 
         assert result.shape == coords.shape
 
@@ -185,12 +175,8 @@ class TestGetTimeDependentScale:
         curr_step = 50
         num_steps = 100
 
-        scale_stage1 = get_time_dependent_scale(
-            "constant", w, curr_step, num_steps, stage2=False
-        )
-        scale_stage2 = get_time_dependent_scale(
-            "constant", w, curr_step, num_steps, stage2=True
-        )
+        scale_stage1 = get_time_dependent_scale("constant", w, curr_step, num_steps, stage2=False)
+        scale_stage2 = get_time_dependent_scale("constant", w, curr_step, num_steps, stage2=True)
 
         assert isinstance(scale_stage1, float)
         assert isinstance(scale_stage2, float)
@@ -322,9 +308,7 @@ class TestParseFixedPosStr:
         residue_index = torch.tensor([1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15])
         chain_index = torch.tensor([0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1])
 
-        result = parse_fixed_pos_str(
-            fixed_pos_str, chain_id_mapping, residue_index, chain_index
-        )
+        result = parse_fixed_pos_str(fixed_pos_str, chain_id_mapping, residue_index, chain_index)
 
         expected = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]  # All positions
         assert result == expected
@@ -336,9 +320,7 @@ class TestParseFixedPosStr:
         residue_index = torch.tensor([1, 2, 3, 4, 5])
         chain_index = torch.tensor([0, 0, 0, 0, 0])
 
-        result = parse_fixed_pos_str(
-            fixed_pos_str, chain_id_mapping, residue_index, chain_index
-        )
+        result = parse_fixed_pos_str(fixed_pos_str, chain_id_mapping, residue_index, chain_index)
 
         expected = [0, 1, 2]  # First three positions
         assert result == expected
@@ -350,9 +332,7 @@ class TestParseFixedPosStr:
         residue_index = torch.tensor([1, 2, 3, 4, 5, 6])
         chain_index = torch.tensor([0, 0, 0, 0, 0, 0])
 
-        result = parse_fixed_pos_str(
-            fixed_pos_str, chain_id_mapping, residue_index, chain_index
-        )
+        result = parse_fixed_pos_str(fixed_pos_str, chain_id_mapping, residue_index, chain_index)
 
         expected = [0, 1, 4, 5]  # Positions 1, 2, 5, 6
         assert result == expected
@@ -364,68 +344,9 @@ class TestParseFixedPosStr:
         residue_index = torch.tensor([1, 2, 3])
         chain_index = torch.tensor([0, 0, 0])
 
-        result = parse_fixed_pos_str(
-            fixed_pos_str, chain_id_mapping, residue_index, chain_index
-        )
+        result = parse_fixed_pos_str(fixed_pos_str, chain_id_mapping, residue_index, chain_index)
 
         assert result == []
-
-
-class TestMiniMPNN:
-    """Test the MiniMPNN class."""
-
-    def test_initialization(self, mock_config):
-        """Test class initialization."""
-        # Create a proper TrainingConfig-like object
-        from protpardelle.configs.training_dataclasses import TrainingConfig
-
-        # This would require a full config setup, so we'll test the basic structure
-        # In a real test, you'd create a proper config object
-        pass
-
-    def test_forward_interface(self):
-        """Test forward method interface."""
-        # This would require a full model setup
-        # In a real test, you'd create a proper MiniMPNN instance and test forward pass
-        pass
-
-
-class TestCoordinateDenoiser:
-    """Test the CoordinateDenoiser class."""
-
-    def test_initialization_interface(self):
-        """Test initialization interface."""
-        # This would require a full config setup
-        # In a real test, you'd create a proper CoordinateDenoiser instance
-        pass
-
-    def test_forward_interface(self):
-        """Test forward method interface."""
-        # This would require a full model setup
-        # In a real test, you'd create a proper CoordinateDenoiser instance and test forward pass
-        pass
-
-
-class TestProtpardelle:
-    """Test the Protpardelle class."""
-
-    def test_initialization_interface(self):
-        """Test initialization interface."""
-        # This would require a full config setup
-        # In a real test, you'd create a proper Protpardelle instance
-        pass
-
-    def test_forward_interface(self):
-        """Test forward method interface."""
-        # This would require a full model setup
-        # In a real test, you'd create a proper Protpardelle instance and test forward pass
-        pass
-
-    def test_sample_interface(self):
-        """Test sample method interface."""
-        # This would require a full model setup
-        # In a real test, you'd create a proper Protpardelle instance and test sampling
-        pass
 
 
 class TestLoadModel:
@@ -435,9 +356,7 @@ class TestLoadModel:
     @patch("protpardelle.core.models.Protpardelle")
     @patch("protpardelle.core.models.torch.load")
     @patch("protpardelle.core.models.norm_path")
-    def test_load_model(
-        self, mock_norm_path, mock_torch_load, mock_protpardelle, mock_load_config
-    ):
+    def test_load_model(self, mock_norm_path, mock_torch_load, mock_protpardelle, mock_load_config):
         """Test load_model function."""
         # Mock the config loading
         mock_config = Mock()

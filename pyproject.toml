@@ -69,7 +69,8 @@ protpardelle = ["configs/**/*.yaml"]
 
 [tool.ruff]
 target-version = "py312"
-line-length = 88
+preview = true
+line-length = 100
 src = ["src"]
 extend-exclude = [
     ".git",
@@ -78,30 +79,86 @@ extend-exclude = [
     ".pytest_cache",
     ".ruff_cache",
     ".svn",
+    ".tox",
     ".venv",
+    "_build",
+    "buck-out",
     "build",
     "dist",
 ]
 
 [tool.ruff.lint]
-preview = true
-select = ["E", "F", "I", "B", "UP", "SIM", "C90"]
-ignore = ["E501", "E741", "E203"]
-extend-select = ["RUF", "T20"]
+# Check https://beta.ruff.rs/docs/rules/ for full list of rules
+select = [
+    "E", # pycodestyle
+    # "W",   # pycodestyle
+    "F",   # Pyflakes
+    "C90", # mccabe
+    "I",   # isort
+    # "N",   # pep8-naming
+    # "D",   # pydocstyle
+    "UP", # pyupgrade
+    # "YTT", # flake8-2020
+    # "ANN", # flake8-annotations
+    # "S",   # flake8-bandit
+    # "BLE", # flake8-blind-except
+    # "FBT", # flake8-boolean-trap
+    "B", # flake8-bugbear
+    # "A",   # flake8-builtins
+    # "COM", # flake8-commas
+    # "C4",  # flake8-comprehensions
+    # "DTZ", # flake8-datetimez
+    # "T10", # flake8-debugger
+    # "DJ",  # flake8-django
+    # "EM",  # flake8-errmsg
+    # "EXE", # flake8-executable
+    # "ISC", # flake8-implicit-str-concat
+    # "ICN", # flake8-import-conventions
+    # "G",   # flake8-logging-format
+    # "INP", # flake8-no-pep420
+    # "PIE", # flake8-pie
+    # "T20", # flake8-print
+    # "PYI", # flake8-pyi
+    # "PT",  # flake8-pytest-style
+    # "Q",   # flake8-quotes
+    # "RSE", # flake8-raise
+    # "RET", # flake8-return
+    # "SLF", # flake8-self
+    "SIM", # flake8-simplify
+    "TID", # flake8-tidy-imports
+    # "TCH", # flake8-type-checking
+    # "ARG", # flake8-unused-arguments
+    # "PTH", # flake8-use-pathlib
+    # "ERA", # eradicate
+    # "PD",  # pandas-vet
+    # "PGH", # pygrep-hooks
+    # "PLC", # pylint-convention
+    "PLE", # pylint-error
+    # "PLR", # pylint-refactor
+    # "PLW", # pylint-warning
+    # "TRY", # tryceratops
+    # "NPY", # numpy
+    "RUF", # ruff
+]
+extend-select = ["W", "PLW"]
+ignore = ["B905", "E203", "E501", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["protpardelle"]
 
 [tool.ruff.lint.mccabe]
-max-complexity = 10
+max-complexity = 12
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 "tests/**" = ["T20"]
 "scripts/**" = ["T20"]
+"*.ipynb" = ["F401", "RUF059"]
 
 [tool.ruff.format]
-preview = true
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
@@ -117,5 +174,53 @@ warn_unreachable = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = "matplotlib.*,seaborn.*"
+module = [
+    "Bio.*",
+    "git.*",
+    "hydra.*",
+    "IPython.*",
+    "matplotlib.*",
+    "mdtraj.*",
+    "numpy.*",
+    "openmm.*",
+    "tqdm.*",
+    "torch.*",
+    "torch_geometric.*",
+    "torch_scatter.*",
+    "pandas.*",
+    "pdbfixer.*",
+    "pytest.*",
+    "omegaconf.*",
+    "scipy.*",
+    "sklearn.*",
+]
 ignore_missing_imports = true
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.pytest.ini_options]
+addopts = "-v -s --tb=short --strict-markers --color=yes"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:importlib._bootstrap"]
+env = ["TQDM_DISABLE=1"]
+markers = [
+    "slow: marks tests as slow",
+    "gpu: marks tests that require GPU",
+    "integration: marks integration tests",
+    "unit: marks unit tests",
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+source = ["protpardelle"]
+omit = ["*/tests/*", "*/.venv/*", "*/site-packages/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"

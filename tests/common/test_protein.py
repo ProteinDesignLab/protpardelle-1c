@@ -60,15 +60,11 @@ class TestProtein:
             # Extend the arrays to have at least 63 residues
             extended_coords = torch.cat([sample_coords, sample_coords[: 63 - L]], dim=0)
             extended_aatype = torch.cat([sample_aatype, sample_aatype[: 63 - L]], dim=0)
-            extended_mask = torch.cat(
-                [sample_atom_mask, sample_atom_mask[: 63 - L]], dim=0
-            )
+            extended_mask = torch.cat([sample_atom_mask, sample_atom_mask[: 63 - L]], dim=0)
             extended_residx = torch.cat(
                 [sample_residue_index, sample_residue_index[: 63 - L]], dim=0
             )
-            extended_cyclic = torch.cat(
-                [sample_cyclic_mask, sample_cyclic_mask[: 63 - L]], dim=0
-            )
+            extended_cyclic = torch.cat([sample_cyclic_mask, sample_cyclic_mask[: 63 - L]], dim=0)
             extended_bfactors = torch.cat([b_factors, b_factors[: 63 - L]], dim=0)
             too_many_chains = torch.arange(63, dtype=torch.long)  # 63 chains (0-62)
         else:
@@ -80,9 +76,7 @@ class TestProtein:
             extended_bfactors = b_factors
             too_many_chains = torch.arange(L, dtype=torch.long) % 63
 
-        with pytest.raises(
-            ValueError, match="Cannot build an instance with more than 62 chains"
-        ):
+        with pytest.raises(ValueError, match="Cannot build an instance with more than 62 chains"):
             Protein(
                 atom_positions=extended_coords.numpy(),
                 aatype=extended_aatype.numpy(),
@@ -154,9 +148,7 @@ class TestHetero:
         """Test creating a Hetero instance."""
         # Create sample heteroatom data
         hetero_atom_positions = [
-            [
-                np.random.randn(5, 3) for _ in range(3)
-            ],  # 3 heteroatoms with 5 atoms each
+            [np.random.randn(5, 3) for _ in range(3)],  # 3 heteroatoms with 5 atoms each
         ]
         hetero_aatype = ["ATP", "GDP", "ZN"]
         hetero_atom_types = [

@@ -1,7 +1,6 @@
 """Tests for protpardelle.common.residue_constants module."""
 
 import numpy as np
-import pytest
 
 from protpardelle.common import residue_constants
 
@@ -189,9 +188,7 @@ class TestResidueConstants:
         mapping = {aa: i for i, aa in enumerate("ACDEFGHIKLMNPQRSTVWY")}
         mapping["X"] = len(mapping)  # Add X to mapping
 
-        onehot = residue_constants.sequence_to_onehot(
-            sequence, mapping, map_unknown_to_x=True
-        )
+        onehot = residue_constants.sequence_to_onehot(sequence, mapping, map_unknown_to_x=True)
 
         assert onehot.shape == (len(sequence), len(mapping))
 
@@ -231,7 +228,7 @@ class TestResidueConstants:
         assert "S" in residue_constants.van_der_waals_radius
 
         # Check that values are positive
-        for atom, radius in residue_constants.van_der_waals_radius.items():
+        for radius in residue_constants.van_der_waals_radius.values():
             assert radius > 0
 
     def test_ca_ca_distance(self):
