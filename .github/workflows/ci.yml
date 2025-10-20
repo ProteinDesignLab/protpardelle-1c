@@ -53,7 +53,7 @@ jobs:
 
       - name: Check style
         run: |
-          pre-commit run --all-files
+          pre-commit run
       - name: Run tests (parallel with coverage)
         run: |
           pytest -n auto --dist=loadscope \
