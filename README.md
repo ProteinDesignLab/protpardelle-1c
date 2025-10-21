@@ -179,6 +179,12 @@ python -m protpardelle.sample examples/sampling/08_rfdiffusion_allatom.yaml --mo
 
 # Generate structure conditioned on sequence: experimental feature, useful as a decoy generator
 python -m protpardelle.sample examples/sampling/09_structure_prediction.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
+
+# Partial diffusion with residue level constraints: e.g. fixed motif partial diffusion
+python -m protpardelle.sample examples/sampling/10-crop_cond_partial_diffusion.yaml --motif-dir examples/motifs/nanobody/ --num-samples 8 --num-mpnn-seqs 0
+
+# Latent interpolation. See the Likelihood section for details.
+python3 -m protpardelle.sample ./examples/sampling/11_latent_interp.yaml --motif-pdb /path/to/state0_or_1/file.pdb --num-samples 64 --num-mpnn-seqs 0
 ```
 
 ## Sampling Examples
