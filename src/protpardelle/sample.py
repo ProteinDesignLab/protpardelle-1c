@@ -490,6 +490,7 @@ def sample(
     project_name: str = "protpardelle-1c-sampling",
     motif_dir: Path = Path("examples/motifs/nanobody"),
     motif_pdb: Path | None = None,
+    motif_contig_override: str | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
     batch_size: int = 32,
@@ -506,6 +507,7 @@ def sample(
         project_name (str, optional): Name of project for wandb. Defaults to "protpardelle-1c-sampling".
         motif_dir (Path, optional): Folder containing motifs to scaffold. Defaults to Path("motifs/nanobody").
         motif_pdb (Path, optional): Overrides motif_dir, use by specifying the motifs inside sampling_yaml_path to null
+        motif_contig_override (str, optional): If specified, overrides motif_contig in sampling_yaml_path for all motifs. Defaults to None.
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
         batch_size (int, optional): Number of samples per batch. Defaults to 32.
@@ -571,7 +573,10 @@ def sample(
                 motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
             else:
                 motif_fps.append(motif_dir / motif_cfg)
-        motif_contigs.append(motif_contig)
+        if motif_contig_override is not None:
+            motif_contigs.append(motif_contig_override)
+        else:
+            motif_contigs.append(motif_contig)
         scaffold_lengths.append(length_range)
         hotspots.append(hs)
         ssadj_fps.append(ssadj)
@@ -680,7 +685,10 @@ def sample(
                     "pdb_file_path"
                 ] = motif_fp
                 sampling_config["sampling"]["partial_diffusion"]["n_steps"] = rs
-                sampling_config["sampling"]["motif_file_path"] = "test_dir/empty.pdb"
+                if motif_contig is None:
+                    sampling_config["sampling"]["motif_file_path"] = "test_dir/empty.pdb"
+                else:
+                    sampling_config["sampling"]["motif_file_path"] = motif_fp
             else:
                 sampling_config["sampling"]["motif_file_path"] = motif_fp
             sampling_config["sampling"]["dx"] = dx

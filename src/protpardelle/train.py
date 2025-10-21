@@ -501,8 +501,6 @@ def train(
     )
     if (
         config.train.ckpt_path != ""
-        and "ckpt_optim" in config.train
-        and config.train.ckpt_optim
     ):
         for _ in range(total_steps):
             runner.scheduler.step()

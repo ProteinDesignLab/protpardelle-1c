@@ -61,9 +61,9 @@ def batch_from_pdbs(list_of_pdbs):
 def forward_ode(
     model,
     batch,
-    n_steps=100,
-    sigma_min=0.01,
-    sigma_max=800,
+    n_steps=500,
+    sigma_min=0.001,
+    sigma_max=80,
     verbose=False,
     eps=None,
 ):
@@ -114,7 +114,7 @@ def forward_ode(
 
     # Initialize noise schedule/parameters
     noise_schedule = lambda t: diffusion.noise_schedule(
-        t, s_min=sigma_min / sigma_data, s_max=sigma_max / sigma_data
+        t, s_min=sigma_min, s_max=sigma_max
     )
     timesteps = torch.linspace(0, 1, n_steps + 1)
     sigma = noise_schedule(timesteps[0])

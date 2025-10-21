@@ -15,7 +15,7 @@ sampling:
     s_min: 0.001 # stop applying schurn after this noise level
   motif_file_path: # input motif, can also be a directory of motifs
   partial_diffusion:
-    enabled: false # use partial diffusion
+    enabled: true # use partial diffusion
     pdb_file_path: # input pdb to apply partial diffusion
     n_steps: 100 # go back these many steps, 100 here with sampling.n_steps=500 means going back to step 400
   dx: 0.0 # translate motif in x-axis
@@ -50,19 +50,19 @@ sampling:
       end: 0.92
 
   allatom_cfg:
-    sidechain_mode: true
-    skip_mpnn_proportion: 0.6
+    sidechain_mode: false
+    skip_mpnn_proportion: 1.0
     use_fullmpnn: false
-    use_fullmpnn_for_final: true
+    use_fullmpnn_for_final: false
     anneal_seq_resampling_rate: "linear"
-    jump_steps: true
-    uniform_steps: false
+    jump_steps: false
+    uniform_steps: true
 
   stage2_cfg:
-    enabled: true
-    rewind_steps: 150
-    n_steps: 500
-    s_churn: 200
+    enabled: false
+    rewind_steps: 50
+    n_steps: 200
+    s_churn: 100
     step_scale: 1.2
     sidechain_mode: true
     skip_mpnn_proportion: 1.0

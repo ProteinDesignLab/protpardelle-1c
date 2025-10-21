@@ -1,0 +1,24 @@
+# For demonstration only, not properly benchmarked
+partial_diffusion:
+  enabled: true
+  rewind_steps: [500]
+search_space:
+  models:
+    # - ["cc58", "416", "sampling_partial_diffusion"]
+    - ["cc89", "415", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+    # - ["cc134", "188", "sampling_partial_diffusion_allatom"]
+  step_scales: [1.0]
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - partial_diffusion
+total_lengths:
+  - null
+hotspots:
+  - null
+ssadj:
+  - null

@@ -976,9 +976,14 @@ class Protpardelle(nn.Module):
                 motif_all_atom = motif_all_atom_stage1.clone()
             else:
                 # center the motif on CA coords
-                motif_all_atom = motif_all_atom - torch.mean(
-                    motif_all_atom[..., 1:2, :], dim=-3, keepdim=True
-                )
+                if partial_diffusion is not None and pd.enabled:
+                    pd_feats, _ = load_feats_from_pdb(pd.pdb_file_path, include_pos_feats=True)
+                    centering_delta = torch.mean(pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True).to(self.device)
+                else:
+                    centering_delta = torch.mean(
+                        motif_all_atom[..., 1:2, :], dim=-3, keepdim=True
+                    )
+                motif_all_atom = motif_all_atom - centering_delta
 
                 # randomly rotate the motif
                 random_rots = torch.stack(
@@ -1149,7 +1154,7 @@ class Protpardelle(nn.Module):
                 pd.pdb_file_path = [pd.pdb_file_path] * batch_size
 
             pd_motif_aatype, pd_motif_idx, pd_coords = [], [], []
-            for pd_fp in pd.pdb_file_path:
+            for pd_idx, pd_fp in enumerate(pd.pdb_file_path):
                 pd_feats, _ = load_feats_from_pdb(pd_fp, include_pos_feats=True)
                 pd_motif_aatype.append(
                     make_fixed_size_1d(
@@ -1158,14 +1163,24 @@ class Protpardelle(nn.Module):
                     )[0]
                 )
                 pd_motif_idx.append(torch.arange(pd_feats["aatype"].shape[0]))
-                pd_feats["atom_positions"] = pd_feats[
-                    "atom_positions"
-                ] - torch.mean(
-                    pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
-                )
+
+                if motif_all_atom_stage1 is not None:
+                    pd_atom_positions = pd_feats["atom_positions"].to(self.device)
+                else:
+                    pd_atom_positions = pd_feats[
+                        "atom_positions"
+                    ] - torch.mean(
+                        pd_feats["atom_positions"][:, 1:2, :], dim=-3, keepdim=True
+                    )
+                    pd_atom_positions = pd_atom_positions.to(self.device)
+                    if cc.enabled:
+                        pd_atom_positions = torch.einsum(
+                            "ij,lnj->lni", random_rots[pd_idx], pd_atom_positions
+                        )
+                
                 pd_coords.append(
                     make_fixed_size_1d(
-                        pd_feats["atom_positions"],
+                        pd_atom_positions,
                         fixed_size=seq_mask.shape[-1],
                     )[0]
                 )
@@ -1200,6 +1215,12 @@ class Protpardelle(nn.Module):
             print(
                 f"Partial diffusion, going back to step {pd_step}, T={(pd_step / n_steps):.2f}"
             )
+            # xt_0 = torch.load("/scratch/users/tianyulu/protpardelle-1c-sampling-results/likelihood_cc89_415/adk/latents/4AKE_A_encoded_latent.pt")
+            # xt_1 = torch.load("/scratch/users/tianyulu/protpardelle-1c-sampling-results/likelihood_cc89_415/adk/latents/1AKE_A_encoded_latent.pt")
+            # for ii, interp_i in enumerate(range(32)):
+            #     alpha = interp_i / 31
+            #     interp_xt = xt_0 * (1 - alpha) + xt_1 * alpha
+            #     xt[ii] = interp_xt
         else:
             xt = torch.randn(*coords_shape).to(self.device)
 
