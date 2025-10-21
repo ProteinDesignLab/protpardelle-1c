@@ -792,6 +792,8 @@ class Protpardelle(nn.Module):
         dz: float | None = None,
         dummy_fill_mode: Literal["zero", "CA"] = "zero",
         xt_start: TensorType["b n a x", float] | None = None,
+        xt_0_path: str | None = None,
+        xt_1_path: str | None = None,
         partial_diffusion: DictConfig | None = None,
         conditional_cfg: DictConfig | None = None,
         motif_placements_full: list[str] | None = None,
@@ -854,6 +856,7 @@ class Protpardelle(nn.Module):
 
         cc = apply_dotdict_recursively(conditional_cfg)  # shorthand
         pd = apply_dotdict_recursively(partial_diffusion)
+        latent_interpolation = xt_0_path is not None and xt_1_path is not None
 
         if sse_cond is not None and adj_cond is not None:
             sse_cond = sse_cond.to(self.device)
@@ -1215,12 +1218,15 @@ class Protpardelle(nn.Module):
             print(
                 f"Partial diffusion, going back to step {pd_step}, T={(pd_step / n_steps):.2f}"
             )
-            # xt_0 = torch.load("/scratch/users/tianyulu/protpardelle-1c-sampling-results/likelihood_cc89_415/adk/latents/4AKE_A_encoded_latent.pt")
-            # xt_1 = torch.load("/scratch/users/tianyulu/protpardelle-1c-sampling-results/likelihood_cc89_415/adk/latents/1AKE_A_encoded_latent.pt")
-            # for ii, interp_i in enumerate(range(32)):
-            #     alpha = interp_i / 31
-            #     interp_xt = xt_0 * (1 - alpha) + xt_1 * alpha
-            #     xt[ii] = interp_xt
+
+            if latent_interpolation:
+                print(f"Using supplied xt_0 and xt_1 for latent interpolation")
+                xt_0 = torch.load(xt_0_path)
+                xt_1 = torch.load(xt_1_path)
+                for ii, interp_i in enumerate(range(batch_size)):
+                    alpha = interp_i / (batch_size - 1)
+                    interp_xt = xt_0 * (1 - alpha) + xt_1 * alpha
+                    xt[ii] = interp_xt
         else:
             xt = torch.randn(*coords_shape).to(self.device)
 
@@ -1665,7 +1671,7 @@ class Protpardelle(nn.Module):
                             hotspot_mask=hotspot_mask,
                             struct_self_cond=(
                                 x_self_cond
-                                if self.config.train.self_cond_train_prob > 0.5
+                                if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
                                 else None
                             ),
                             struct_crop_cond=crop_cond_coords,
@@ -1848,7 +1854,7 @@ class Protpardelle(nn.Module):
                             hotspot_mask=hotspot_mask,
                             struct_self_cond=(
                                 x_self_cond
-                                if self.config.train.self_cond_train_prob > 0.5
+                                if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
                                 else None
                             ),
                             struct_crop_cond=crop_cond_coords,

@@ -62,6 +62,7 @@ def forward_ode(
     model,
     batch,
     n_steps=500,
+    pd_step=500,  # go up to pd_step for partial noising
     sigma_min=0.001,
     sigma_max=80,
     verbose=False,
@@ -118,6 +119,8 @@ def forward_ode(
     )
     timesteps = torch.linspace(0, 1, n_steps + 1)
     sigma = noise_schedule(timesteps[0])
+    if pd_step != n_steps:
+        timesteps = timesteps[: pd_step + 1]
 
     # init to sigma_min
     xt = init_coords + torch.randn_like(init_coords) * sigma
@@ -216,6 +219,7 @@ def runner(
     model_name: str = "cc58",
     epoch: str = "416",
     pdb_path: Path = PROJECT_ROOT_DIR / "examples/motifs/nanobody",
+    pd_step: int = 500,
     batch_size: int = 32,
     seed: int | None = None,
 ):
@@ -227,6 +231,8 @@ def runner(
         epoch (str): The epoch number of the model checkpoint to load.
         pdb_path (Path): The path to a single .pdb file or a directory
             containing multiple .pdb files.
+        pd_step (int, optional): If different from n_steps, perform forward ode up to this step, obtaining an intermediate latent.
+            Defaults to 500 (full forward ode).
         batch_size (int, optional): The number of samples to process in each batch.
             Defaults to 32.
         seed (int | None, optional): A random seed for reproducibility.
@@ -267,7 +273,7 @@ def runner(
             si, ei = -bs, num_samples
 
         batch = batch_from_pdbs(pdb_paths[si:ei])
-        results = forward_ode(model, batch)
+        results = forward_ode(model, batch, pd_step=pd_step)
 
         for k, v in results.items():
             all_results[k].extend(v)
@@ -284,7 +290,7 @@ def runner(
     for i, latent in enumerate(latents):
         curr_seq_mask = torch.nonzero(seq_masks[i]).flatten()
         torch.save(
-            latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_encoded_latent.pt"
+            latent[curr_seq_mask], latent_save_dir / f"{pdb_stems[i]}_{pd_step}_steps_encoded_latent.pt"
         )
 
     for k, v in all_results.items():
@@ -307,6 +313,9 @@ def main(
         PROJECT_ROOT_DIR / "examples/motifs/nanobody",
         help="Path to a .pdb file or a directory containing .pdb files",
     ),
+    pd_step: int = typer.Option(
+        500, help="If different from n_steps, perform forward ode up to this step"
+    ),
     batch_size: int = typer.Option(32, help="Batch size for processing samples"),
     seed: int | None = typer.Option(None, help="Random seed for reproducibility"),
 ):
@@ -315,6 +324,7 @@ def main(
         model_name=model_name,
         epoch=epoch,
         pdb_path=pdb_path,
+        pd_step=pd_step,
         batch_size=batch_size,
         seed=seed,
     )

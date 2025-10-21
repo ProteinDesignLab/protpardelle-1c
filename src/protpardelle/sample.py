@@ -113,7 +113,7 @@ def save_samples(
             coords_to_save = atom37_coords_from_bb(sampled_coords[idx])
         else:
             coords_to_save = sampled_coords[idx]
-        samp_save_name = save_dir / f"sample_{save_name}_{idx}.pdb"
+        samp_save_name = save_dir / f"sample_{save_name}_{idx:02d}.pdb"
 
         if bb_only:
             coords_to_save = coords_to_save[:, (0, 1, 2, 4), :]
@@ -179,6 +179,8 @@ def draw_samples(
     return_aux: bool = False,
     return_sampling_runtime: bool = False,
     return_coords_and_aux: bool = False,
+    xt_0_path: Path | None = None,
+    xt_1_path: Path | None = None,
     **sampling_kwargs,
 ):
 
@@ -216,6 +218,8 @@ def draw_samples(
         return_last=False,
         return_aux=True,
         dummy_fill_mode=model.config.data.dummy_fill_mode,
+        xt_0_path=xt_0_path,
+        xt_1_path=xt_1_path,
         **sampling_kwargs,
     )
     # account for possible override from partial diffusion input structure
@@ -331,6 +335,8 @@ def generate(
     adj_cond=None,
     run_name="",
     allatom=False,
+    xt_0_path: Path | None = None,
+    xt_1_path: Path | None = None
 ):
     device = get_default_device()
     if num_mpnn_seqs > 0:
@@ -424,6 +430,8 @@ def generate(
                     if motif_placements_full is not None
                     else None
                 ),
+                xt_0_path=xt_0_path,
+                xt_1_path=xt_1_path,
                 **curr_sampling_config,
             )
         )
@@ -493,7 +501,7 @@ def sample(
     motif_contig_override: str | None = None,
     num_samples: int = 8,
     num_mpnn_seqs: int = 8,
-    batch_size: int = 32,
+    batch_size: int = 64,
     save_shortname: bool = True,
     seed: int | None = None,
     use_wandb: bool = False,
@@ -510,7 +518,7 @@ def sample(
         motif_contig_override (str, optional): If specified, overrides motif_contig in sampling_yaml_path for all motifs. Defaults to None.
         num_samples (int, optional): Total number of samples to draw. Defaults to 8.
         num_mpnn_seqs (int, optional): If 0, skips sequence design and ESMFold evaluation. Defaults to 8.
-        batch_size (int, optional): Number of samples per batch. Defaults to 32.
+        batch_size (int, optional): Number of samples per batch. Defaults to 64.
         seed (int | None, optional): Random seed. Defaults to None.
         use_wandb (bool, optional): If True, use wandb to log results. Defaults to False.
         array_id (int | None, optional): Slurm array id for parallelization. Defaults to None.
@@ -540,6 +548,17 @@ def sample(
     )
     if partial_diffusion:
         search_space["rewind_steps"] = runner_cfg["partial_diffusion"]["rewind_steps"]
+    else:
+        search_space["rewind_steps"] = [None]
+
+    latent_interpolation = (
+        "latent_interpolation" in runner_cfg and runner_cfg["latent_interpolation"]["enabled"]
+    )
+    if latent_interpolation:
+        latent_dir = Path(runner_cfg["latent_interpolation"]["latent_dir"])
+        search_space["latent_paths"] = [[latent_dir / latent_pt[0], latent_dir / latent_pt[1]] for latent_pt in runner_cfg["latent_interpolation"]["latent_paths"]]
+    else:
+        search_space["latent_paths"] = [[None, None]]
 
     motif_fps = []
     motif_contigs = []
@@ -592,30 +611,23 @@ def sample(
     # for a given setting
     for curr_params in tqdm(all_params, "Evaluating search space"):
 
-        if partial_diffusion:
-            (
-                (model_name, epoch, sampling_config_name),
-                stepscale,
-                schurn,
-                cc_start,
-                (dx, dy, dz),
-                rs,
-            ) = curr_params
-        else:
-            (
-                (model_name, epoch, sampling_config_name),
-                stepscale,
-                schurn,
-                cc_start,
-                (dx, dy, dz),
-            ) = curr_params
-            rs = None
+        ((model_name, epoch, sampling_config_name),
+            stepscale,
+            schurn,
+            cc_start,
+            (dx, dy, dz),
+            rs,
+            (xt_0_path, xt_1_path)
+        ) = curr_params
 
         dxs = f"{dx:.1f}"
         dys = f"{dy:.1f}"
         dzs = f"{dz:.1f}"
 
-        save_suffix = f"{model_name}-epoch{epoch}-{sampling_config_name}-ss{stepscale}-schurn{schurn}-ccstart{cc_start}-dx{dxs}-dy{dys}-dz{dzs}-rewind{rs}"
+        if latent_interpolation:
+            save_suffix = f"{model_name}-epoch{epoch}-{sampling_config_name}-ss{stepscale}-schurn{schurn}-ccstart{cc_start}-dx{dxs}-dy{dys}-dz{dzs}-rewind{rs}-{xt_0_path.stem}-{xt_1_path.stem}"
+        else:
+            save_suffix = f"{model_name}-epoch{epoch}-{sampling_config_name}-ss{stepscale}-schurn{schurn}-ccstart{cc_start}-dx{dxs}-dy{dys}-dz{dzs}-rewind{rs}"
 
         per_config_save_dir = save_dir / save_suffix  # one config, all motifs
         per_config_save_dir.mkdir(exist_ok=True)
@@ -803,6 +815,8 @@ def sample(
                 adj_cond=adj_cond,
                 run_name=run_name,
                 allatom=allatom,
+                xt_0_path=xt_0_path,
+                xt_1_path=xt_1_path,
             )
 
             curr_runtime = aux[-2]["runtime"]
@@ -1070,7 +1084,7 @@ def main(
     num_mpnn_seqs: int = typer.Option(
         8, help="Number of sequences to design with MPNN (0 to skip)"
     ),
-    batch_size: int = typer.Option(32, help="Batch size for sampling"),
+    batch_size: int = typer.Option(64, help="Batch size for sampling"),
     save_shortname: bool = typer.Option(
         True, help="Whether to save with short names (motif name only)"
     ),

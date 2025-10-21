@@ -316,6 +316,14 @@ python -m protpardelle.likelihood --model-name cc89 --epoch 415 --pdb-path examp
 python -m protpardelle.likelihood --model-name cc91 --epoch 383 --pdb-path examples/motifs/nanobody
 ```
 
+## Latent Interpolation
+
+The uniquely identifiable encodings (latents) can be used for latent interpolation (see Figure 10 B in [SLAE](https://www.biorxiv.org/content/10.1101/2025.10.03.680398v1)). First, obtain latents with the likelihood script above. Then see `examples/sampling/11_latent_interp.yaml` in which `latent_dir` should match the output directory of the latents and `latent_paths` point to the `.pt` latents for the start and end states. For latent interpolation with all-atom models, the ground truth sequence is used during denoising through parsing the `--motif-pdb` input. This should be either the start or end `.pdb` structure for the interpolation using which the latents were obtained.
+
+```bash
+python3 -m protpardelle.sample ./examples/sampling/11_latent_interp.yaml --motif-pdb ./examples/motifs/latent_input_pdbs/some_pdb_code.pdb --num-samples 64 --num-mpnn-seqs 0
+```
+
 Previously, all-atom model likelihoods were computed on backbone atoms only. Here we compute all-atom model likelihoods for the all-atom models and backbone-only model likelihoods for the backbone-only models.
 
 # Citation
