@@ -560,6 +560,21 @@ def sample(
     else:
         search_space["latent_paths"] = [[None, None]]
 
+    if motif_contig_override is not None:
+        length_range_override = []
+        for chain_contig in motif_contig_override.split(";/;"):
+            curr_chain_length = 0
+            for segment in chain_contig.split(";"):
+                if segment[0].isalpha():
+                    seg_start, seg_end = tuple(segment[1:].split("-"))
+                    curr_chain_length += (int(seg_end) - int(seg_start) + 1)
+                else:
+                    seg_start, seg_end = tuple(segment.split("-"))
+                    assert seg_end == seg_start, "scaffold segments must not have flexible ranges when using motif contig override."
+                    curr_chain_length += int(seg_end)
+            length_range_override.append([curr_chain_length, curr_chain_length])
+        print(f"Using motif contig override: {motif_contig_override} with length ranges {length_range_override}")
+
     motif_fps = []
     motif_contigs = []
     scaffold_lengths = []
@@ -594,9 +609,10 @@ def sample(
                 motif_fps.append(motif_dir / motif_cfg)
         if motif_contig_override is not None:
             motif_contigs.append(motif_contig_override)
+            scaffold_lengths.append(length_range_override)
         else:
             motif_contigs.append(motif_contig)
-        scaffold_lengths.append(length_range)
+            scaffold_lengths.append(length_range)
         hotspots.append(hs)
         ssadj_fps.append(ssadj)
 
