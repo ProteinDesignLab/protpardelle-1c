@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import cast
+from typing import Self, cast
 
 import numpy as np
 import torch
@@ -82,7 +82,7 @@ class DistributedContext:
         return self.world_size > 1
 
     @classmethod
-    def empty_context(cls) -> DistributedContext:
+    def empty_context(cls) -> Self:
         """Return an empty distributed context."""
 
         return cls(rank=0, local_rank=0, world_size=1)
@@ -260,7 +260,6 @@ class LinearWarmupCosineDecay(LRScheduler):
         min_lr: float = 1e-6,
         **kwargs,
     ) -> None:
-
         self.max_lr = max_lr
         self.min_lr = min_lr
         self.warmup_steps = warmup_steps
@@ -279,13 +278,9 @@ class LinearWarmupCosineDecay(LRScheduler):
         # Cosine decay phase
         elif (self.decay_steps > 0) and (self.last_epoch < self.total_steps):
             # Fraction of decay completed (0 at start of decay, 1 at end)
-            decay_progress = (self.last_epoch - self.warmup_steps) / max(
-                1, self.decay_steps
-            )
+            decay_progress = (self.last_epoch - self.warmup_steps) / max(1, self.decay_steps)
             time = decay_progress * np.pi
-            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (
-                1.0 + float(np.cos(time))
-            )
+            curr_lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (1.0 + float(np.cos(time)))
         else:
             curr_lr = self.min_lr
 
@@ -326,9 +321,7 @@ class ProtpardelleTrainer:
 
         # Determine batch size and num_workers
         self.batch_size = (
-            batch_size_override
-            if batch_size_override is not None
-            else self.config.train.batch_size
+            batch_size_override if batch_size_override is not None else self.config.train.batch_size
         )
         self.num_workers = (
             num_workers_override
@@ -382,11 +375,7 @@ class ProtpardelleTrainer:
             nn.DataParallel,
             DDP,
         )
-        return (
-            self.model.module
-            if isinstance(self.model, parallel_wrappers)
-            else self.model
-        )
+        return self.model.module if isinstance(self.model, parallel_wrappers) else self.model
 
     @property
     def device(self) -> torch.device:
@@ -450,9 +439,7 @@ class ProtpardelleTrainer:
         }
         checkpoint["rng"] = {
             "torch": torch.get_rng_state(),
-            "cuda": (
-                torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-            ),
+            "cuda": (torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None),
             "numpy": np.random.get_state(),
             "python": random.getstate(),
             "sampler_seed": (
@@ -485,9 +472,7 @@ class ProtpardelleTrainer:
         checkpoint_path = norm_path(checkpoint_path)
         if not checkpoint_path.is_file():
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-        checkpoint = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
-        )
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
 
         self.module.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer"])
@@ -497,9 +482,7 @@ class ProtpardelleTrainer:
         torch.set_rng_state(checkpoint["rng"]["torch"].cpu())
         if torch.cuda.is_available():
             if checkpoint["rng"]["cuda"] is None:
-                raise ValueError(
-                    "Checkpoint was trained with CUDA but current device is CPU"
-                )
+                raise ValueError("Checkpoint was trained with CUDA but current device is CPU")
             cuda_states = [state.cpu() for state in checkpoint["rng"]["cuda"]]
             torch.cuda.set_rng_state_all(cuda_states)
         np.random.set_state(checkpoint["rng"]["numpy"])
@@ -522,9 +505,7 @@ class ProtpardelleTrainer:
         if seed is not None:
             if self.ddp_enabled:
                 seed += self.distributed.rank
-            seed_everything(
-                seed, freeze_cuda=True
-            )  # use deterministic pytorch for training
+            seed_everything(seed, freeze_cuda=True)  # use deterministic pytorch for training
 
         return start_epoch, total_steps
 
@@ -550,17 +531,13 @@ class ProtpardelleTrainer:
             )
             return start_epoch, total_steps
         except FileNotFoundError:
-            logger.warning(
-                "Checkpoint file not found: %s; starting from scratch", checkpoint_path
-            )
+            logger.warning("Checkpoint file not found: %s; starting from scratch", checkpoint_path)
 
         return self.initialize_training_parameters()
 
     def log_training_info(self) -> None:
         """Log training information."""
-        logger.info(
-            "Total params: %d", sum(p.numel() for p in self.module.parameters())
-        )
+        logger.info("Total params: %d", sum(p.numel() for p in self.module.parameters()))
         logger.info(
             "Trainable params: %d",
             sum(p.numel() for p in self.module.parameters() if p.requires_grad),
@@ -575,21 +552,18 @@ class ProtpardelleTrainer:
             batch_dict = cast(dict[str, torch.Tensor], default_collate(batch))
 
             if self.config.train.crop_conditional:
-
                 atom_coords = batch_dict["coords_in"]
                 atom_mask = batch_dict["atom_mask"]
                 aatype = batch_dict["aatype"]
                 chain_index = batch_dict["chain_index"]
 
                 # Pre-compute crop conditioning mask and recentered coords for efficiency
-                atom_coords, crop_cond_mask, hotspot_mask = (
-                    make_crop_cond_mask_and_recenter_coords(
-                        atom_coords=atom_coords,
-                        atom_mask=atom_mask,
-                        aatype=aatype,
-                        chain_index=chain_index,
-                        **vars(self.config.train.crop_cond),
-                    )
+                atom_coords, crop_cond_mask, hotspot_mask = make_crop_cond_mask_and_recenter_coords(
+                    atom_coords=atom_coords,
+                    atom_mask=atom_mask,
+                    aatype=aatype,
+                    chain_index=chain_index,
+                    **vars(self.config.train.crop_cond),
                 )
                 struct_crop_cond = atom_coords * crop_cond_mask.unsqueeze(-1)
 
@@ -670,18 +644,14 @@ class ProtpardelleTrainer:
         # Crop conditioning
         if self.config.train.crop_conditional:
             if self.config.model.compute_loss_on_all_atoms:
-                raise NotImplementedError(
-                    "Crop conditioning with all atom loss not implemented"
-                )
+                raise NotImplementedError("Crop conditioning with all atom loss not implemented")
 
             crop_cond_mask = input_dict.get("crop_cond_mask")
             struct_crop_cond = input_dict.get("struct_crop_cond")
             hotspot_mask = input_dict.get("hotspot_mask")
 
             # If using correct data loader and collate_fn, these should never be None
-            assert all(
-                x is not None for x in [crop_cond_mask, struct_crop_cond, hotspot_mask]
-            )
+            assert all(x is not None for x in [crop_cond_mask, struct_crop_cond, hotspot_mask])
 
             if "hotspots" not in self.config.model.conditioning_style:
                 hotspot_mask = None  # type: ignore
@@ -698,9 +668,7 @@ class ProtpardelleTrainer:
             adj_cond = None
 
         # Noise data
-        timestep = torch.rand(batch_size, device=self.device).clamp(
-            min=tol, max=1 - tol
-        )
+        timestep = torch.rand(batch_size, device=self.device).clamp(min=tol, max=1 - tol)
         noise_level = self.module.training_noise_schedule(timestep)
         noised_coords = dummy_fill_noise_coords(
             atom_coords,
@@ -713,9 +681,7 @@ class ProtpardelleTrainer:
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, seq_mask)
 
         # Some backbone atoms may be missing; mask them to zeros
-        bb_atom_mask = (
-            bb_atom_mask * atom_mask
-        )  # float masks; multiply instead of boolean ops
+        bb_atom_mask = bb_atom_mask * atom_mask  # float masks; multiply instead of boolean ops
         if self.config.model.task == "backbone":
             noised_coords = noised_coords * bb_atom_mask.unsqueeze(-1)
         elif self.config.model.task == "ai-allatom":
@@ -759,18 +725,14 @@ class ProtpardelleTrainer:
             "codesign",
         }:
             if self.config.model.task == "backbone":
-                struct_loss_mask = torch.ones_like(
-                    atom_coords
-                ) * bb_atom_mask.unsqueeze(-1)
+                struct_loss_mask = torch.ones_like(atom_coords) * bb_atom_mask.unsqueeze(-1)
             elif self.config.model.compute_loss_on_all_atoms:
                 # Compute loss on all 37 atoms
-                struct_loss_mask = torch.ones_like(
-                    atom_coords
-                ) * unsqueeze_trailing_dims(seq_mask, atom_coords)
-            else:
-                struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(
-                    -1
+                struct_loss_mask = torch.ones_like(atom_coords) * unsqueeze_trailing_dims(
+                    seq_mask, atom_coords
                 )
+            else:
+                struct_loss_mask = torch.ones_like(atom_coords) * atom_mask.unsqueeze(-1)
 
             sigma_fp32 = torch.tensor(
                 self.config.data.sigma_data,
@@ -790,9 +752,7 @@ class ProtpardelleTrainer:
             alpha = self.config.model.mpnn_model.label_smoothing
             aatype_oh = F.one_hot(aatype, self.config.data.n_aatype_tokens).float()
             target_oh = (1 - alpha) * aatype_oh + alpha / self.module.num_tokens
-            mpnn_loss = masked_cross_entropy_loss(
-                aatype_logprobs, target_oh, seq_mask
-            ).mean()
+            mpnn_loss = masked_cross_entropy_loss(aatype_logprobs, target_oh, seq_mask).mean()
             loss = loss + mpnn_loss
             log_dict["mpnn_loss"] = mpnn_loss.detach().cpu().item()
 
@@ -843,7 +803,7 @@ class ProtpardelleTrainer:
 
 
 @record
-def train(
+def train(  # noqa: C901
     config_path: StrPath,
     output_dir: StrPath,
     device: Device = None,
@@ -873,10 +833,7 @@ def train(
         logger.info("Enabled TF32 mode for faster training on Ampere+ GPUs")
 
     # Set and resolve device with DDP if applicable
-    if device is None:
-        requested_device = get_default_device()
-    else:
-        requested_device = torch.device(device)
+    requested_device = get_default_device() if device is None else torch.device(device)
     resolved_device, distributed = resolve_device_with_distributed(requested_device)
 
     # Load config
@@ -974,11 +931,7 @@ def train(
         wandb_run = wandb.init(**wandb_kwargs)
         if wandb_run is None:
             raise RuntimeError("Failed to initialize wandb run")
-        if (
-            (wandb_run.name is None)
-            or (wandb_run.dir is None)
-            or (wandb_run.id is None)
-        ):
+        if (wandb_run.name is None) or (wandb_run.dir is None) or (wandb_run.id is None):
             raise RuntimeError("wandb returned an incomplete run object")
         run_name = wandb_run.name
         run_dir = wandb_run.dir
@@ -986,10 +939,7 @@ def train(
     else:
         # Non-main ranks reuse exp_name for logging clarity
         if exp_name is None:
-            if distributed.ddp_enabled:
-                run_name = f"run-rank{distributed.rank}"
-            else:
-                run_name = "run"
+            run_name = f"run-rank{distributed.rank}" if distributed.ddp_enabled else "run"
         else:
             run_name = exp_name
 
@@ -1051,19 +1001,15 @@ def train(
                     disable=not trainer.is_main,
                 )
                 for input_dict in progress:
-                    input_dict: dict[str, torch.Tensor] = {
-                        k: v.to(
-                            trainer.device, non_blocking=True
-                        )  # non_blocking for pin_memory
+                    input_dict: dict[str, torch.Tensor] = {  # noqa: PLW2901
+                        k: v.to(trainer.device, non_blocking=True)  # non_blocking for pin_memory
                         for k, v in input_dict.items()
                     }
                     assert "cyclic_mask" in input_dict  # TODO: test and remove
                     log_dict = trainer.train_step(input_dict)
                     log_dict["learning_rate"] = trainer.scheduler.get_last_lr()[0]
                     log_dict["epoch"] = epoch
-                    log_dict = log_distributed_mean(
-                        log_dict, trainer.device, distributed
-                    )
+                    log_dict = log_distributed_mean(log_dict, trainer.device, distributed)
 
                     # Log to wandb on main rank only
                     if trainer.is_main:
