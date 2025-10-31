@@ -60,6 +60,7 @@ ipykernel==6.29.5
 ipython==8.37.0
 ipywidgets==8.1.7
 isoduration==20.11.0
+jaxtyping==0.3.2
 jedi==0.19.2
 jinja2==3.1.4
 joblib==1.5.1
