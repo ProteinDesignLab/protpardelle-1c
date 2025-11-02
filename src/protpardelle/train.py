@@ -774,20 +774,20 @@ class ProtpardelleTrainer:
 
         with autocast(self.device.type) if self.config.train.use_amp else nullcontext():
             loss, log_dict = self.compute_loss(input_dict)
-            self.scaler.scale(loss).backward()
+        self.scaler.scale(loss).backward()
 
-            self.scaler.unscale_(self.optimizer)
+        self.scaler.unscale_(self.optimizer)
 
-            # Compute the gradient norm and add it to the log_dict
-            grad_norm = nn.utils.clip_grad_norm_(
-                self.module.parameters(),
-                self.config.train.grad_clip_val,
-            )
-            log_dict["grad_norm"] = grad_norm.item()
+        # Compute the gradient norm and add it to the log_dict
+        grad_norm = nn.utils.clip_grad_norm_(
+            self.module.parameters(),
+            self.config.train.grad_clip_val,
+        )
+        log_dict["grad_norm"] = grad_norm.item()
 
-            prev_scale = self.scaler.get_scale()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+        prev_scale = self.scaler.get_scale()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
 
         if self.scaler.get_scale() >= prev_scale:
             self.scheduler.step()
