@@ -10,7 +10,6 @@ import random
 import subprocess
 import sys
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Self, cast
 
@@ -772,7 +771,7 @@ class ProtpardelleTrainer:
 
         self.optimizer.zero_grad()
 
-        with autocast(self.device.type) if self.config.train.use_amp else nullcontext():
+        with autocast(self.device.type, enabled=self.config.train.use_amp):
             loss, log_dict = self.compute_loss(input_dict)
         self.scaler.scale(loss).backward()
 
@@ -990,7 +989,7 @@ def train(  # noqa: C901
     # Wrap the entire training loop in a try-finally to ensure cleanup
     try:
         # Use anomaly detection if in debug mode
-        with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
+        with torch.autograd.set_detect_anomaly(mode=debug):
             for epoch in range(start_epoch + 1, trainer.config.train.max_epochs + 1):
                 if hasattr(dataloader.sampler, "set_epoch"):
                     dataloader.sampler.set_epoch(epoch)  # type: ignore
