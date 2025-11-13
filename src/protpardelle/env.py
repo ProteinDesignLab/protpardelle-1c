@@ -3,6 +3,7 @@
 Author: Zhaoyang Li
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -82,7 +83,7 @@ class _Env:
             os.getenv("ESMFOLD_PATH", default=str(_default_esmfold_path))
         )
         if not _esmfold_path.is_dir():
-            raise NotADirectoryError(f"ESMFold path not found: {_esmfold_path}")
+            logging.warning(f"ESMFold path not found: {_esmfold_path}")
 
         return _esmfold_path
 
@@ -96,7 +97,7 @@ class _Env:
             os.getenv("PROTEINMPNN_WEIGHTS", default=str(_default_protein_mpnn_weights))
         )
         if not _protein_mpnn_weights.is_dir():
-            raise NotADirectoryError(
+            logging.warning(
                 f"ProteinMPNN weights path not found: {_protein_mpnn_weights}"
             )
 
@@ -110,7 +111,7 @@ class _Env:
             os.getenv("LIGANDMPNN_WEIGHTS", default=str(_default_ligand_mpnn_weights))
         )
         if not _ligand_mpnn_weights.is_dir():
-            raise NotADirectoryError(
+            logging.warning(
                 f"LigandMPNN weights path not found: {_ligand_mpnn_weights}"
             )
 
@@ -138,13 +139,15 @@ class _Env:
             "FOLDSEEK_BIN", default=shutil.which("foldseek")
         )
         if _default_foldseek_bin_env is None:
-            raise ValueError("Foldseek executable not found")
+            logging.warning("Foldseek executable not found")
+            return None
 
         _foldseek_bin_env = norm_path(_default_foldseek_bin_env)
         if not _foldseek_bin_env.is_file():
-            raise FileNotFoundError(
+            logging.warning(
                 f"Foldseek executable not found: {_foldseek_bin_env}"
             )
+            return None
 
         return _foldseek_bin_env
 
