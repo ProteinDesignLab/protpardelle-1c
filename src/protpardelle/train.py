@@ -7,6 +7,7 @@ import shlex
 import subprocess
 from contextlib import nullcontext
 from pathlib import Path
+import shutil
 
 import numpy as np
 import torch
@@ -36,6 +37,11 @@ from protpardelle.utils import (
     seed_everything,
     unsqueeze_trailing_dims,
 )
+
+from protpardelle.data.pdb_io import write_coords_to_pdb
+from protpardelle.data.check_bond import check_bond
+from protpardelle.data.check_geometry import check_geometry
+
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_show_locals=False)
 
@@ -154,6 +160,7 @@ class ProtpardelleRunner:
         timestep=None,
         is_training=False,
         return_aux=False,
+        return_coords=False,
     ) -> tuple[torch.Tensor, dict[str, float]] | torch.Tensor:
         seq_mask = inputs["seq_mask"]
         coords = inputs["coords_in"]
@@ -298,6 +305,8 @@ class ProtpardelleRunner:
 
         aux["train_loss"] = loss.mean().detach().cpu().item()
         if return_aux:
+            if return_coords:
+                return loss.mean(), aux, denoised_coords
             return loss.mean(), aux
         return loss.mean()
 
@@ -502,9 +511,23 @@ def train(
     if (
         config.train.ckpt_path != ""
     ):
+        # for _ in range(total_steps):
+        #     runner.scheduler.step()
+        # runner.optimizer.load_state_dict(training_state["optim_state_dict"])
+        
+        runner.optimizer.load_state_dict(training_state["optim_state_dict"])
+        # Step scheduler to correct position
         for _ in range(total_steps):
             runner.scheduler.step()
-        runner.optimizer.load_state_dict(training_state["optim_state_dict"])
+        
+        # Get the correct learning rate from scheduler
+        correct_lr = runner.scheduler.get_last_lr()[0]
+        
+        # Manually override the learning rate in optimizer to match scheduler
+        for param_group in runner.optimizer.param_groups:
+            param_group['lr'] = correct_lr
+        
+        print(f"Resumed training at step {total_steps} with LR={correct_lr}")
     runner.train_init()
 
     with torch.autograd.set_detect_anomaly(True) if debug else nullcontext():
@@ -520,6 +543,53 @@ def train(
                 wandb.log(log_dict, step=total_steps)
                 wandb.log({"epoch": epoch}, step=total_steps)
                 total_steps += 1
+            
+            ###SEAN VALIDATION
+            with torch.no_grad():
+                runner.model.eval()
+
+                eval_batch = next(iter(dataloader))
+                eval_inputs = {k: v.to(device) for k, v in eval_batch.items()}
+
+                loss, aux, denoised_coords = runner.compute_loss(
+                    eval_inputs,
+                    timestep=torch.zeros(eval_inputs['coords_in'].shape[0]).to(device),
+                    is_training=False,
+                    return_aux=True,
+                    return_coords=True
+                )
+
+                temp_dir = Path(log_dir, "temp")
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                temp_dir.mkdir(parents=True)
+
+                bond_clash = []
+                deviation = []
+                n_deviation = []
+
+                for i in range(denoised_coords.shape[0]):  # batch_size iterations
+                    pdb_path = f"{log_dir}/temp/epoch{epoch}_sample{i}_predicted.pdb"
+                    write_coords_to_pdb(
+                        denoised_coords[i:i+1],
+                        pdb_path,
+                        batched=True,
+                        aatype=eval_inputs["aatype"][i:i+1],
+                        residue_index=eval_inputs["residue_index"][i:i+1],
+                        chain_index=eval_inputs["chain_index"][i:i+1],
+                        atom_mask=eval_inputs["atom_mask"][i:i+1],
+                    )
+                    devi, ndevi = check_geometry(pdb_path)
+                    deviation.append(devi)
+                    n_deviation.append(ndevi)
+                    bond_clash.append(check_bond(pdb_path))               
+                
+                wandb.log({
+                    "eval/ring_angle_error": np.mean(deviation),
+                    "eval/normalized_ring_angle_error": np.mean(n_deviation),
+                    "eval/intra_bond_clash": np.mean(bond_clash),
+                }, step=total_steps)
+
 
             with torch.no_grad():  # per epoch
                 # Save checkpoint
