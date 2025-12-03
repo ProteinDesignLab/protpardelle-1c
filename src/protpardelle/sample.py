@@ -503,7 +503,7 @@ def sample(
     seed: int | None = None,
     project_name: str | None = None,
     use_wandb: bool = False,
-) -> None:
+) -> list[Path]:
     """Sampling with Protpardelle-1c.
 
     Args:
@@ -1053,6 +1053,8 @@ def sample(
         df_samp_info["pdb_path"] = all_samp_save_names
         df_samp_info["fix_pos"] = all_fix_pos
         df_samp_info.to_csv(per_config_save_dir / "design_input.csv", index=False)
+
+    return all_save_dirs
 
 
 @app.command()

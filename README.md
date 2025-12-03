@@ -1,6 +1,6 @@
 # Protpardelle-1c
 
-<a href="https://colab.research.google.com/github/ProteinDesignLab/protpardelle-1c/blob/main/Protpardelle_1c.ipynb">
+<a href="[https://colab.research.google.com/github/ProteinDesignLab/protpardelle-1c/blob/main/Protpardelle_1c.ipynb](https://colab.research.google.com/drive/1sKcGscT44VTfaTi03bQsFnaPOeFyHiS2?usp=sharing)">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
 </a>
 

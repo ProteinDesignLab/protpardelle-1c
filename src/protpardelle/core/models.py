@@ -1371,6 +1371,7 @@ class Protpardelle(nn.Module):
             )
         else:
             xt = torch.randn(*coords_shape).to(self.device)
+            xt = xt * sigma
 
         xt = xt * unsqueeze_trailing_dims(seq_mask, xt)
 
