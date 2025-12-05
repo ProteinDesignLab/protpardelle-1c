@@ -163,8 +163,8 @@ python3 -m protpardelle.sample examples/sampling/01_partial_diffusion.yaml --mot
 # Motif scaffolding
 python3 -m protpardelle.sample examples/sampling/02_motif_scaffolding.yaml --motif-dir examples/motifs/nanobody --num-samples 8 --num-mpnn-seqs 0
 
-# MotifBench benchmark
-python3 -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --num-samples 100 --num-mpnn-seqs 8 --use-wandb
+# MotifBench benchmark (Note: for reproducibility, use the MotifBench repo to compute the number of unique successes for handling of redesignable UNK positions: https://github.com/blt2114/MotifBench/tree/b6d63bea3ba58449f27ef3aa48ffa0810d90d0dc
+python3 -m protpardelle.sample examples/sampling/03_motifbench.yaml --motif-dir examples/motifs/motif_bench --num-samples 100 --num-mpnn-seqs 0
 
 # BindCraft benchmark
 python3 -m protpardelle.sample examples/sampling/04_bindcraft.yaml --motif-dir examples/motifs/bindcraft/ --num-samples 100 --num-mpnn-seqs 2 --use-wandb
