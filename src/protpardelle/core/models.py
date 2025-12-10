@@ -1078,6 +1078,7 @@ class Protpardelle(nn.Module):
             # record the contiguous stretches of a motif and only perform a single assignment for a contiguous stretch
             motif_residx = motif_feats["residue_index"].numpy().astype(int)
             motif_aatype = motif_feats["aatype"]
+            motif_orig_aatype = motif_feats["orig_aatype"]
             motif_aa3 = [
                 residue_constants.restype_1to3[residue_constants.restypes[aa_idx]]
                 for aa_idx in motif_aatype
@@ -1116,6 +1117,7 @@ class Protpardelle(nn.Module):
                     mf["residue_index"].numpy().astype(int) for mf in all_motif_feats
                 ]
                 motif_aatype = [mf["aatype"] for mf in all_motif_feats]
+                motif_orig_aatype = [mf["orig_aatype"] for mf in all_motif_feats]
                 motif_aa3 = []
                 for ma in motif_aatype:
                     motif_aa3.append(
@@ -2151,6 +2153,7 @@ class Protpardelle(nn.Module):
             "s0_traj": s0_traj,
             "motif_idx": motif_idx,
             "motif_aatype": motif_aatype,
+            "motif_orig_aatype": motif_orig_aatype,
             "motif_all_atom": motif_all_atom,
             "motif_atom_mask": motif_atom_mask,
             "motif_aa3": motif_aa3,

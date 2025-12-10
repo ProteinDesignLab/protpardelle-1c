@@ -100,6 +100,7 @@ def read_pdb(
 
     atom_positions = []
     aatype = []
+    orig_aatype = []
     atom_mask = []
     residue_index = []
     chain_ids = []
@@ -141,6 +142,7 @@ def read_pdb(
                     # If no known atom positions are reported for the residue then skip it.
                     continue
                 aatype.append(restype_idx)
+                orig_aatype.append(residue_constants.restype_order.get(res.resname, residue_constants.restype_num))
                 atom_positions.append(pos)
                 atom_mask.append(mask)
                 residue_index.append(res.id[1])
@@ -176,6 +178,7 @@ def read_pdb(
         atom_positions=np.array(atom_positions),
         atom_mask=np.array(atom_mask),
         aatype=np.array(aatype),
+        orig_aatype=np.array(orig_aatype),
         residue_index=np.array(residue_index),
         chain_index=chain_index,
         b_factors=np.array(b_factors),
@@ -222,6 +225,7 @@ def load_feats_from_pdb(
     for k, v in vars(protein_obj).items():
         feats[k] = torch.as_tensor(v, dtype=torch.float)
     feats["aatype"] = feats["aatype"].long()
+    feats["orig_aatype"] = feats["orig_aatype"].long()
 
     # For users to specify conditioning: keep track of original residx and mapping of chain ID to chain index
     if include_pos_feats:
@@ -293,6 +297,7 @@ def feats_to_pdb_str(
         atom_positions=tensor_to_ndarray(atom_coords),
         atom_mask=tensor_to_ndarray(atom_mask),
         aatype=tensor_to_ndarray(aatype),
+        orig_aatype=tensor_to_ndarray(aatype),
         residue_index=tensor_to_ndarray(residue_index),
         chain_index=tensor_to_ndarray(chain_index),
         b_factors=tensor_to_ndarray(b_factors),

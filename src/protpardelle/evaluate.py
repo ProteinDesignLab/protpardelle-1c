@@ -50,6 +50,7 @@ def compute_self_consistency(
     motif_idx: list[list[int]] | None = None,
     motif_coords: Float[torch.Tensor, "B M A 3"] | None = None,
     motif_aatypes: Int[torch.Tensor, "B M"] | None = None,
+    motif_orig_aatypes: Int[torch.Tensor, "B M"] | None = None,
     allatom: bool = False,
     atom_mask: Float[torch.Tensor, "B L A"] | None = None,
     motif_atom_mask: Float[torch.Tensor, "B M A"] | None = None,
@@ -67,9 +68,12 @@ def compute_self_consistency(
                 input_aatype
             )  #  0 for positions to redesign, 1 for positions to keep fixed
             if motif_aatypes is not None:
-                # fix motif aatypes during design
-                input_aatype[motif_idx[i]] = motif_aatypes[i]
-                fixed_pos_mask[motif_idx[i]] = 1
+                # fix motif aatypes during design if those positions are not UNK in motif_orig_aatypes
+                for j, curr_motif_idx in enumerate(motif_idx[i]):
+                    if motif_orig_aatypes is not None and motif_orig_aatypes[i][j] == residue_constants.restype_order_with_x["X"]:
+                        continue
+                    input_aatype[curr_motif_idx] = motif_aatypes[i][j]
+                    fixed_pos_mask[curr_motif_idx] = 1
 
             seqs_to_predict = design_sequence(
                 coords,

@@ -43,8 +43,12 @@ class Protein:
     atom_positions: np.ndarray  # [num_res, num_atom_type, 3]
 
     # Amino-acid type for each residue represented as an integer between 0 and
-    # 20, where 20 is 'X'.
+    # 20, where 20 is 'X'. UNK is mapped to GLY.
     aatype: np.ndarray  # [num_res]
+
+    # Amino-acid type for each residue represented as an integer between 0 and
+    # 20, where 20 is 'X'. UNK is kept as 'X'.
+    orig_aatype: np.ndarray  # [num_res]
 
     # Binary float mask to indicate presence of a particular atom. 1.0 if an atom
     # is present and 0.0 if not. This should be used for loss masking.

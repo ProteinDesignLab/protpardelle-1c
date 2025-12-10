@@ -349,6 +349,7 @@ def generate(
     motif_idx = []
     motif_coords = []
     motif_aatypes = []
+    motif_orig_aatypes = []
     motif_atom_mask = []
     sequences = []
     runtime = 0
@@ -435,6 +436,7 @@ def generate(
         if samp_aux_bi["motif_idx"] is not None:
             motif_idx.extend(samp_aux_bi["motif_idx"])
             motif_aatypes.extend(samp_aux_bi["motif_aatype"])
+            motif_orig_aatypes.extend(samp_aux_bi["motif_orig_aatype"])
             motif_coords.append(samp_aux_bi["motif_all_atom"])
             motif_atom_mask.extend(samp_aux_bi["motif_atom_mask"])
         runtime += samp_aux_bi["runtime"]
@@ -452,6 +454,7 @@ def generate(
         "motif_coords": motif_coords,
         "motif_idx": motif_idx,
         "motif_aatype": motif_aatypes,
+        "motif_orig_aatype": motif_orig_aatypes,
         "motif_atom_mask": motif_atom_mask,
         "s": sequences,
         "runtime": runtime,
@@ -474,6 +477,7 @@ def generate(
             motif_idx=motif_idx,
             motif_coords=motif_coords,
             motif_aatypes=motif_aatypes,
+            motif_orig_aatypes=motif_orig_aatypes,
             sampled_sequences=sampled_sequences,
             allatom=allatom,
             atom_mask=atom_mask,
