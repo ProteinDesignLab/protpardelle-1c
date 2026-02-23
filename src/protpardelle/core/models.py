@@ -1041,6 +1041,7 @@ class Protpardelle(nn.Module):
 
         motif_all_atom = None
         motif_atom_mask = None
+        motif_orig_aatype = None
         if cc.enabled:
             motif_feats, hetero_obj = load_feats_from_pdb(
                 motif_file_path, include_pos_feats=True
