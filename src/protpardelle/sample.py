@@ -390,20 +390,22 @@ def generate(
     if num_samples % batch_size != 0:
         batch_sizes.append(num_samples % batch_size)
 
+    sample_offset = 0
     for i, bs in enumerate(batch_sizes):
 
-        si, ei = i * bs, (i + 1) * bs
-        if i == len(batch_sizes) - 1:
-            si, ei = -bs, num_samples
+        si, ei = sample_offset, sample_offset + bs
 
         if fixed_motif_pos is not None:
             sampling_config["sampling"]["conditional_cfg"][
                 "discontiguous_motif_assignment"
             ]["fixed_motif_pos"] = fixed_motif_pos[si:ei]
 
+        # Create batch-specific copies to avoid overwriting the original tensors
+        sse_cond_batch = None
+        adj_cond_batch = None
         if sse_cond is not None and adj_cond is not None:
-            sse_cond = torch.cat([sse_cond.clone() for _ in range(bs)], dim=0)
-            adj_cond = torch.cat([adj_cond.clone() for _ in range(bs)], dim=0)
+            sse_cond_batch = torch.cat([sse_cond.clone() for _ in range(bs)], dim=0)
+            adj_cond_batch = torch.cat([adj_cond.clone() for _ in range(bs)], dim=0)
 
         curr_sampling_config = deepcopy(sampling_config["sampling"])
 
@@ -423,8 +425,8 @@ def generate(
                 length_ranges_per_chain=length_ranges_per_chain,
                 return_coords_and_aux=True,
                 hotspots=hotspots,
-                sse_cond=sse_cond,
-                adj_cond=adj_cond,
+                sse_cond=sse_cond_batch,
+                adj_cond=adj_cond_batch,
                 motif_placements_full=(
                     motif_placements_full[si:ei]
                     if motif_placements_full is not None
@@ -448,6 +450,8 @@ def generate(
         runtime += samp_aux_bi["runtime"]
         sequences.extend(samp_aux_bi["s"])
         atom_mask.extend(samp_aux_bi["atom_mask"])
+
+        sample_offset += bs
 
     motif_coords = torch.cat(motif_coords, dim=0) if motif_coords else None
     if not motif_aatypes:
@@ -591,10 +595,6 @@ def sample(
             runner_cfg["ssadj"],
         )
     ):
-        if motif_cfg is None and motif_pdb is None:
-            raise ValueError(
-                "Either motif_cfg in the config or motif_pdb must be specified."
-            )
         if motif_cfg is not None and motif_pdb is not None:
             raise ValueError("Only one of motif_cfg or motif_pdb can be specified.")
         if motif_cfg is None:
@@ -603,10 +603,38 @@ def sample(
             else:
                 motif_fps.append(motif_dir / f"{ri:03}_unconditional")
         else:
-            if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
-                motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+            if isinstance(motif_cfg, list):
+                # Check if it's the new named format: ["name", [["motif1", w1], ...]]
+                # vs old format: [["motif1", w1], ["motif2", w2], ...]
+                if (len(motif_cfg) == 2
+                    and isinstance(motif_cfg[0], str)
+                    and isinstance(motif_cfg[1], list)
+                    and len(motif_cfg[1]) > 0
+                    and isinstance(motif_cfg[1][0], list)):
+                    # New named format: ["name", [["motif1", w1], ...]]
+                    multi_motif_name = motif_cfg[0]
+                    motif_list = motif_cfg[1]
+                else:
+                    # Old format: [["motif1", w1], ["motif2", w2], ...]
+                    multi_motif_name = None
+                    motif_list = motif_cfg
+
+                multi_motif_entries = []
+                for entry in motif_list:
+                    name, weight = entry[0], entry[1]
+                    if not name.endswith('.pdb') and not name.endswith('.cif'):
+                        path = motif_dir / f"{name}.pdb"
+                    else:
+                        path = motif_dir / name
+                    multi_motif_entries.append((path, weight))
+                # Store as tuple: (name_or_None, list of (path, weight))
+                motif_fps.append((multi_motif_name, multi_motif_entries))
             else:
-                motif_fps.append(motif_dir / motif_cfg)
+                # Single motif (existing logic)
+                if not motif_cfg.endswith('.pdb') and not motif_cfg.endswith('.cif'):
+                    motif_fps.append(motif_dir / f"{motif_cfg}.pdb")
+                else:
+                    motif_fps.append(motif_dir / motif_cfg)
         if motif_contig_override is not None:
             motif_contigs.append(motif_contig_override)
             scaffold_lengths.append(length_range_override)
@@ -686,12 +714,29 @@ def sample(
             hotspots,
             ssadj_fps,
         ):
-            if save_shortname:
-                save_name = f"{motif_fp.stem}"
-
-            per_motif_save_dir = (
-                per_config_save_dir / motif_fp.stem
-            )  # one config, one motif
+            if isinstance(motif_fp, tuple) and len(motif_fp) == 2 and isinstance(motif_fp[1], list):
+                # Multi-motif format: (name_or_None, [(path, weight), ...])
+                multi_motif_name, multi_motif_entries = motif_fp
+                if multi_motif_name is not None:
+                    # Use provided name
+                    combined_name = multi_motif_name
+                else:
+                    # Generate name from motif names
+                    motif_names = [Path(p).stem for p, _ in multi_motif_entries]
+                    combined_name = "__".join(motif_names[:3])
+                    if len(motif_names) > 3:
+                        combined_name += f"__and_{len(motif_names) - 3}_more"
+                per_motif_save_dir = per_config_save_dir / combined_name
+                if save_shortname:
+                    save_name = combined_name
+                # Update motif_fp to just the entries for downstream processing
+                motif_fp = multi_motif_entries
+            else:
+                per_motif_save_dir = (
+                    per_config_save_dir / motif_fp.stem
+                )  # one config, one motif
+                if save_shortname:
+                    save_name = f"{motif_fp.stem}"
             per_motif_save_dir.mkdir(exist_ok=True)
             all_save_dirs.append(per_motif_save_dir)
 
@@ -707,7 +752,17 @@ def sample(
             sampling_config["sampling"]["conditional_cfg"]["crop_conditional_guidance"][
                 "start"
             ] = cc_start
-            if partial_diffusion:
+            if isinstance(motif_fp, list):
+                # Multi-motif: pass list of (path, weight) tuples
+                sampling_config["sampling"]["motif_file_path"] = None
+                sampling_config["sampling"]["multi_motif_list"] = [
+                    (str(path), weight) for path, weight in motif_fp
+                ]
+                # Copy all motif files for reference
+                for path, _ in motif_fp:
+                    if Path(path).exists():
+                        shutil.copy(path, per_motif_save_dir)
+            elif partial_diffusion:
                 shutil.copy(motif_fp, per_motif_save_dir)
                 sampling_config["sampling"]["partial_diffusion"][
                     "pdb_file_path"
@@ -717,8 +772,10 @@ def sample(
                     sampling_config["sampling"]["motif_file_path"] = "test_dir/empty.pdb"
                 else:
                     sampling_config["sampling"]["motif_file_path"] = motif_fp
+                sampling_config["sampling"]["multi_motif_list"] = None
             else:
                 sampling_config["sampling"]["motif_file_path"] = motif_fp
+                sampling_config["sampling"]["multi_motif_list"] = None
             sampling_config["sampling"]["dx"] = dx
             sampling_config["sampling"]["dy"] = dy
             sampling_config["sampling"]["dz"] = dz
@@ -838,7 +895,8 @@ def sample(
             curr_runtime = aux[-2]["runtime"]
             total_sampling_time += curr_runtime
 
-            logger.info("Sampling %s took %.2f seconds.", motif_fp.stem, curr_runtime)
+            motif_name_for_log = combined_name if isinstance(motif_fp, list) else motif_fp.stem
+            logger.info("Sampling %s took %.2f seconds.", motif_name_for_log, curr_runtime)
 
             # save motif placements
             df_scaffold_info = defaultdict(list)
