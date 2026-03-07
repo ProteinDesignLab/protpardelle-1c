@@ -787,6 +787,7 @@ class Protpardelle(nn.Module):
         jump_steps: bool = True,  # used to be called "use_superposition"
         uniform_steps: bool = False,  # alternative to superposition
         motif_file_path: str | None = None,
+        multi_motif_list: list[tuple[str, float]] | None = None,
         dx: float | None = None,
         dy: float | None = None,
         dz: float | None = None,
@@ -880,15 +881,34 @@ class Protpardelle(nn.Module):
 
         motif_all_atom = None
         motif_atom_mask = None
+        multi_motif_data = None
         if cc.enabled:
-            motif_feats, hetero_obj = load_feats_from_pdb(
-                motif_file_path, include_pos_feats=True
-            )
-            het_atom_pos = torch.from_numpy(
-                np.array(
-                    [pos for res in hetero_obj.hetero_atom_positions for pos in res]
+            if multi_motif_list is not None and len(multi_motif_list) > 0:
+                # Multi-motif: load each motif and store with normalized weights
+                multi_motif_data = []
+                total_weight = sum(w for _, w in multi_motif_list)
+                for motif_path, weight in multi_motif_list:
+                    mf, _ = load_feats_from_pdb(motif_path, include_pos_feats=True)
+                    normalized_weight = weight / total_weight
+                    multi_motif_data.append({
+                        'feats': mf,
+                        'weight': normalized_weight,
+                        'path': motif_path
+                    })
+                # Use first motif as template for downstream processing
+                motif_feats = multi_motif_data[0]['feats']
+                hetero_obj = None
+                het_atom_pos = torch.zeros(0).to(seq_mask.device)
+            else:
+                # Single motif (existing logic)
+                motif_feats, hetero_obj = load_feats_from_pdb(
+                    motif_file_path, include_pos_feats=True
                 )
-            ).to(seq_mask.device)
+                het_atom_pos = torch.from_numpy(
+                    np.array(
+                        [pos for res in hetero_obj.hetero_atom_positions for pos in res]
+                    )
+                ).to(seq_mask.device)
             all_motif_feats.append(motif_feats)
             all_het_atom_pos.append(het_atom_pos)
 
@@ -975,6 +995,41 @@ class Protpardelle(nn.Module):
                     motif_all_atom.unsqueeze(0), dims=(batch_size, 1, 1, 1)
                 )
 
+            # Extract relevant residues for multi-motif based on motif_placements_full
+            if multi_motif_data is not None and motif_placements_full is not None:
+                for mm_entry in multi_motif_data:
+                    mm_feats = mm_entry['feats']
+                    mm_chain_id_mapping = mm_feats.pop("chain_id_mapping") if "chain_id_mapping" in mm_feats else chain_id_mapping
+
+                    mm_all_motif_feats = []
+                    for mp_chains in motif_placements_full:
+                        mm_chain_motif_feats = defaultdict(list)
+                        for mp in mp_chains.split(";/;"):
+                            curr_mm_feats = copy.deepcopy(mm_feats)
+                            motif_chain_resids = [
+                                s for s in mp.split("/") if s[0].isalpha()
+                            ]
+                            flat_raw_idx = parse_fixed_pos_str(
+                                ",".join(motif_chain_resids),
+                                mm_chain_id_mapping,
+                                mm_feats["residue_index_orig"],
+                                mm_feats["chain_index"],
+                            )
+                            if motif_chain_resids:
+                                for k, v in curr_mm_feats.items():
+                                    mm_chain_motif_feats[k].append(v[flat_raw_idx])
+                        for k, v in mm_chain_motif_feats.items():
+                            mm_chain_motif_feats[k] = torch.cat(v, dim=0)
+                        mm_all_motif_feats.append(mm_chain_motif_feats)
+
+                    # Stack extracted features for this multi-motif entry
+                    mm_entry['extracted_all_atom'] = torch.stack(
+                        [mf["atom_positions"].to(self.device) for mf in mm_all_motif_feats]
+                    )
+                    mm_entry['extracted_atom_mask'] = torch.stack(
+                        [mf["atom_mask"].to(self.device) for mf in mm_all_motif_feats]
+                    )
+
             if motif_all_atom_stage1 is not None:
                 motif_all_atom = motif_all_atom_stage1.clone()
             else:
@@ -1014,6 +1069,41 @@ class Protpardelle(nn.Module):
                 motif_all_atom[..., 1] = motif_all_atom[..., 1] + dy
             if dz is not None and dz != "":
                 motif_all_atom[..., 2] = motif_all_atom[..., 2] + dz
+
+            # Transform multi-motif coordinates using same centering and rotation
+            if multi_motif_data is not None:
+                for mm_entry in multi_motif_data:
+                    # Use extracted features if available, otherwise use full feats
+                    if 'extracted_all_atom' in mm_entry:
+                        mm_all_atom = mm_entry['extracted_all_atom']
+                        mm_atom_mask = mm_entry['extracted_atom_mask']
+                    else:
+                        mm_all_atom = mm_entry['feats']["atom_positions"].to(self.device)
+                        mm_atom_mask = mm_entry['feats']["atom_mask"].to(self.device)
+                        # Expand to batch size
+                        mm_all_atom = torch.tile(mm_all_atom.unsqueeze(0), dims=(batch_size, 1, 1, 1))
+                        mm_atom_mask = torch.tile(mm_atom_mask.unsqueeze(0), dims=(batch_size, 1, 1))
+
+                    # Apply same centering as main motif
+                    mm_all_atom = mm_all_atom - centering_delta
+
+                    # Apply same rotation
+                    mm_all_atom = torch.einsum("bij,blnj->blni", random_rots, mm_all_atom)
+
+                    # Apply atom mask
+                    mm_all_atom = mm_all_atom * mm_atom_mask.unsqueeze(-1)
+
+                    # Apply same translations
+                    if dx is not None and dx != "":
+                        mm_all_atom[..., 0] = mm_all_atom[..., 0] + dx
+                    if dy is not None and dy != "":
+                        mm_all_atom[..., 1] = mm_all_atom[..., 1] + dy
+                    if dz is not None and dz != "":
+                        mm_all_atom[..., 2] = mm_all_atom[..., 2] + dz
+
+                    mm_entry['all_atom'] = mm_all_atom
+
+                print(f"Using multi-motif conditioning with {len(multi_motif_data)} motifs.")
 
         def ode_step(
             sigma_in,
@@ -1317,21 +1407,44 @@ class Protpardelle(nn.Module):
                 self.device
             )
 
+        all_crop_cond_coords = None
         if (
             cc.crop_conditional_guidance.enabled
             and cc.crop_conditional_guidance.start == 0.0
         ):
-            crop_cond_coords = torch.zeros_like(xt).to(xt.device)
-            # fill in with motif coords at the current motif_idx
-            for bi, _ in enumerate(motif_idx):
-                crop_cond_coords[bi, motif_idx[bi]] = motif_all_atom[bi]
+            if multi_motif_data is not None:
+                # Multi-motif: create crop_cond_coords for each motif
+                all_crop_cond_coords = []
+                for mm_entry in multi_motif_data:
+                    mm_all_atom = mm_entry['all_atom']
 
-            crop_cond_coords = apply_crop_cond_strategy(
-                crop_cond_coords,
-                motif_idx,
-                motif_aa3,
-                cc.crop_conditional_guidance.strategy,
-            )
+                    ccc = torch.zeros_like(xt).to(xt.device)
+                    for bi in range(batch_size):
+                        ccc[bi, motif_idx[bi]] = mm_all_atom[bi]
+
+                    ccc = apply_crop_cond_strategy(
+                        ccc,
+                        motif_idx,
+                        motif_aa3,
+                        cc.crop_conditional_guidance.strategy,
+                    )
+                    all_crop_cond_coords.append((ccc, mm_entry['weight']))
+
+                # Set crop_cond_coords to first motif's for any code that expects it
+                crop_cond_coords = all_crop_cond_coords[0][0]
+            else:
+                # Single motif (existing logic)
+                crop_cond_coords = torch.zeros_like(xt).to(xt.device)
+                # fill in with motif coords at the current motif_idx
+                for bi, _ in enumerate(motif_idx):
+                    crop_cond_coords[bi, motif_idx[bi]] = motif_all_atom[bi]
+
+                crop_cond_coords = apply_crop_cond_strategy(
+                    crop_cond_coords,
+                    motif_idx,
+                    motif_aa3,
+                    cc.crop_conditional_guidance.strategy,
+                )
 
         crop_cond_seq_oh = None
         if (
@@ -1663,29 +1776,72 @@ class Protpardelle(nn.Module):
                                             motif_all_atom[bi, raw_mi, replacement_idx]
                                         )
 
-                        x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
-                            noisy_coords=xt_rep,
-                            noise_level=sigma_hat,
-                            seq_mask=seq_mask,
-                            residue_index=residue_index,
-                            chain_index=chain_index,
-                            hotspot_mask=hotspot_mask,
-                            struct_self_cond=(
-                                x_self_cond
-                                if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
-                                else None
-                            ),
-                            struct_crop_cond=crop_cond_coords,
-                            sse_cond=sse_cond,
-                            adj_cond=adj_cond,
-                            seq_self_cond=(
-                                s_self_cond
-                                if self.config.model.mpnn_model.use_self_conditioning
-                                else None
-                            ),
-                            seq_crop_cond=crop_cond_seq_oh,
-                            run_mpnn_model=run_mpnn,
-                        )
+                        if all_crop_cond_coords is not None:
+                            # Multi-motif weighted averaging
+                            x0_accum = None
+                            x_self_cond_accum = None
+
+                            for ccc, weight in all_crop_cond_coords:
+                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
+                                    noisy_coords=xt_rep,
+                                    noise_level=sigma_hat,
+                                    seq_mask=seq_mask,
+                                    residue_index=residue_index,
+                                    chain_index=chain_index,
+                                    hotspot_mask=hotspot_mask,
+                                    struct_self_cond=(
+                                        x_self_cond
+                                        if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
+                                        else None
+                                    ),
+                                    struct_crop_cond=ccc,
+                                    sse_cond=sse_cond,
+                                    adj_cond=adj_cond,
+                                    seq_self_cond=(
+                                        s_self_cond
+                                        if self.config.model.mpnn_model.use_self_conditioning
+                                        else None
+                                    ),
+                                    seq_crop_cond=crop_cond_seq_oh,
+                                    run_mpnn_model=run_mpnn,
+                                )
+
+                                if x0_accum is None:
+                                    x0_accum = weight * x0_m
+                                    x_self_cond_accum = weight * x_self_cond_m
+                                    s_logprobs = s_logprobs_m
+                                    s_self_cond = s_self_cond_m
+                                else:
+                                    x0_accum = x0_accum + weight * x0_m
+                                    x_self_cond_accum = x_self_cond_accum + weight * x_self_cond_m
+
+                            x0 = x0_accum
+                            x_self_cond = x_self_cond_accum
+                        else:
+                            # Single motif (existing logic)
+                            x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
+                                noisy_coords=xt_rep,
+                                noise_level=sigma_hat,
+                                seq_mask=seq_mask,
+                                residue_index=residue_index,
+                                chain_index=chain_index,
+                                hotspot_mask=hotspot_mask,
+                                struct_self_cond=(
+                                    x_self_cond
+                                    if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
+                                    else None
+                                ),
+                                struct_crop_cond=crop_cond_coords,
+                                sse_cond=sse_cond,
+                                adj_cond=adj_cond,
+                                seq_self_cond=(
+                                    s_self_cond
+                                    if self.config.model.mpnn_model.use_self_conditioning
+                                    else None
+                                ),
+                                seq_crop_cond=crop_cond_seq_oh,
+                                run_mpnn_model=run_mpnn,
+                            )
 
                     else:
                         if k > 0:
@@ -1846,29 +2002,72 @@ class Protpardelle(nn.Module):
                                             motif_all_atom[bi, raw_mi, replacement_idx]
                                         )
 
-                        x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
-                            noisy_coords=xt_rep,
-                            noise_level=sigma,
-                            seq_mask=seq_mask,
-                            residue_index=residue_index,
-                            chain_index=chain_index,
-                            hotspot_mask=hotspot_mask,
-                            struct_self_cond=(
-                                x_self_cond
-                                if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
-                                else None
-                            ),
-                            struct_crop_cond=crop_cond_coords,
-                            sse_cond=sse_cond,
-                            adj_cond=adj_cond,
-                            seq_self_cond=(
-                                s_self_cond
-                                if self.config.model.mpnn_model.use_self_conditioning
-                                else None
-                            ),
-                            seq_crop_cond=crop_cond_seq_oh,
-                            run_mpnn_model=run_mpnn,
-                        )
+                        if all_crop_cond_coords is not None:
+                            # Multi-motif weighted averaging
+                            x0_accum = None
+                            x_self_cond_accum = None
+
+                            for ccc, weight in all_crop_cond_coords:
+                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
+                                    noisy_coords=xt_rep,
+                                    noise_level=sigma,
+                                    seq_mask=seq_mask,
+                                    residue_index=residue_index,
+                                    chain_index=chain_index,
+                                    hotspot_mask=hotspot_mask,
+                                    struct_self_cond=(
+                                        x_self_cond
+                                        if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
+                                        else None
+                                    ),
+                                    struct_crop_cond=ccc,
+                                    sse_cond=sse_cond,
+                                    adj_cond=adj_cond,
+                                    seq_self_cond=(
+                                        s_self_cond
+                                        if self.config.model.mpnn_model.use_self_conditioning
+                                        else None
+                                    ),
+                                    seq_crop_cond=crop_cond_seq_oh,
+                                    run_mpnn_model=run_mpnn,
+                                )
+
+                                if x0_accum is None:
+                                    x0_accum = weight * x0_m
+                                    x_self_cond_accum = weight * x_self_cond_m
+                                    s_logprobs = s_logprobs_m
+                                    s_self_cond = s_self_cond_m
+                                else:
+                                    x0_accum = x0_accum + weight * x0_m
+                                    x_self_cond_accum = x_self_cond_accum + weight * x_self_cond_m
+
+                            x0 = x0_accum
+                            x_self_cond = x_self_cond_accum
+                        else:
+                            # Single motif (existing logic)
+                            x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
+                                noisy_coords=xt_rep,
+                                noise_level=sigma,
+                                seq_mask=seq_mask,
+                                residue_index=residue_index,
+                                chain_index=chain_index,
+                                hotspot_mask=hotspot_mask,
+                                struct_self_cond=(
+                                    x_self_cond
+                                    if self.config.train.self_cond_train_prob > 0.5 and not latent_interpolation
+                                    else None
+                                ),
+                                struct_crop_cond=crop_cond_coords,
+                                sse_cond=sse_cond,
+                                adj_cond=adj_cond,
+                                seq_self_cond=(
+                                    s_self_cond
+                                    if self.config.model.mpnn_model.use_self_conditioning
+                                    else None
+                                ),
+                                seq_crop_cond=crop_cond_seq_oh,
+                                run_mpnn_model=run_mpnn,
+                            )
 
                     if jump_steps or uniform_steps:
                         guidance_mask37 = atom37_mask_from_aatype(
