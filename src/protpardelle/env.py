@@ -51,6 +51,25 @@ def _detect_package_root_dir() -> Path:
     return Path(resources.files(__package__))  # type: ignore
 
 
+def _read_install_env_var(env_file: Path, key: str) -> str | None:
+    """Read a single KEY=VALUE entry from a per-install env file.
+
+    Returns the value if found, else None. Lines beginning with `#` and
+    blank lines are ignored. Surrounding single/double quotes are stripped
+    from the value.
+    """
+    if not env_file.is_file():
+        return None
+    for raw_line in env_file.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        if k.strip() == key:
+            return v.strip().strip('"').strip("'")
+    return None
+
+
 PROJECT_ROOT_DIR = _detect_project_root_dir()
 PACKAGE_ROOT_DIR = _detect_package_root_dir()
 
@@ -119,13 +138,31 @@ class _Env:
 
     @staticmethod
     def protpardelle_output_dir() -> Path:
-        """Determine the default output directory."""
-        _default_protpardelle_output_dir = PROJECT_ROOT_DIR / "results"
-        _protpardelle_output_dir = norm_path(
-            os.getenv(
-                "PROTPARDELLE_OUTPUT_DIR", default=str(_default_protpardelle_output_dir)
-            )
+        """Determine the default output directory.
+
+        Resolution order:
+        1. PROTPARDELLE_OUTPUT_DIR set in `<PROJECT_ROOT_DIR>/.protpardelle.env`
+        2. PROTPARDELLE_OUTPUT_DIR shell env var
+        3. `<PROJECT_ROOT_DIR>/results`
+
+        The per-install file takes precedence so that multiple clones on the
+        same machine can each pick their own output dir without a single
+        shell-exported value silently routing every clone's results to the
+        same place.
+        """
+        install_value = _read_install_env_var(
+            PROJECT_ROOT_DIR / ".protpardelle.env", "PROTPARDELLE_OUTPUT_DIR"
         )
+        if install_value is not None:
+            _protpardelle_output_dir = norm_path(install_value)
+        else:
+            _default_protpardelle_output_dir = PROJECT_ROOT_DIR / "results"
+            _protpardelle_output_dir = norm_path(
+                os.getenv(
+                    "PROTPARDELLE_OUTPUT_DIR",
+                    default=str(_default_protpardelle_output_dir),
+                )
+            )
         if not _protpardelle_output_dir.is_dir():
             # Do not raise error, create the directory if it does not exist
             _protpardelle_output_dir.mkdir(parents=True, exist_ok=True)

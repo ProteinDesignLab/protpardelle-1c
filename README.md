@@ -132,6 +132,17 @@ export PROTPARDELLE_OUTPUT_DIR=/abs/path/to/output_dir
 export FOLDSEEK_BIN=/abs/path/to/foldseek/bin/foldseek
 ```
 
+### Per-install overrides (`<project_root>/.protpardelle.env`)
+
+If you have multiple clones of this repository on the same machine, a single shell-exported `PROTPARDELLE_OUTPUT_DIR` will route every clone's outputs to the same directory. To give each clone its own output directory without touching your shell config, drop a `.protpardelle.env` file at the root of the clone:
+
+```bash
+# <project_root>/.protpardelle.env
+PROTPARDELLE_OUTPUT_DIR=/abs/path/to/this/clone/output_dir
+```
+
+Format: simple `KEY=VALUE` lines, `#` for comments. The per-install file takes precedence over the shell-exported `PROTPARDELLE_OUTPUT_DIR`; if it isn't present the shell variable (or the default `<project_root>/results`) is used. Currently only `PROTPARDELLE_OUTPUT_DIR` is read from this file.
+
 ## Available Models
 
 | Name | Monomers | Multichain | Model Type | Positional Encoding | Notes |
