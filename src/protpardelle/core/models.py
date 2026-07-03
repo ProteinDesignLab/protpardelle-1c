@@ -18,6 +18,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.optimize import linear_sum_assignment
 from einops import rearrange, repeat
 from omegaconf import DictConfig
 from torch.types import Device
@@ -62,17 +63,59 @@ def fill_motif_seq(
 
 
 def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
-    # remove heteroatoms from motif_aatype
+    # Drop non-canonical aa3 from motif_aatype EXCEPT "HOH" — water placeholders
+    # are routed through the backbone-O-only branch when strategy contains
+    # "+water-bbO". Without the carve-out the per-residue iteration below would
+    # shift indices and miss the water rows entirely.
     motif_aatype = [
-        [ma for ma in mab if ma in residue_constants.restype_3to1]
+        [ma for ma in mab if ma in residue_constants.restype_3to1 or ma == "HOH"]
         for mab in motif_aatype
     ]
     crop_cond_coords = coords.clone()
     if strategy is None:
         strategy = "backbone"
+    water_bb_o = "water-bbO" in (strategy or "")
+    bb_o_atom_idx = residue_constants.atom_order["O"]
     if "backbone" in strategy and "sidechain" not in strategy:
         crop_cond_coords[:, :, 3, :] = 0
         crop_cond_coords[:, :, 5:, :] = 0
+    elif "acidic-tip" in strategy:
+        # Base: only keep tip atoms for ASP/GLU, zero out everything for other residues.
+        # Variants encoded via "+<aa3>-full" suffix(es): parse the strategy string
+        # for tokens like "+tyr-full", "+his-full", etc. Listed residue types get
+        # their FULL atom set preserved (backbone + sidechain). This matches the
+        # training-time conditioning regime (model never saw a single atom alone).
+        # The suffix is case-insensitive; the aa3 before "-full" should be the
+        # standard 3-letter code (lowercased).
+        full_aa3_set = set()
+        for token in strategy.split("+"):
+            token = token.strip().lower()
+            if token.endswith("-full"):
+                aa_code = token[:-len("-full")].upper()
+                if aa_code in residue_constants.restype_3to1:
+                    full_aa3_set.add(aa_code)
+        coords_src = coords.clone()
+        for bi, _ in enumerate(motif_idx):
+            # Zero all motif atoms for this batch entry
+            for mi in range(len(motif_idx[bi])):
+                crop_cond_coords[bi, motif_idx[bi][mi], :, :] = 0
+            # Restore kept atoms per aatype
+            for mi, aa3 in enumerate(motif_aatype[bi]):
+                pos = motif_idx[bi][mi]
+                if aa3 in ("ASP", "GLU"):
+                    atom_idx = [
+                        residue_constants.atom_order.get(at)
+                        for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aa3]
+                    ]
+                    for ai in atom_idx:
+                        crop_cond_coords[bi, pos, ai, :] = coords_src[bi, pos, ai, :]
+                elif aa3 == "HOH" and water_bb_o:
+                    # Water placeholder: restore only the backbone O atom.
+                    crop_cond_coords[bi, pos, bb_o_atom_idx, :] = coords_src[bi, pos, bb_o_atom_idx, :]
+                elif aa3 in full_aa3_set:
+                    # Full residue (backbone + sidechain) — restore all original atoms
+                    crop_cond_coords[bi, pos, :, :] = coords_src[bi, pos, :, :]
+                # else: leave zero
     elif "sidechain" in strategy:
         if "sidechain-tip" in strategy:
             for bi, _ in enumerate(motif_idx):
@@ -139,6 +182,91 @@ def motif_loss(x0_in, motif_idx, motif_coords, atom_mask) -> torch.Tensor:
         loss = (x0_in[bi, motif_idx[bi], :, :] - motif_coords[bi]).pow(2).sum(-1)
         losses[bi] = (loss * atom_mask[bi, motif_idx[bi]]).sum()
     return losses
+
+
+def match_motif_to_scaffold_unindexed(
+    x0_pred: torch.Tensor,
+    motif_all_atom: torch.Tensor,
+    motif_atom_mask: torch.Tensor,
+    motif_condmask: torch.Tensor,
+    motif_aatype_unindexed: list[torch.Tensor],
+    seq_mask: torch.Tensor,
+    motif_is_water_unindexed: list[torch.Tensor] | None = None,
+) -> tuple[list[list[int]], list[torch.Tensor], list[torch.Tensor]]:
+    """Match unindexed motif residues to scaffold positions via bipartite matching.
+
+    For each motif residue, computes the centroid of its conditioned atoms, then
+    uses linear_sum_assignment against scaffold CA positions to find a one-to-one
+    assignment. Returns motif_idx (scaffold positions) and motif_aatype (aatypes)
+    aligned so that motif_aatype[bi][k] belongs at motif_idx[bi][k].
+
+    Args:
+        x0_pred: [B, N, 37, 3] predicted scaffold coordinates
+        motif_all_atom: [B, K, 37, 3] rotated motif coordinates
+        motif_atom_mask: [B, K, 37] mask of valid atoms in motif
+        motif_condmask: [B, K, 37] mask of conditioned atoms (tip atoms)
+        motif_aatype_unindexed: list per batch of aatype tensors [K]
+        seq_mask: [B, N] scaffold sequence mask
+    """
+    B = x0_pred.shape[0]
+    # motif_condmask may be padded to max_motif_size; slice to actual K from motif_all_atom
+    K = motif_all_atom.shape[1]
+    motif_idx = []
+    motif_aatype = []
+    motif_is_water_match = []
+    for bi in range(B):
+        cm = motif_condmask[bi, :K]  # [K, 37]
+        atom_counts = cm.sum(-1)  # [K]
+        valid_motif = atom_counts > 0
+        if valid_motif.sum().item() == 0:
+            motif_idx.append([])
+            motif_aatype.append(torch.tensor([], dtype=torch.long, device=x0_pred.device))
+            motif_is_water_match.append(torch.tensor([], dtype=torch.bool))
+            continue
+
+        # Motif anchors: centroid of conditioned atoms
+        mc = motif_all_atom[bi]  # [K, 37, 3]
+        centroids = (mc * cm.unsqueeze(-1)).sum(-2) / atom_counts.clamp(min=1e-6).unsqueeze(-1)
+
+        # Scaffold anchors: CA positions (atom index 1)
+        scaffold_ca = x0_pred[bi, :, 1, :]  # [N, 3]
+        sm = seq_mask[bi].bool()
+        valid_scaffold = torch.nonzero(sm).squeeze(-1)
+        if valid_scaffold.numel() == 0:
+            motif_idx.append([])
+            motif_aatype.append(torch.tensor([], dtype=torch.long, device=x0_pred.device))
+            motif_is_water_match.append(torch.tensor([], dtype=torch.bool))
+            continue
+
+        valid_motif_positions = torch.nonzero(valid_motif).squeeze(-1)
+        centroids_v = centroids[valid_motif_positions]  # [K_v, 3]
+        scaffold_ca_v = scaffold_ca[valid_scaffold]  # [N_v, 3]
+
+        cost = torch.cdist(centroids_v.unsqueeze(0), scaffold_ca_v.unsqueeze(0)).squeeze(0)
+        row_ind, col_ind = linear_sum_assignment(cost.detach().cpu().numpy())
+
+        # Map back to scaffold indices
+        matched_positions = [int(valid_scaffold[col].item()) for col in col_ind]
+        aatype_src = motif_aatype_unindexed[bi]
+        # Keep on CPU to match load_feats_from_pdb convention used in indexed path
+        matched_aatypes = torch.tensor(
+            [int(aatype_src[int(valid_motif_positions[r].item())].item()) for r in row_ind],
+            dtype=torch.long,
+        )
+        if motif_is_water_unindexed is not None:
+            iw_src = motif_is_water_unindexed[bi]
+            matched_is_water = torch.tensor(
+                [bool(iw_src[int(valid_motif_positions[r].item())].item()) for r in row_ind],
+                dtype=torch.bool,
+            )
+        else:
+            matched_is_water = torch.zeros(len(matched_positions), dtype=torch.bool)
+
+        motif_idx.append(matched_positions)
+        motif_aatype.append(matched_aatypes)
+        motif_is_water_match.append(matched_is_water)
+
+    return motif_idx, motif_aatype, motif_is_water_match
 
 
 def group_consecutive_idx(nums):
@@ -239,19 +367,48 @@ class CoordinateDenoiser(nn.Module):
             n_atoms += 1  # make it an even number
         self.n_atoms = n_atoms
         self.bb_idxs = [residue_constants.atom_order.get(a) for a in bb_atoms]
-        n_xyz = (
-            9
-            if config.model.crop_conditional
-            and "concat" in config.model.conditioning_style
-            else 6
-        )
-        if (
+        self.is_unindexed = (
             config.model.crop_conditional
-            and "hotspot" in config.model.conditioning_style
-        ):
-            n_xyz += 1
-        if config.model.crop_conditional and "ssadj" in config.model.conditioning_style:
-            n_xyz += 3  # one-hot encoding [helix, strand, loop]
+            and "unindexed" in config.model.conditioning_style
+        )
+        self.is_flow_matching = getattr(config.model, "objective", "denoising") == "flow_matching"
+        if self.is_unindexed:
+            # Unindexed: noisy/3 + self_cond/3 + condmask/1 = 7
+            n_xyz = 7
+        else:
+            n_xyz = (
+                9
+                if config.model.crop_conditional
+                and "concat" in config.model.conditioning_style
+                else 6
+            )
+            if (
+                config.model.crop_conditional
+                and "hotspot" in config.model.conditioning_style
+            ):
+                n_xyz += 1
+            if config.model.crop_conditional and "ssadj" in config.model.conditioning_style:
+                n_xyz += 3  # one-hot encoding [helix, strand, loop]
+            if config.model.crop_conditional and "condmask" in config.model.conditioning_style:
+                n_xyz += 1  # per-atom binary mask indicating which atoms have conditioning
+        # Per-residue DSSP one-hot conditioning at motif positions (3 channels: H/E/L),
+        # broadcast across the atom dim. Applies to both indexed and unindexed styles.
+        self.has_dssp_cond = (
+            config.model.crop_conditional
+            and "dssp" in config.model.conditioning_style
+        )
+        if self.has_dssp_cond:
+            n_xyz += 3
+        # Binder-chain global SSE-proportion conditioning (3 channels: helix/strand/loop
+        # fraction, quantized at train time). The same 3-float vector is broadcast to
+        # every binder (non-motif) residue, zero at motif residues. CFG-friendly:
+        # zeroed for 50% of training batches in train.py.
+        self.has_binder_sse_prop_cond = (
+            config.model.crop_conditional
+            and "binderprop" in config.model.conditioning_style
+        )
+        if self.has_binder_sse_prop_cond:
+            n_xyz += 3
         nc_in = n_xyz * n_atoms  # xyz + selfcond xyz + maybe cropcond xyz
 
         # Neural networks
@@ -305,22 +462,34 @@ class CoordinateDenoiser(nn.Module):
         hotspot_mask: TensorType["b n", int] | None = None,
         struct_self_cond: TensorType["b n a x", float] | None = None,
         struct_crop_cond: TensorType["b n a x", float] | None = None,
+        crop_cond_mask: TensorType["b n a", float] | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
+        motif_sse_cond: TensorType["b n d", float] | None = None,
+        binder_sse_prop_cond: TensorType["b n d", float] | None = None,
         return_emb: bool = False,
     ):
 
         noise_level = noise_level.clamp(min=1e-6)
 
         # Prep inputs and time conditioning
-        actual_var_data = self.sigma_data**2
-        var_noisy_coords = noise_level**2 + actual_var_data
-        emb = noisy_coords / unsqueeze_trailing_dims(
-            var_noisy_coords.clamp(min=1e-6).sqrt(), noisy_coords
-        )
-
-        struct_noise_scaled = 0.25 * torch.log(noise_level)
-        noise_cond = self.noise_block(struct_noise_scaled)
+        if self.is_flow_matching:
+            # Flow matching: noise_level is t ∈ (0, 1)
+            # Simple normalization by sigma_data
+            emb = noisy_coords / self.sigma_data
+            # Time conditioning via logit(t), scaled similarly to 0.25*log(σ)
+            t = noise_level
+            time_input = 0.25 * torch.log(t / (1 - t).clamp(min=1e-6))
+            noise_cond = self.noise_block(time_input)
+        else:
+            # Denoising: Karras input scaling
+            actual_var_data = self.sigma_data**2
+            var_noisy_coords = noise_level**2 + actual_var_data
+            emb = noisy_coords / unsqueeze_trailing_dims(
+                var_noisy_coords.clamp(min=1e-6).sqrt(), noisy_coords
+            )
+            struct_noise_scaled = 0.25 * torch.log(noise_level)
+            noise_cond = self.noise_block(struct_noise_scaled)
 
         # Prepare self- and crop-conditioning and concatenate along channels
         if struct_self_cond is None:
@@ -328,8 +497,32 @@ class CoordinateDenoiser(nn.Module):
         if sse_cond is None:
             sse_cond = torch.zeros_like(residue_index).long()
 
+        pos_bias_mask = None
+
         if self.config.model.crop_conditional:
-            if (
+            if self.is_unindexed:
+                # Unindexed conditioning: motif coords are appended along sequence dim.
+                # Channels: noisy(3) + self_cond(3) + condmask(1) = 7
+                emb = torch.cat([emb, struct_self_cond], dim=-1)
+                if crop_cond_mask is None:
+                    condmask_channel = torch.zeros(
+                        noisy_coords.shape[:-1] + (1,),
+                        device=noisy_coords.device,
+                        dtype=noisy_coords.dtype,
+                    )
+                else:
+                    condmask_channel = crop_cond_mask.unsqueeze(-1).float()
+                emb = torch.cat([emb, condmask_channel], dim=-1)
+
+                # Zero out position bias for any pair involving a motif position
+                if crop_cond_mask is not None:
+                    is_motif = crop_cond_mask.any(-1).bool()  # [B, N+M]
+                    is_protein = ~is_motif
+                    pos_bias_mask = (
+                        is_protein.unsqueeze(-1) & is_protein.unsqueeze(-2)
+                    ).float().unsqueeze(1)  # [B, 1, N+M, N+M]
+
+            elif (
                 "conditioning_style" in self.config.model
                 and "concat" in self.config.model.conditioning_style
             ):
@@ -338,6 +531,19 @@ class CoordinateDenoiser(nn.Module):
                 else:
                     struct_crop_cond = struct_crop_cond / self.sigma_data
                 emb = torch.cat([emb, struct_self_cond, struct_crop_cond], dim=-1)
+
+                if (
+                    "condmask" in self.config.model.conditioning_style
+                ):
+                    if crop_cond_mask is None:
+                        condmask_channel = torch.zeros(
+                            noisy_coords.shape[:-1] + (1,),
+                            device=noisy_coords.device,
+                            dtype=noisy_coords.dtype,
+                        )
+                    else:
+                        condmask_channel = crop_cond_mask.unsqueeze(-1).float()
+                    emb = torch.cat([emb, condmask_channel], dim=-1)
 
                 if (
                     "hotspot" in self.config.model.conditioning_style
@@ -386,6 +592,28 @@ class CoordinateDenoiser(nn.Module):
             )  # expand along atom dimension to match emb shape
             emb = torch.cat([emb, sse_cond], dim=-1)
 
+        if self.has_dssp_cond:
+            if motif_sse_cond is None:
+                motif_sse_cond = torch.zeros(
+                    emb.shape[0], emb.shape[1], 3,
+                    device=emb.device, dtype=emb.dtype,
+                )
+            motif_sse_per_atom = motif_sse_cond.unsqueeze(-2).expand(
+                -1, -1, emb.shape[-2], -1
+            )
+            emb = torch.cat([emb, motif_sse_per_atom], dim=-1)
+
+        if self.has_binder_sse_prop_cond:
+            if binder_sse_prop_cond is None:
+                binder_sse_prop_cond = torch.zeros(
+                    emb.shape[0], emb.shape[1], 3,
+                    device=emb.device, dtype=emb.dtype,
+                )
+            binder_sse_prop_per_atom = binder_sse_prop_cond.unsqueeze(-2).expand(
+                -1, -1, emb.shape[-2], -1
+            )
+            emb = torch.cat([emb, binder_sse_prop_per_atom], dim=-1)
+
         emb, hidden = self.net(
             emb,
             noise_cond,
@@ -395,25 +623,32 @@ class CoordinateDenoiser(nn.Module):
             chain_index=chain_index,
             return_emb=return_emb,
             pair_bias=adj_cond,
+            pos_bias_mask=pos_bias_mask,
         )
 
-        # Preconditioning from Karras et al.
-        out_scale = (
-            noise_level
-            * actual_var_data**0.5
-            / torch.sqrt(var_noisy_coords.clamp(min=1e-6))
-        )
-        skip_scale = actual_var_data / var_noisy_coords.clamp(min=1e-6)
-        emb = emb * unsqueeze_trailing_dims(out_scale, emb)
-        skip_info = noisy_coords * unsqueeze_trailing_dims(skip_scale, noisy_coords)
-        denoised_coords = emb + skip_info
+        if self.is_flow_matching:
+            # Flow matching: network output is velocity, scale back from normalized space
+            velocity = emb * self.sigma_data
+            velocity = velocity * unsqueeze_trailing_dims(seq_mask, velocity)
+            return velocity, hidden
+        else:
+            # Preconditioning from Karras et al.
+            out_scale = (
+                noise_level
+                * actual_var_data**0.5
+                / torch.sqrt(var_noisy_coords.clamp(min=1e-6))
+            )
+            skip_scale = actual_var_data / var_noisy_coords.clamp(min=1e-6)
+            emb = emb * unsqueeze_trailing_dims(out_scale, emb)
+            skip_info = noisy_coords * unsqueeze_trailing_dims(skip_scale, noisy_coords)
+            denoised_coords = emb + skip_info
 
-        # Don't use atom mask; denoise all atoms
-        denoised_coords = denoised_coords * unsqueeze_trailing_dims(
-            seq_mask, denoised_coords
-        )
+            # Don't use atom mask; denoise all atoms
+            denoised_coords = denoised_coords * unsqueeze_trailing_dims(
+                seq_mask, denoised_coords
+            )
 
-        return denoised_coords, hidden
+            return denoised_coords, hidden
 
 
 def parse_fixed_pos_str(
@@ -507,6 +742,7 @@ class Protpardelle(nn.Module):
         self.n_tokens = config.data.n_aatype_tokens
 
         self.use_mpnn_model = self.task in ["seqdes", "codesign"]
+        self.is_flow_matching = getattr(config.model, "objective", "denoising") == "flow_matching"
 
         # Modules
         self.bb_idxs = [0, 1, 2, 4]
@@ -555,8 +791,13 @@ class Protpardelle(nn.Module):
         # Load pretrained checkpoint
         if ckpt_path is None:
             ckpt_path = getattr(self.config.model, f"{module_name}_checkpoint")
-        ckpt_dict = torch.load(ckpt_path, weights_only=False, map_location=self.device)
-        model_state_dict = ckpt_dict["model_state_dict"]
+        ckpt = torch.load(ckpt_path, weights_only=False, map_location=self.device)
+        if isinstance(ckpt, dict):
+            # training_state format: dict with "model_state_dict"
+            model_state_dict = ckpt["model_state_dict"]
+        else:
+            # full model object saved via torch.save(model)
+            model_state_dict = ckpt.state_dict()
 
         # Get only submodule state_dict
         submodule_state_dict = {
@@ -614,10 +855,15 @@ class Protpardelle(nn.Module):
         hotspot_mask: TensorType["b n", int] | None = None,
         struct_self_cond: TensorType["b n a x", float] | None = None,
         struct_crop_cond: TensorType["b n a x", float] | None = None,
+        crop_cond_mask: TensorType["b n a", float] | None = None,
         sse_cond: TensorType["b n", int] | None = None,
         adj_cond: TensorType["b n n", int] | None = None,
+        motif_sse_cond: TensorType["b n d", float] | None = None,
+        binder_sse_prop_cond: TensorType["b n d", float] | None = None,
         seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
         seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
+        motif_clean_coords: TensorType["b m a x", float] | None = None,
+        motif_condmask: TensorType["b m a", float] | None = None,
         run_struct_model: bool = True,
         run_mpnn_model: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -632,34 +878,153 @@ class Protpardelle(nn.Module):
                 down by sigma data.
             struct_crop_cond: unnoised coordinates. unscaled (scaled down by sigma
                 data inside the denoiser)
+            crop_cond_mask: per-atom binary mask indicating which atoms have conditioning.
             seq_self_cond: mpnn-predicted sequence logprobs from the previous step.
+            motif_clean_coords: clean motif atom coordinates, padded to max_motif_size.
+                Only used for unindexed conditioning — motif residues are appended
+                along the sequence dim before the struct model, protein portion is
+                extracted afterwards.
+            motif_condmask: per-atom condmask for the motif residues.
             run_struct_model: flag to optionally not run structure denoiser.
             run_mpnn_model: flag to optionally not run MiniMPNN.
         """
 
-        # Coordinate denoiser
-        if run_struct_model:
-            denoised_coords, _ = self.struct_model(
-                noisy_coords,
-                noise_level,
-                seq_mask,
+        is_unindexed = getattr(self.struct_model, "is_unindexed", False)
+        unindexed_active = (
+            is_unindexed
+            and motif_clean_coords is not None
+            and motif_condmask is not None
+        )
+        protein_N = noisy_coords.shape[1]
+
+        if unindexed_active:
+            B = noisy_coords.shape[0]
+            M = motif_clean_coords.shape[1]
+            device = noisy_coords.device
+
+            ext_noisy_coords = torch.cat([noisy_coords, motif_clean_coords], dim=1)
+
+            motif_seq_mask = (motif_condmask.sum(-1) > 0).to(seq_mask.dtype)
+            ext_seq_mask = torch.cat([seq_mask, motif_seq_mask], dim=1)
+
+            ext_residue_index = torch.cat(
+                [residue_index, torch.zeros(B, M, device=device, dtype=residue_index.dtype)],
+                dim=1,
+            )
+            if chain_index is not None:
+                ext_chain_index = torch.cat(
+                    [chain_index, torch.zeros(B, M, device=device, dtype=chain_index.dtype)],
+                    dim=1,
+                )
+            else:
+                ext_chain_index = None
+
+            ext_crop_cond_mask = torch.cat(
+                [
+                    torch.zeros(B, protein_N, motif_condmask.shape[-1], device=device, dtype=motif_condmask.dtype),
+                    motif_condmask,
+                ],
+                dim=1,
+            )
+
+            if struct_self_cond is not None:
+                ext_struct_self_cond = torch.cat(
+                    [struct_self_cond, motif_clean_coords / self.sigma_data], dim=1
+                )
+            else:
+                ext_struct_self_cond = None
+
+            ext_hotspot_mask = None
+            if hotspot_mask is not None:
+                ext_hotspot_mask = torch.cat(
+                    [hotspot_mask, torch.zeros(B, M, device=device, dtype=hotspot_mask.dtype)],
+                    dim=1,
+                )
+
+            # Pad binder_sse_prop_cond along seq dim to [B, N+M, 3] (zeros for motif tail).
+            ext_binder_sse_prop_cond = None
+            if binder_sse_prop_cond is not None:
+                ext_binder_sse_prop_cond = torch.cat(
+                    [
+                        binder_sse_prop_cond,
+                        torch.zeros(
+                            B, M, binder_sse_prop_cond.shape[-1],
+                            device=device, dtype=binder_sse_prop_cond.dtype,
+                        ),
+                    ],
+                    dim=1,
+                )
+            struct_inputs = dict(
+                noisy_coords=ext_noisy_coords,
+                noise_level=noise_level,
+                seq_mask=ext_seq_mask,
+                residue_index=ext_residue_index,
+                chain_index=ext_chain_index,
+                hotspot_mask=ext_hotspot_mask,
+                struct_self_cond=ext_struct_self_cond,
+                struct_crop_cond=None,  # unindexed does not use struct_crop_cond channels
+                crop_cond_mask=ext_crop_cond_mask,
+                sse_cond=sse_cond,
+                adj_cond=adj_cond,
+                motif_sse_cond=motif_sse_cond,
+                binder_sse_prop_cond=ext_binder_sse_prop_cond,
+            )
+        else:
+            struct_inputs = dict(
+                noisy_coords=noisy_coords,
+                noise_level=noise_level,
+                seq_mask=seq_mask,
                 residue_index=residue_index,
                 chain_index=chain_index,
                 hotspot_mask=hotspot_mask,
                 struct_self_cond=struct_self_cond,
                 struct_crop_cond=struct_crop_cond,
+                crop_cond_mask=crop_cond_mask,
                 sse_cond=sse_cond,
                 adj_cond=adj_cond,
+                motif_sse_cond=motif_sse_cond,
+                binder_sse_prop_cond=binder_sse_prop_cond,
+            )
+
+        # Coordinate denoiser
+        if run_struct_model:
+            model_output, _ = self.struct_model(
+                struct_inputs["noisy_coords"],
+                struct_inputs["noise_level"],
+                struct_inputs["seq_mask"],
+                residue_index=struct_inputs["residue_index"],
+                chain_index=struct_inputs["chain_index"],
+                hotspot_mask=struct_inputs["hotspot_mask"],
+                struct_self_cond=struct_inputs["struct_self_cond"],
+                struct_crop_cond=struct_inputs["struct_crop_cond"],
+                crop_cond_mask=struct_inputs["crop_cond_mask"],
+                sse_cond=struct_inputs["sse_cond"],
+                adj_cond=struct_inputs["adj_cond"],
+                motif_sse_cond=struct_inputs["motif_sse_cond"],
+                binder_sse_prop_cond=struct_inputs["binder_sse_prop_cond"],
                 return_emb=True,
             )
+            if unindexed_active:
+                model_output = model_output[:, :protein_N]
         else:
-            denoised_coords = noisy_coords
+            model_output = noisy_coords
+
+        # For flow matching, derive x_0_hat from velocity for self-conditioning
+        if self.is_flow_matching:
+            velocity = model_output
+            t = noise_level
+            x_0_hat = noisy_coords + unsqueeze_trailing_dims(1 - t, velocity) * velocity
+            struct_self_cond_out = x_0_hat.detach() / self.sigma_data
+            denoised_for_mpnn = x_0_hat.detach()
+        else:
+            denoised_for_mpnn = model_output
+            struct_self_cond_out = model_output.detach() / self.sigma_data
 
         # MiniMPNN
         if self.use_mpnn_model and run_mpnn_model:
             assert isinstance(self.mpnn_model, MiniMPNN)
             aatype_logprobs = self.mpnn_model(
-                denoised_coords.detach(),
+                denoised_for_mpnn,
                 noise_level,
                 seq_mask,
                 residue_index,
@@ -673,11 +1038,9 @@ class Protpardelle(nn.Module):
             aatype_logprobs = torch.ones_like(aatype_logprobs)
             aatype_logprobs = F.log_softmax(aatype_logprobs, -1)
 
-        struct_self_cond_out = denoised_coords.detach() / self.sigma_data
-
         seq_self_cond_out = aatype_logprobs.detach()
 
-        return denoised_coords, aatype_logprobs, struct_self_cond_out, seq_self_cond_out
+        return model_output, aatype_logprobs, struct_self_cond_out, seq_self_cond_out
 
     def make_seq_mask_for_sampling(
         self,
@@ -802,6 +1165,9 @@ class Protpardelle(nn.Module):
         motif_idx_stage1: list[list[int]] | None = None,
         stage2: bool = False,
         tip_atom_conditioning: bool = False,
+        motif_sse_label: str | None = None,
+        motif_sse_flank: int | None = None,
+        binder_sse_prop: list[float] | tuple[float, float, float] | None = None,
     ):
         """Sampling function for backbone or all-atom diffusion.
 
@@ -863,6 +1229,9 @@ class Protpardelle(nn.Module):
             sse_cond = sse_cond.to(self.device)
             adj_cond = adj_cond.to(self.device)
 
+        random_rots = None
+        centering_delta = None
+
         if not cc.enabled:
             motif_idx = None
             motif_feats = None
@@ -901,8 +1270,16 @@ class Protpardelle(nn.Module):
                 het_atom_pos = torch.zeros(0).to(seq_mask.device)
             else:
                 # Single motif (existing logic)
+                _cc_strategy = (
+                    cc.crop_conditional_guidance.strategy
+                    if cc.crop_conditional_guidance is not None
+                    else ""
+                ) or ""
+                _inject_hoh = "water-bbO" in _cc_strategy
                 motif_feats, hetero_obj = load_feats_from_pdb(
-                    motif_file_path, include_pos_feats=True
+                    motif_file_path,
+                    include_pos_feats=True,
+                    inject_hoh_as_bb_o=_inject_hoh,
                 )
                 het_atom_pos = torch.from_numpy(
                     np.array(
@@ -930,9 +1307,17 @@ class Protpardelle(nn.Module):
             # record the contiguous stretches of a motif and only perform a single assignment for a contiguous stretch
             motif_residx = motif_feats["residue_index"].numpy().astype(int)
             motif_aatype = motif_feats["aatype"]
+            # HOH placeholder residues (injected from waters) carry GLY's aatype
+            # but should be labeled "HOH" in motif_aa3 so the condmask/MPNN logic
+            # can route them through the backbone-O-tip branch and skip the
+            # AA-pinning step.
+            motif_is_water_vec = motif_feats.get(
+                "is_water_motif", torch.zeros(len(motif_aatype), dtype=torch.bool)
+            )
             motif_aa3 = [
+                "HOH" if motif_is_water_vec[k] else
                 residue_constants.restype_1to3[residue_constants.restypes[aa_idx]]
-                for aa_idx in motif_aatype
+                for k, aa_idx in enumerate(motif_aatype)
             ]
 
             motif_all_atom = motif_feats["atom_positions"].to(
@@ -952,17 +1337,70 @@ class Protpardelle(nn.Module):
                         motif_chain_resids = [
                             s for s in mp.split("/") if s[0].isalpha()
                         ]
-                        flat_raw_idx = parse_fixed_pos_str(
-                            ",".join(motif_chain_resids),
-                            chain_id_mapping,
-                            motif_feats["residue_index_orig"],
-                            motif_feats["chain_index"],
-                        )
-
-                        if motif_chain_resids:
+                        if not motif_chain_resids:
+                            continue
+                        # Pad each motif segment to its NOMINAL contig length
+                        # (end - start + 1) rather than to the count of residues
+                        # actually present in the motif PDB. Residues unmodeled in
+                        # the PDB (gaps within the contig range) become zero-filled,
+                        # atom_mask=0 rows: they reserve a scaffold slot so the contig
+                        # placement (motif_idx) and per-chain total_lengths stay
+                        # consistent, but they are not conditioned on downstream
+                        # (crop_cond_mask is derived from non-zero coords). Without
+                        # this, a gapped motif yields fewer motif coords than the
+                        # contig reserves and the scatter into crop_cond_coords raises
+                        # a shape mismatch.
+                        for seg in motif_chain_resids:
+                            seg_match = re.match(
+                                r"([A-Za-z])(\d+)(?:-(\d+))?$", seg
+                            )
+                            if not seg_match:
+                                raise ValueError(
+                                    f"Invalid motif segment: {seg}"
+                                )
+                            seg_chain = seg_match.group(1)
+                            seg_start = int(seg_match.group(2))
+                            seg_end = (
+                                int(seg_match.group(3))
+                                if seg_match.group(3)
+                                else seg_start
+                            )
+                            nominal_len = seg_end - seg_start + 1
+                            seg_present_idx = parse_fixed_pos_str(
+                                seg,
+                                chain_id_mapping,
+                                motif_feats["residue_index_orig"],
+                                motif_feats["chain_index"],
+                            )
+                            present_resnums = (
+                                motif_feats["residue_index_orig"][seg_present_idx]
+                                .long()
+                                .tolist()
+                            )
+                            offsets = [rn - seg_start for rn in present_resnums]
+                            seg_chain_int = int(chain_id_mapping[seg_chain])
                             for k, v in curr_motif_feats.items():
-                                chain_motif_feats[k].append(v[flat_raw_idx])
-                            prev_motif_segments += len(motif_chain_resids)
+                                pad_shape = (nominal_len,) + tuple(v.shape[1:])
+                                if k in ("residue_index", "residue_index_orig"):
+                                    padded = torch.arange(
+                                        seg_start, seg_end + 1, dtype=v.dtype
+                                    )
+                                elif k == "chain_index":
+                                    padded = torch.full(
+                                        pad_shape, seg_chain_int, dtype=v.dtype
+                                    )
+                                else:
+                                    padded = torch.zeros(pad_shape, dtype=v.dtype)
+                                if offsets:
+                                    padded[
+                                        torch.tensor(offsets, dtype=torch.long)
+                                    ] = v[
+                                        torch.tensor(
+                                            seg_present_idx, dtype=torch.long
+                                        )
+                                    ]
+                                chain_motif_feats[k].append(padded)
+                            prev_motif_segments += nominal_len
                     for k, v in chain_motif_feats.items():
                         chain_motif_feats[k] = torch.cat(v, dim=0)
                     all_motif_feats.append(chain_motif_feats)
@@ -971,14 +1409,19 @@ class Protpardelle(nn.Module):
                     mf["residue_index"].numpy().astype(int) for mf in all_motif_feats
                 ]
                 motif_aatype = [mf["aatype"] for mf in all_motif_feats]
+                motif_is_water_per_batch = [
+                    mf.get("is_water_motif", torch.zeros(len(mf["aatype"]), dtype=torch.bool))
+                    for mf in all_motif_feats
+                ]
                 motif_aa3 = []
-                for ma in motif_aatype:
+                for ma, iw in zip(motif_aatype, motif_is_water_per_batch):
                     motif_aa3.append(
                         [
+                            "HOH" if iw[k] else
                             residue_constants.restype_1to3[
                                 residue_constants.restypes[aa_idx]
                             ]
-                            for aa_idx in ma
+                            for k, aa_idx in enumerate(ma)
                         ]
                     )
                 motif_all_atom = torch.stack(
@@ -993,6 +1436,16 @@ class Protpardelle(nn.Module):
             else:
                 motif_all_atom = torch.tile(
                     motif_all_atom.unsqueeze(0), dims=(batch_size, 1, 1, 1)
+                )
+                # Also populate motif_atom_mask and motif_hotspot_mask for unindexed
+                # or other paths that don't go through motif_placements_full.
+                motif_atom_mask = torch.tile(
+                    motif_feats["atom_mask"].to(self.device).unsqueeze(0),
+                    dims=(batch_size, 1, 1),
+                )
+                motif_hotspot_mask = torch.tile(
+                    motif_feats["hotspot_mask"].to(self.device).unsqueeze(0),
+                    dims=(batch_size, 1),
                 )
 
             # Extract relevant residues for multi-motif based on motif_placements_full
@@ -1373,7 +1826,99 @@ class Protpardelle(nn.Module):
         # s0 are aatype probs of shape (b n t); s_hat are discrete aatype of shape (b n)
         x0 = None
 
-        if cc.enabled:
+        # Unindexed conditioning prep: motif residues are appended along seq dim
+        # in Protpardelle.forward rather than placed at indexed scaffold positions.
+        is_unindexed = getattr(self.struct_model, "is_unindexed", False)
+        motif_clean_coords_unindexed = None
+        motif_condmask_unindexed = None
+        if cc.enabled and is_unindexed:
+            M_cap = self.config.model.max_motif_size
+            K = motif_all_atom.shape[1]
+            assert K <= M_cap, (
+                f"Motif has {K} residues but max_motif_size is {M_cap}. "
+                "Increase max_motif_size or trim the motif."
+            )
+            # Pad motif coords to M_cap along sequence dim.
+            motif_clean_coords_unindexed = torch.zeros(
+                batch_size, M_cap, motif_all_atom.shape[2], 3,
+                device=motif_all_atom.device, dtype=motif_all_atom.dtype,
+            )
+            motif_clean_coords_unindexed[:, :K] = motif_all_atom
+
+            # Build condmask following the configured crop strategy.
+            motif_condmask_unindexed = torch.zeros(
+                batch_size, M_cap, motif_all_atom.shape[2],
+                device=motif_all_atom.device, dtype=motif_all_atom.dtype,
+            )
+            strategy = cc.crop_conditional_guidance.strategy
+            is_acidic_tip = "acidic-tip" in strategy
+            # Parse "+<aa3>-full" suffixes for residues that get full-atom conditioning.
+            full_aa3_set = set()
+            for token in strategy.split("+"):
+                token = token.strip().lower()
+                if token.endswith("-full"):
+                    aa_code = token[: -len("-full")].upper()
+                    if aa_code in residue_constants.restype_3to1:
+                        full_aa3_set.add(aa_code)
+            # motif_aa3 is flat when motif_placements_full is None; list-per-batch otherwise.
+            bb_o_idx = residue_constants.atom_order["O"]
+            for bi in range(batch_size):
+                aa3_list = motif_aa3[bi] if (isinstance(motif_aa3, list) and len(motif_aa3) > 0 and isinstance(motif_aa3[0], list)) else motif_aa3
+                for mi, aa3 in enumerate(aa3_list[:K]):
+                    if aa3 == "HOH":
+                        # Water placeholder: only the backbone O (atom index 4)
+                        # is anchored; everything else is unconstrained so the
+                        # scaffold can adopt any residue identity here.
+                        motif_condmask_unindexed[bi, mi, bb_o_idx] = 1.0
+                        continue
+                    if is_acidic_tip:
+                        if aa3 in ("ASP", "GLU"):
+                            tip_atoms = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aa3]
+                            atom_indices = [residue_constants.atom_order.get(at) for at in tip_atoms]
+                            for ai in atom_indices:
+                                motif_condmask_unindexed[bi, mi, ai] = 1.0
+                        elif aa3 in full_aa3_set:
+                            # Full residue (all atoms including backbone) — preserve all
+                            motif_condmask_unindexed[bi, mi, :] = 1.0
+                    elif strategy == "sidechain-tip" and aa3 in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS:
+                        tip_atoms = residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aa3]
+                        atom_indices = [residue_constants.atom_order.get(at) for at in tip_atoms]
+                        for ai in atom_indices:
+                            motif_condmask_unindexed[bi, mi, ai] = 1.0
+                    else:
+                        # Default (incl. "backbone-sidechain"): derive from non-zero
+                        # coords in the source motif PDB. This means atoms missing in
+                        # the input PDB (e.g. AME specific_atoms files where only
+                        # certain atoms per residue are listed) get condmask=0, so
+                        # the model isn't told "this atom is at origin".
+                        motif_condmask_unindexed[bi, mi] = (
+                            motif_clean_coords_unindexed[bi, mi].abs().sum(-1) > 0
+                        ).to(motif_condmask_unindexed.dtype)
+            # Zero backbone atoms globally ONLY for pure tip strategies. When full_aa3_set
+            # is non-empty, those residues' backbone was explicitly set above and must
+            # not be stripped. HOH water residues need their backbone O preserved.
+            if strategy == "acidic-tip" or strategy == "sidechain-tip":
+                motif_condmask_unindexed[:, :, (0, 1, 2, 4)] = 0
+            elif is_acidic_tip and full_aa3_set:
+                # Zero backbone for ASP/GLU / other non-full residues; keep backbone for
+                # full residues by restoring their backbone mask explicitly. Water
+                # placeholders restore their single bb-O slot the same way.
+                bb_idx = (0, 1, 2, 4)
+                motif_condmask_unindexed[:, :, bb_idx] = 0
+                for bi in range(batch_size):
+                    aa3_list = motif_aa3[bi] if (isinstance(motif_aa3, list) and len(motif_aa3) > 0 and isinstance(motif_aa3[0], list)) else motif_aa3
+                    for mi, aa3 in enumerate(aa3_list[:K]):
+                        if aa3 in full_aa3_set:
+                            for ai in bb_idx:
+                                motif_condmask_unindexed[bi, mi, ai] = 1.0
+                        elif aa3 == "HOH":
+                            motif_condmask_unindexed[bi, mi, bb_o_idx] = 1.0
+            # Zero out non-conditioned atom coords so padded/unconditioned positions don't leak.
+            motif_clean_coords_unindexed = (
+                motif_clean_coords_unindexed * motif_condmask_unindexed.unsqueeze(-1)
+            )
+
+        if cc.enabled and not is_unindexed:
             if motif_idx_stage1 is None:
                 if len(motif_residx) != batch_size:
                     motif_residx = [
@@ -1406,11 +1951,75 @@ class Protpardelle(nn.Module):
             to_motif_size = lambda x: x * torch.ones(batch_size, motif_size).to(
                 self.device
             )
+        elif cc.enabled and is_unindexed:
+            # For unindexed, motif is not placed at scaffold indices. Preserve the
+            # real motif aatypes so end-of-sampling bipartite matching can pin the
+            # matched scaffold positions to ASP/GLU etc. Use empty motif_idx during
+            # the loop so intermediate `for bi, _ in enumerate(motif_idx)` loops are
+            # no-ops.
+            motif_idx = [[] for _ in range(batch_size)]
+            if isinstance(motif_aatype, torch.Tensor):
+                # Flat tensor [K] -> list-per-batch, tiled
+                motif_aatype_unindexed = [
+                    motif_aatype.clone().to(torch.long) for _ in range(batch_size)
+                ]
+            else:
+                motif_aatype_unindexed = motif_aatype
+            # Parallel per-batch bool list flagging HOH placeholder rows so the
+            # end-of-sample MPNN-fix step can skip them (waters constrain only the
+            # backbone O atom; the residue identity at the matched position is
+            # designed freely).
+            if isinstance(motif_aa3, list) and len(motif_aa3) > 0 and isinstance(motif_aa3[0], list):
+                motif_is_water_unindexed = [
+                    torch.tensor([a == "HOH" for a in aa3_list], dtype=torch.bool)
+                    for aa3_list in motif_aa3
+                ]
+            else:
+                _flat_water = [a == "HOH" for a in motif_aa3] if motif_aa3 else []
+                motif_is_water_unindexed = [
+                    torch.tensor(_flat_water, dtype=torch.bool) for _ in range(batch_size)
+                ]
+            motif_aatype = [torch.tensor([], dtype=torch.long) for _ in range(batch_size)]
+
+        # `*_for_fix` are the AA-pinning lists handed to fill_motif_seq /
+        # design_with_fullmpnn. They start as a 1:1 alias of motif_idx /
+        # motif_aatype and get HOH-row-filtered below for the indexed path; the
+        # unindexed final-step block (post-bipartite match) reassigns them with
+        # its own filtered match output. Spatial conditioning still uses the
+        # unfiltered motif_idx so water backbone-O constraints reach the model.
+        motif_idx_for_fix = motif_idx
+        motif_aatype_for_fix = motif_aatype
+        if cc.enabled and not is_unindexed and motif_aa3 is not None:
+            _is_water_indexed = []
+            if isinstance(motif_aa3, list) and len(motif_aa3) > 0 and isinstance(motif_aa3[0], list):
+                _is_water_indexed = [
+                    [a == "HOH" for a in aa3_list] for aa3_list in motif_aa3
+                ]
+            else:
+                _flat = [a == "HOH" for a in motif_aa3] if motif_aa3 else []
+                _is_water_indexed = [_flat for _ in range(batch_size)]
+            if any(any(iw) for iw in _is_water_indexed):
+                motif_idx_for_fix = []
+                motif_aatype_for_fix = []
+                for bi in range(batch_size):
+                    iw = _is_water_indexed[bi]
+                    src_idx = motif_idx[bi] if bi < len(motif_idx) else []
+                    src_aat = motif_aatype[bi] if bi < len(motif_aatype) else torch.tensor([], dtype=torch.long)
+                    keep = [k for k, w in enumerate(iw) if not w]
+                    motif_idx_for_fix.append([src_idx[k] for k in keep])
+                    if isinstance(src_aat, torch.Tensor):
+                        motif_aatype_for_fix.append(
+                            src_aat[torch.tensor(keep, dtype=torch.long)]
+                            if keep else torch.tensor([], dtype=src_aat.dtype)
+                        )
+                    else:
+                        motif_aatype_for_fix.append([src_aat[k] for k in keep])
 
         all_crop_cond_coords = None
         if (
             cc.crop_conditional_guidance.enabled
             and cc.crop_conditional_guidance.start == 0.0
+            and not is_unindexed
         ):
             if multi_motif_data is not None:
                 # Multi-motif: create crop_cond_coords for each motif
@@ -1428,7 +2037,8 @@ class Protpardelle(nn.Module):
                         motif_aa3,
                         cc.crop_conditional_guidance.strategy,
                     )
-                    all_crop_cond_coords.append((ccc, mm_entry['weight']))
+                    ccc_mask = (ccc.abs().sum(-1) > 0).float()
+                    all_crop_cond_coords.append((ccc, ccc_mask, mm_entry['weight']))
 
                 # Set crop_cond_coords to first motif's for any code that expects it
                 crop_cond_coords = all_crop_cond_coords[0][0]
@@ -1445,6 +2055,17 @@ class Protpardelle(nn.Module):
                     motif_aa3,
                     cc.crop_conditional_guidance.strategy,
                 )
+
+        # Construct crop_cond_mask for condmask channel (derive from non-zero coords)
+        crop_cond_mask = None
+        if (
+            "conditioning_style" in self.config.model
+            and "condmask" in self.config.model.conditioning_style
+        ):
+            if all_crop_cond_coords is not None:
+                crop_cond_mask = all_crop_cond_coords[0][1]
+            elif crop_cond_coords is not None:
+                crop_cond_mask = (crop_cond_coords.abs().sum(-1) > 0).float()
 
         crop_cond_seq_oh = None
         if (
@@ -1464,6 +2085,142 @@ class Protpardelle(nn.Module):
             for bi in range(batch_size):
                 for ii, mi in enumerate(motif_idx[bi]):
                     hotspot_mask[bi, mi] = motif_hotspot_mask[bi, ii]
+
+        # Build motif SSE conditioning (cc143/cc144 dssp channel). For unindexed,
+        # the model extends inputs to seq_dim N+M inside Protpardelle.forward, so
+        # motif_sse_cond must be sized [B, N+M, 3]. For indexed (concat+condmask),
+        # it's [B, N, 3] with one-hot at scaffold motif positions.
+        #
+        # `motif_sse_label` accepts:
+        #   - None: no SSE conditioning (all zero channels)
+        #   - keyword: "helix"/"strand"/"loop"/"any" — broadcast to every motif residue
+        #   - single letter "H"/"E"/"L"/"X" — same broadcast
+        #   - per-residue string of length K (motif size), letters drawn from
+        #     {H, E, L, X} where X means "no info" (zero vector for that residue)
+        motif_sse_cond = None
+        char_to_idx = {"H": 0, "E": 1, "L": 2, "X": -1}
+        keyword_to_letter = {
+            "helix": "H", "alpha": "H", "h": "H",
+            "strand": "E", "beta": "E", "sheet": "E", "e": "E",
+            "loop": "L", "coil": "L", "l": "L",
+            "any": "X", "none": "X", "x": "X", "": "X",
+        }
+        if (
+            motif_sse_label is not None
+            and "dssp" in self.config.model.conditioning_style
+        ):
+            if is_unindexed:
+                K = motif_all_atom.shape[1] if motif_all_atom is not None else 0
+            else:
+                K = len(motif_idx[0]) if len(motif_idx) > 0 else 0
+            raw = str(motif_sse_label).strip()
+            lo = raw.lower()
+            if lo in keyword_to_letter:
+                letters = keyword_to_letter[lo] * K
+            elif all(ch.upper() in char_to_idx for ch in raw):
+                if len(raw) != K:
+                    raise ValueError(
+                        f"motif_sse_label string {raw!r} has length {len(raw)} but "
+                        f"the motif has {K} residues; must match exactly"
+                    )
+                letters = raw.upper()
+            else:
+                raise ValueError(
+                    f"motif_sse_label must be one of helix/strand/loop/any or a "
+                    f"per-residue string of letters in {{H,E,L,X}}, got {motif_sse_label!r}"
+                )
+            if is_unindexed:
+                M_cap = self.config.model.max_motif_size
+                motif_sse_cond = torch.zeros(
+                    batch_size, seq_length + M_cap, 3, device=xt.device, dtype=xt.dtype
+                )
+                # One-hot only on the real motif residues (positions [N..N+K)),
+                # not on padding which is gated separately by motif_seq_mask.
+                for r, ch in enumerate(letters):
+                    idx = char_to_idx[ch]
+                    if idx >= 0:
+                        motif_sse_cond[:, seq_length + r, idx] = 1.0
+            else:
+                motif_sse_cond = torch.zeros(
+                    batch_size, seq_length, 3, device=xt.device, dtype=xt.dtype
+                )
+                # Place motif SSE one-hot at scaffold motif positions.
+                for bi in range(batch_size):
+                    for r, mi in enumerate(motif_idx[bi]):
+                        if r >= len(letters):
+                            break
+                        idx = char_to_idx[letters[r]]
+                        if idx >= 0:
+                            motif_sse_cond[bi, mi, idx] = 1.0
+
+                # Optional flanking SSE conditioning (cc147): for each motif residue,
+                # also set its left/right neighbors' SSE channel to the same letter
+                # (motif-position-local letter), respecting chain boundaries and the
+                # valid sequence mask. Does not overwrite existing motif positions.
+                if motif_sse_flank is not None and int(motif_sse_flank) > 0:
+                    flank = int(motif_sse_flank)
+                    if chain_index is None:
+                        ci_t = torch.zeros(
+                            batch_size, seq_length, device=xt.device, dtype=torch.long
+                        )
+                    else:
+                        ci_t = chain_index
+                    for bi in range(batch_size):
+                        for r, mi in enumerate(motif_idx[bi]):
+                            if r >= len(letters):
+                                break
+                            idx = char_to_idx[letters[r]]
+                            if idx < 0:
+                                continue
+                            mi_int = int(mi)
+                            chain_mi = int(ci_t[bi, mi_int].item())
+                            for j in range(1, flank + 1):
+                                mj = mi_int - j
+                                if mj < 0:
+                                    break
+                                if int(ci_t[bi, mj].item()) != chain_mi:
+                                    break
+                                if float(seq_mask[bi, mj].item()) < 0.5:
+                                    break
+                                if motif_sse_cond[bi, mj].abs().sum() > 0:
+                                    continue
+                                motif_sse_cond[bi, mj, idx] = 1.0
+                            for j in range(1, flank + 1):
+                                mj = mi_int + j
+                                if mj >= seq_length:
+                                    break
+                                if int(ci_t[bi, mj].item()) != chain_mi:
+                                    break
+                                if float(seq_mask[bi, mj].item()) < 0.5:
+                                    break
+                                if motif_sse_cond[bi, mj].abs().sum() > 0:
+                                    continue
+                                motif_sse_cond[bi, mj, idx] = 1.0
+
+        # Binder global SSE-proportion conditioning (cc145). Provided as a 3-tuple
+        # (h_frac, e_frac, l_frac) and broadcast to every binder (non-motif) residue,
+        # zero at motif positions. Quantized to 0.1 to mirror training.
+        binder_sse_prop_cond = None
+        if (
+            binder_sse_prop is not None
+            and "binderprop" in self.config.model.conditioning_style
+        ):
+            if len(binder_sse_prop) != 3:
+                raise ValueError(
+                    f"binder_sse_prop must be a length-3 sequence (h, e, l); got {binder_sse_prop!r}"
+                )
+            prop = torch.tensor(
+                [round(float(v) * 10.0) / 10.0 for v in binder_sse_prop],
+                device=xt.device, dtype=xt.dtype,
+            )  # [3]
+            # Build per-residue mask: 1 at binder (non-motif) positions, 0 at motif.
+            binder_res_mask = seq_mask.float().clone()
+            for bi in range(batch_size):
+                for mi in motif_idx[bi]:
+                    binder_res_mask[bi, mi] = 0.0
+            binder_sse_prop_cond = (
+                prop.view(1, 1, 3) * binder_res_mask.unsqueeze(-1)
+            )  # [B, N, 3]
 
         xt_traj, x0_traj, st_traj, s0_traj = [], [], [], []
 
@@ -1536,7 +2293,7 @@ class Protpardelle(nn.Module):
                     )
                 elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                     s_hat = sample_aatype(s_logprobs)
-                    s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                    s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                     ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
                     ai_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
@@ -1550,7 +2307,7 @@ class Protpardelle(nn.Module):
                     )
                 elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                     s_hat = sample_aatype(s_logprobs)
-                    s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                    s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                     zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                 elif gt_aatype is not None:
                     zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
@@ -1583,7 +2340,7 @@ class Protpardelle(nn.Module):
                         )
                     elif s_logprobs is not None and cc.enabled and gt_aatype is None:
                         s_hat = sample_aatype(s_logprobs)
-                        s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                        s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                         zero_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                     elif gt_aatype is not None:
                         zero_atom_mask = atom37_mask_from_aatype(gt_aatype, seq_mask)
@@ -1645,7 +2402,7 @@ class Protpardelle(nn.Module):
                                 and gt_aatype is None
                             ):
                                 s_hat = sample_aatype(s_logprobs)
-                                s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                                s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                                 ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                             elif gt_aatype is not None:
                                 ai_atom_mask = atom37_mask_from_aatype(
@@ -1668,7 +2425,7 @@ class Protpardelle(nn.Module):
                                 and gt_aatype is None
                             ):
                                 s_hat = sample_aatype(s_logprobs)
-                                s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                                s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
 
                                 zero_atom_mask = atom37_mask_from_aatype(
                                     s_hat, seq_mask
@@ -1713,7 +2470,7 @@ class Protpardelle(nn.Module):
                                 ):
                                     s_hat = sample_aatype(s_logprobs)
                                     s_hat = fill_motif_seq(
-                                        s_hat, motif_idx, motif_aatype
+                                        s_hat, motif_idx_for_fix, motif_aatype_for_fix
                                     )
 
                                     zero_atom_mask = atom37_mask_from_aatype(
@@ -1781,7 +2538,7 @@ class Protpardelle(nn.Module):
                             x0_accum = None
                             x_self_cond_accum = None
 
-                            for ccc, weight in all_crop_cond_coords:
+                            for ccc, ccc_mask, weight in all_crop_cond_coords:
                                 x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
                                     noisy_coords=xt_rep,
                                     noise_level=sigma_hat,
@@ -1795,8 +2552,11 @@ class Protpardelle(nn.Module):
                                         else None
                                     ),
                                     struct_crop_cond=ccc,
+                                    crop_cond_mask=ccc_mask,
                                     sse_cond=sse_cond,
                                     adj_cond=adj_cond,
+                                    motif_sse_cond=motif_sse_cond,
+                                    binder_sse_prop_cond=binder_sse_prop_cond,
                                     seq_self_cond=(
                                         s_self_cond
                                         if self.config.model.mpnn_model.use_self_conditioning
@@ -1832,14 +2592,19 @@ class Protpardelle(nn.Module):
                                     else None
                                 ),
                                 struct_crop_cond=crop_cond_coords,
+                                crop_cond_mask=crop_cond_mask,
                                 sse_cond=sse_cond,
                                 adj_cond=adj_cond,
+                                motif_sse_cond=motif_sse_cond,
+                                binder_sse_prop_cond=binder_sse_prop_cond,
                                 seq_self_cond=(
                                     s_self_cond
                                     if self.config.model.mpnn_model.use_self_conditioning
                                     else None
                                 ),
                                 seq_crop_cond=crop_cond_seq_oh,
+                                motif_clean_coords=motif_clean_coords_unindexed,
+                                motif_condmask=motif_condmask_unindexed,
                                 run_mpnn_model=run_mpnn,
                             )
 
@@ -1871,7 +2636,7 @@ class Protpardelle(nn.Module):
                                 and gt_aatype is None
                             ):
                                 s_hat = sample_aatype(s_logprobs)
-                                s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                                s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                                 ai_atom_mask = atom37_mask_from_aatype(s_hat, seq_mask)
                             elif gt_aatype is not None:
                                 ai_atom_mask = atom37_mask_from_aatype(
@@ -1894,7 +2659,7 @@ class Protpardelle(nn.Module):
                                 and gt_aatype is None
                             ):
                                 s_hat = sample_aatype(s_logprobs)
-                                s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                                s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
                                 zero_atom_mask = atom37_mask_from_aatype(
                                     s_hat, seq_mask
                                 )
@@ -1939,7 +2704,7 @@ class Protpardelle(nn.Module):
                                 ):
                                     s_hat = sample_aatype(s_logprobs)
                                     s_hat = fill_motif_seq(
-                                        s_hat, motif_idx, motif_aatype
+                                        s_hat, motif_idx_for_fix, motif_aatype_for_fix
                                     )
                                     zero_atom_mask = atom37_mask_from_aatype(
                                         s_hat, seq_mask
@@ -2007,7 +2772,7 @@ class Protpardelle(nn.Module):
                             x0_accum = None
                             x_self_cond_accum = None
 
-                            for ccc, weight in all_crop_cond_coords:
+                            for ccc, ccc_mask, weight in all_crop_cond_coords:
                                 x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
                                     noisy_coords=xt_rep,
                                     noise_level=sigma,
@@ -2021,8 +2786,11 @@ class Protpardelle(nn.Module):
                                         else None
                                     ),
                                     struct_crop_cond=ccc,
+                                    crop_cond_mask=ccc_mask,
                                     sse_cond=sse_cond,
                                     adj_cond=adj_cond,
+                                    motif_sse_cond=motif_sse_cond,
+                                    binder_sse_prop_cond=binder_sse_prop_cond,
                                     seq_self_cond=(
                                         s_self_cond
                                         if self.config.model.mpnn_model.use_self_conditioning
@@ -2058,14 +2826,19 @@ class Protpardelle(nn.Module):
                                     else None
                                 ),
                                 struct_crop_cond=crop_cond_coords,
+                                crop_cond_mask=crop_cond_mask,
                                 sse_cond=sse_cond,
                                 adj_cond=adj_cond,
+                                motif_sse_cond=motif_sse_cond,
+                                binder_sse_prop_cond=binder_sse_prop_cond,
                                 seq_self_cond=(
                                     s_self_cond
                                     if self.config.model.mpnn_model.use_self_conditioning
                                     else None
                                 ),
                                 seq_crop_cond=crop_cond_seq_oh,
+                                motif_clean_coords=motif_clean_coords_unindexed,
+                                motif_condmask=motif_condmask_unindexed,
                                 run_mpnn_model=run_mpnn,
                             )
 
@@ -2129,14 +2902,60 @@ class Protpardelle(nn.Module):
                                 ) / k
                             resample_this_step = np.random.uniform() < resampling_rate
 
+                        # Unindexed: at the final step, match rotated motif residues to
+                        # scaffold positions via bipartite matching so we can fix residue
+                        # types at those positions when designing with ProteinMPNN.
+                        if (
+                            is_unindexed
+                            and i == n_steps - 1
+                            and use_fullmpnn_for_final
+                            and cc.enabled
+                        ):
+                            motif_idx, motif_aatype, motif_is_water_match = (
+                                match_motif_to_scaffold_unindexed(
+                                    x0,
+                                    motif_all_atom,
+                                    motif_atom_mask,
+                                    motif_condmask_unindexed,
+                                    motif_aatype_unindexed,
+                                    seq_mask,
+                                    motif_is_water_unindexed=motif_is_water_unindexed,
+                                )
+                            )
+                            # Build a parallel filtered version that drops HOH
+                            # placeholder rows so MPNN / fill_motif_seq don't pin
+                            # a residue identity at water-anchor positions —
+                            # those positions should be designed freely. The
+                            # full lists (with waters) are preserved on the
+                            # `*_full` variables so samp_aux can still record
+                            # them for downstream analysis.
+                            motif_idx_for_fix = []
+                            motif_aatype_for_fix = []
+                            for bi in range(len(motif_idx)):
+                                iw = motif_is_water_match[bi]
+                                if iw.numel() == 0 or not iw.any():
+                                    motif_idx_for_fix.append(list(motif_idx[bi]))
+                                    motif_aatype_for_fix.append(motif_aatype[bi].clone())
+                                    continue
+                                keep = ~iw
+                                motif_idx_for_fix.append(
+                                    [motif_idx[bi][j] for j in range(len(motif_idx[bi])) if bool(keep[j].item())]
+                                )
+                                motif_aatype_for_fix.append(motif_aatype[bi][keep])
+                        # else: motif_idx_for_fix / motif_aatype_for_fix retain
+                        # whatever was set at the start of sample() — for the
+                        # indexed path they're the HOH-filtered versions; for
+                        # the unindexed loop iterations before the final step,
+                        # they alias the empty per-batch lists.
+
                         # Resample sequence or design with full ProteinMPNN
                         if gt_aatype is None and not pd.enabled:
                             if i == n_steps - 1 and use_fullmpnn_for_final:
                                 s_hat = design_with_fullmpnn(
                                     x0,
                                     seq_mask,
-                                    motif_aatype=motif_aatype,
-                                    motif_idx=motif_idx,
+                                    motif_aatype=motif_aatype_for_fix,
+                                    motif_idx=motif_idx_for_fix,
                                 ).to(x0.device)
                             elif (
                                 anneal_seq_resampling_rate is None or resample_this_step
@@ -2145,13 +2964,13 @@ class Protpardelle(nn.Module):
                                     s_hat = design_with_fullmpnn(
                                         x0,
                                         seq_mask,
-                                        motif_aatype=motif_aatype,
-                                        motif_idx=motif_idx,
+                                        motif_aatype=motif_aatype_for_fix,
+                                        motif_idx=motif_idx_for_fix,
                                     ).to(x0.device)
                                 else:
                                     s_hat = sample_aatype(s_logprobs)
-                            if motif_aatype is not None:
-                                s_hat = fill_motif_seq(s_hat, motif_idx, motif_aatype)
+                            if motif_aatype_for_fix is not None:
+                                s_hat = fill_motif_seq(s_hat, motif_idx_for_fix, motif_aatype_for_fix)
 
                     if jump_steps:
                         # Write x0 into atom73_state_0 for atoms corresponding to old seqhat
@@ -2272,6 +3091,8 @@ class Protpardelle(nn.Module):
                 "motif_all_atom": motif_all_atom,
                 "motif_atom_mask": motif_atom_mask,
                 "motif_aa3": motif_aa3,
+                "motif_random_rots": random_rots,
+                "motif_centering_delta": centering_delta,
                 "residue_index": residue_index_orig,
                 "chain_index": chain_index,
             }
@@ -2291,14 +3112,101 @@ def load_model(
     checkpoint_path = norm_path(checkpoint_path)
     if not checkpoint_path.is_file():
         raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
-    state_dict = torch.load(
+    checkpoint = torch.load(
         checkpoint_path,
         map_location=device,
         weights_only=False,
-    )["model_state_dict"]
+    )
+    if isinstance(checkpoint, dict):
+        # training_state format: dict with "model_state_dict"
+        state_dict = checkpoint["model_state_dict"]
+    else:
+        # full model object saved via torch.save(model)
+        state_dict = checkpoint.state_dict()
 
     model = Protpardelle(config, device=device)
     model.load_state_dict(state_dict, strict=False)
+    model.to(device)
+    model.eval()
+
+    return model
+
+
+def load_model_phema(
+    config_path: StrPath,
+    checkpoint_dir: StrPath,
+    epoch: int,
+    target_std: float,
+    device: Device = None,
+) -> "Protpardelle":
+    """Load a model with post-hoc EMA reconstruction.
+
+    Finds all EMA snapshot files for the given epoch (e.g., epoch10_ema-0.050.pth,
+    epoch10_ema-0.100.pth), solves for coefficients to reconstruct the desired
+    target_std, and returns a model with the reconstructed weights.
+
+    Args:
+        config_path: Path to model config YAML.
+        checkpoint_dir: Directory containing checkpoint files.
+        epoch: Epoch number to reconstruct from.
+        target_std: Desired EMA relative standard deviation.
+        device: Device to load model on.
+
+    Returns:
+        Protpardelle model with reconstructed EMA weights.
+    """
+    import re
+    from protpardelle.core.phema import solve_posthoc_coefficients
+
+    if device is None:
+        device = get_default_device()
+    if isinstance(device, str):
+        device = torch.device(device)
+    config = load_config(config_path)
+
+    checkpoint_dir = norm_path(checkpoint_dir)
+
+    # Find all EMA snapshot files for this epoch
+    ema_files = []
+    for f in sorted(checkpoint_dir.iterdir()):
+        m = re.match(rf"epoch{epoch}_ema-(\d+\.\d+)\.pth$", f.name)
+        if m:
+            ema_files.append((float(m.group(1)), f))
+
+    if len(ema_files) == 0:
+        raise FileNotFoundError(
+            f"No EMA snapshots found for epoch {epoch} in {checkpoint_dir}"
+        )
+
+    in_stds = [std for std, _ in ema_files]
+    # For single-epoch reconstruction, all snapshots share the same nimg.
+    # Use epoch as a proxy (the exact nimg value cancels out when all inputs
+    # come from the same training step).
+    in_nimg = [float(epoch)] * len(ema_files)
+    out_nimg = float(epoch)
+
+    coefs = solve_posthoc_coefficients(
+        np.array(in_nimg), np.array(in_stds),
+        np.array([out_nimg]), np.array([target_std]),
+    )  # [n_inputs, 1]
+
+    # Load and combine EMA state dicts
+    combined_state_dict = None
+    for i, (std, fpath) in enumerate(ema_files):
+        sd = torch.load(fpath, map_location=device, weights_only=False)
+        if combined_state_dict is None:
+            combined_state_dict = {k: v.float() * coefs[i, 0] for k, v in sd.items()}
+        else:
+            for k in combined_state_dict:
+                combined_state_dict[k] += sd[k].float() * coefs[i, 0]
+
+    logger.info(
+        "Reconstructed EMA (std=%.3f) from %d snapshots at epoch %d: stds=%s, coefs=%s",
+        target_std, len(ema_files), epoch, in_stds, coefs[:, 0].tolist(),
+    )
+
+    model = Protpardelle(config, device=device)
+    model.load_state_dict(combined_state_dict, strict=False)
     model.to(device)
     model.eval()
 

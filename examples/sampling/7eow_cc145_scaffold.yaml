@@ -1,0 +1,34 @@
+# From-scratch motif scaffolding on 7eow: chain A (antigen target) all fixed,
+# chain B residues 98-118 (CDR3) fixed; rest of chain B regenerated from noise.
+# Uses cc145 epoch 170 with the caliby seq-fix-at-step-350 trick.
+#
+# Pair with 7eow_cc145.yaml (partial-diffusion variant); both use the same
+# motif PDB so outputs are directly comparable.
+#
+# Run:    sbatch scripts/sample.sbatch examples/sampling/7eow_cc145_scaffold.yaml \
+#               examples/motifs/nanobody  <num_samples>  <num_mpnn_seqs>
+
+search_space:
+  models:
+    - ["cc145", "170", "sampling_sidechain_conditional_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 7eow_AB_atom
+
+motif_contigs:
+  - "A1-202;/;97-97;B98-118;10-10"   # chain A all + chain B[98-118] motif;
+                                     # chain B scaffold = 97 N-term + 10 C-term
+
+total_lengths:
+  - [[202, 202], [128, 128]]
+
+hotspots:
+  - null
+
+ssadj:
+  - null

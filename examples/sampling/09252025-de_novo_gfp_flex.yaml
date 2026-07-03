@@ -1,0 +1,44 @@
+search_space:
+  models:
+    - ["cc133", "137", "sampling_sidechain_conditional"]
+    - ["cc136", "196", "sampling_sidechain_conditional"]
+  step_scales: [1.0, 1.2]
+  schurns: [0.0, 200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 1QY3_R96_motif_aligned
+  - 2state_1QY3_1QYF_R96_same_residx_reatom
+  - 24_1QYF_renamed_reatom
+  - 24_1QYF_renamed_reatom_unk_reatom
+  - 24_1QYF_R96_renamed_reatom
+  - 24_1QYF_R96_renamed_reatom_unk_reatom
+motif_contigs:
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-75;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+total_lengths:
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null

@@ -1,0 +1,19 @@
+search_space:
+  models:
+    - ["cc144", "922", "sampling_unconditional_allatom_s1"]
+  phema_stds: [null]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - null
+total_lengths:
+  - [[80, 120], [80, 120]]
+hotspots:
+  - null
+ssadj:
+  - null

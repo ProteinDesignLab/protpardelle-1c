@@ -1,0 +1,25 @@
+# DBTL motif: lazr173 EF4 — indexed, ASP/GLU tip atoms + full TYR90 residue.
+# Strategy "acidic-tip+tyr-full" conditions on:
+#   - ASP84, ASP86, ASP88: CB/CG/OD1/OD2 tip atoms
+#   - TYR90: ALL atoms (full backbone + sidechain) — trained conditioning regime
+#   - GLU95: CG/CD/OE1/OE2 tip atoms
+search_space:
+  models:
+    - ["cc91-tip-condmask", "469", "sampling_acidic_tip_tyr_full_condmask_allatom_s1"]
+    - ["cc91-tip-condmask-large", "439", "sampling_acidic_tip_tyr_full_condmask_allatom_s1"]
+    - ["cc138", "248", "sampling_acidic_tip_tyr_full_condmask_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173-ef4-tip
+motif_contigs:
+  - "5-30;A86-86;5-30;A88-88;5-30;A90-90;5-30;A84-84;5-30;A95-95;5-30"
+total_lengths:
+  - [[80, 120]]
+hotspots:
+  - null
+ssadj:
+  - null

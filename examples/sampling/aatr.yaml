@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc83", "2616", "sampling_sidechain_conditional"] #* binder generation
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8ade
+motif_contigs:
+  - A11-35;/;A57-123;/;B11-35;/;B57-123;/;C11-35;/;C57-123;/;D11-35;/;D57-123;/;E11-35;/;E57-123;/;F11-35;/;F57-123;/;G11-35;/;G57-123;/;120-120
+total_lengths:
+  - [[25, 25], [67, 67], [25, 25], [67, 67], [25, 25], [67, 67], [25, 25], [67, 67], [25, 25], [67, 67], [25, 25], [67, 67], [25, 25], [67, 67], [120, 120]]
+hotspots:
+  - "A94,B94,C94,D94,E94,F94,G94"
+ssadj:
+  - null

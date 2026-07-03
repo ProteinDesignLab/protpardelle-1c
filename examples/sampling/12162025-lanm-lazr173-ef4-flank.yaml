@@ -1,0 +1,24 @@
+search_space:
+  models:
+    - ["cc58", "416", "sampling_sidechain_conditional"]
+    - ["cc58", "521", "sampling_sidechain_conditional"]
+    - ["cc58", "595", "sampling_sidechain_conditional"]
+    - ["cc58", "649", "sampling_sidechain_conditional"]
+    - ["cc58", "777", "sampling_sidechain_conditional"]
+    - ["cc58", "838", "sampling_sidechain_conditional"]
+    - ["cc136", "564", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr_173_xtal_ef4_with_flank
+motif_contigs:
+  - 0-100;A78-109;0-100
+total_lengths:
+  - [[105, 105]]
+hotspots:
+  - null
+ssadj:
+  - null

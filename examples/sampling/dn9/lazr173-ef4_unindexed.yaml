@@ -1,0 +1,22 @@
+#! TODO: TYR needs backbone oxygen as motif!
+search_space:
+  models:
+    - ["cc137", "322", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+    - ["cc143", "746", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173-ef4
+motif_contigs:
+  - "unindexed"
+total_lengths:
+  - [[12, 12]]
+hotspots:
+  - null
+ssadj:
+  - null
+motif_sse:
+  - null

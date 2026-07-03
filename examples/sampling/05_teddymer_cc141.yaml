@@ -1,0 +1,26 @@
+# cc141 sampling against a teddymer training-set target.
+# Chain A of the input PDB is the binding partner motif (77 residues), and the
+# model generates a 60-100 residue scaffold chain.
+search_space:
+  models:
+    - ["cc141", "131", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 100014568DI_AF-A0A384A0U5-F1-model_v4
+
+motif_contigs:
+  - A1-77;/;60-100
+
+total_lengths:
+  - [[77, 77], [60, 100]]
+
+hotspots:
+  - null
+
+ssadj:
+  - null

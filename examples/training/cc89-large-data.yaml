@@ -1,0 +1,99 @@
+# cc89-large but with 50/50 augmented Ingraham CATH (designable) + NVIDIA
+# Clara proteina-atomistica_data (release v1, 10.96 GB). Source archive:
+#   ngc registry resource download-version nvidia/clara/proteina-atomistica_data:release
+# Mirrored on OAK at $OAK/tianyu/datasets/atomistica_cd_dataset.tar.gz.
+#
+# NOTE: the proteina pdb_path is set to the top-level extract dir; the
+# loader in dataset.py needs a matching branch (added alongside this yaml).
+# If the extracted layout differs, update pdb_paths[1] here and the loader
+# branch accordingly once the download job (dl_proteina) finishes.
+
+train:
+  seed: 0
+  ckpt_path: ""
+  batch_size: 32
+  max_epochs: 10000
+  eval_freq: 8000000
+  checkpoint_freq: 1
+  checkpoints: []
+  lr: 0.0001
+  warmup_steps: 1000
+  decay_steps: 2_000_000
+  use_amp: False
+  clip_grad_norm: True
+  grad_clip_val: 1.0
+  weight_decay: 0.0
+  n_eval_samples: 10
+  length_ranges_per_chain: [[166, 188]]
+  sc_num_seqs: 4
+  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
+  self_cond_train_prob: 0.9
+  subsample_eval_set: 0.05
+  crop_conditional: True
+  crop_cond:
+    contiguous_prob: 0.05
+    discontiguous_prob: 0.9
+    sidechain_prob: 0.9
+    sidechain_only_prob: 0.0
+    max_span_len: 12
+    max_discontiguous_res: 24
+    dist_threshold: 45.0
+    recenter_coords: True
+
+data:
+  pdb_paths:
+    - "/scratch/users/tianyulu/augmented_ingraham_cath_bugfree"
+    - "/scratch/users/tianyulu/datasets/proteina_atomistica/proteina-atomistica_data_vrelease/atomistica_data_release"
+  mixing_ratios: [0.5, 0.5]
+  fixed_size: 512
+  n_aatype_tokens: 21
+  se3_data_augment: True
+  translation_scale: 1.0
+  chain_residx_gap: 200
+  sigma_data: 10.01
+  auto_calc_sigma_data: True
+  n_examples_for_sigma_data: 500
+  dummy_fill_mode: "zero"
+  subset: ["designable_", ""]   # AI-CATH designable subset + all proteina examples
+
+diffusion:
+  training:
+    function: "lognormal"
+    psigma_mean: -0.5
+    psigma_std: 1.5
+  sampling:
+    function: "uniform"
+    s_min: 0.001
+    s_max: 80
+
+model:
+  task: "ai-allatom"
+  pretrained_modules: []
+  struct_model_checkpoint: ""
+  mpnn_model_checkpoint: ""
+  crop_conditional: True
+  conditioning_style: "concat"
+  compute_loss_on_all_atoms: false
+  struct_model:
+    arch: "dit"
+    n_atoms: 37
+    n_channel: 512
+    noise_cond_mult: 4
+    uvit:
+      patch_size: 1
+      n_layers: 20
+      n_heads: 8
+      dim_head: 64
+      n_filt_per_layer: []
+      n_blocks_per_layer: 2
+      cat_pwd_to_conv: False
+      conv_skip_connection: False
+      position_embedding_type: "rotary"
+      position_embedding_max: 32
+  mpnn_model:
+    use_self_conditioning: True
+    label_smoothing: 0.1
+    n_channel: 128
+    n_layers: 3
+    n_neighbors: 32
+    noise_cond_mult: 4

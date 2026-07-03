@@ -24,7 +24,7 @@ output_dir=$2
 debug=$3
 config_path="${PROJECT_ROOT_DIR}/examples/training/${model_name}.yaml"
 project_name="protpardelle-1c"
-wandb_id="your-wandb-id"
+wandb_id="tyl"
 
 WANDB__SERVICE_WAIT=300 python -m protpardelle.train \
     --config "${config_path}" \

@@ -1,0 +1,27 @@
+search_space:
+  models:
+    - ["cc138", "393", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+    - ["cc144", "1110", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+motif_contigs:
+  - "A3-3;3-6;A2-2;3-6;A4-4"
+  - "A3-3;3-6;A2-2;3-6;A4-4"
+total_lengths:
+  - [[12, 12]]
+  - [[12, 12]]
+hotspots:
+  - null
+  - null
+ssadj:
+  - null
+  - null
+motif_sse:
+  - null
+  - null

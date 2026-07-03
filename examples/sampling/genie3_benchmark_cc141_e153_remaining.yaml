@@ -1,0 +1,23 @@
+search_space:
+  models:
+    - ["cc141", "153", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 10_tnfa
+
+motif_contigs:
+  - B1-146;/;C1-146;/;D1-146;/;50-120
+
+total_lengths:
+  - [[146, 146], [146, 146], [146, 146], [50, 120]]
+
+hotspots:
+  - "B102,D62"
+
+ssadj:
+  - null

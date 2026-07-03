@@ -1,0 +1,40 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [150]
+search_space:
+  models:
+    - ["cc58", "416", "sampling_partial_diffusion"] # single chain model, backbone-only
+    - ["cc89", "415", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+    - ["cc91", "383", "sampling_partial_diffusion_allatom"] # single chain model, all-atom
+    - ["cc95", "3490", "sampling_partial_diffusion"] # multichain model, backbone-only
+    - ["cc94", "3100", "sampling_partial_diffusion_allatom"] # multichain model, allatom
+  step_scales: [1.0] # don't do SDE sampling to faithfully sample from what the model learns
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 1914.cif
+  - 4kf5_AC
+  - bb_example
+  - aa_example
+motif_contigs:
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+total_lengths:
+  - [[171, 171]]
+  - [[446, 446]]
+  - [[197, 197]]
+  - [[191, 191]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null

@@ -1,0 +1,21 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [140]
+search_space:
+  models:
+    - ["cc58", "416", "sampling_partial_diffusion"]
+  step_scales: [0.9]
+  schurns: [100]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8FNR_A
+motif_contigs:
+  - partial_diffusion
+total_lengths:
+  - null
+hotspots:
+  - null
+ssadj:
+  - null

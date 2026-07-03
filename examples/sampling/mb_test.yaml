@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc130", "26", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 01_1LDB
+motif_contigs:
+  - 0-100;A1-21;0-100
+total_lengths:
+  - [[125, 125]]
+hotspots:
+  - null
+ssadj:
+  - null

@@ -1,0 +1,28 @@
+search_space:
+  models:
+    - ["cc145", "170", "sampling_sidechain_conditional_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 09_il17a
+  - 10_tnfa
+
+motif_contigs:
+  - B1-109;/;C1-109;/;50-140
+  - B1-146;/;C1-146;/;D1-146;/;50-120
+
+total_lengths:
+  - [[109, 109], [109, 109], [50, 140]]
+  - [[146, 146], [146, 146], [146, 146], [50, 120]]
+
+hotspots:
+  - "B76,B98,C49"
+  - "B102,D62"
+
+ssadj:
+  - null
+  - null

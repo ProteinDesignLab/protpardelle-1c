@@ -1,0 +1,20 @@
+search_space:
+  models:
+    - ["cc91-tip-condmask", "469", "sampling_acidic_tip_condmask_allatom_s1"]
+    - ["cc91-tip-condmask-large", "439", "sampling_acidic_tip_condmask_allatom_s1"]
+    - ["cc138", "248", "sampling_acidic_tip_condmask_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_cn8_ICIGOT_geomtry_0_nunpairedes_0_charge_-1
+motif_contigs:
+  - "5-40;A2-2;3-8;A4-4;4-9;A3-3;3-8;A5-5;5-40"
+total_lengths:
+  - [[24, 109]]
+hotspots:
+  - null
+ssadj:
+  - null

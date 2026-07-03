@@ -3,6 +3,7 @@
 Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 """
 
+import gzip
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,147 @@ from protpardelle.data.atom import (
     atom37_mask_from_aatype,
     atom37_to_atom73,
 )
+
+
+# Intra-residue covalent bonds for standard amino acids.
+# Backbone bonds (N-CA, CA-C, C-O) are shared by every residue.
+_BACKBONE_BONDS = [("N", "CA"), ("CA", "C"), ("C", "O")]
+_SIDECHAIN_BONDS = {
+    "ALA": [("CA", "CB")],
+    "ARG": [("CA", "CB"), ("CB", "CG"), ("CG", "CD"), ("CD", "NE"),
+            ("NE", "CZ"), ("CZ", "NH1"), ("CZ", "NH2")],
+    "ASN": [("CA", "CB"), ("CB", "CG"), ("CG", "OD1"), ("CG", "ND2")],
+    "ASP": [("CA", "CB"), ("CB", "CG"), ("CG", "OD1"), ("CG", "OD2")],
+    "CYS": [("CA", "CB"), ("CB", "SG")],
+    "GLN": [("CA", "CB"), ("CB", "CG"), ("CG", "CD"), ("CD", "OE1"), ("CD", "NE2")],
+    "GLU": [("CA", "CB"), ("CB", "CG"), ("CG", "CD"), ("CD", "OE1"), ("CD", "OE2")],
+    "GLY": [],
+    "HIS": [("CA", "CB"), ("CB", "CG"), ("CG", "ND1"), ("ND1", "CE1"),
+            ("CE1", "NE2"), ("NE2", "CD2"), ("CD2", "CG")],
+    "ILE": [("CA", "CB"), ("CB", "CG1"), ("CB", "CG2"), ("CG1", "CD1")],
+    "LEU": [("CA", "CB"), ("CB", "CG"), ("CG", "CD1"), ("CG", "CD2")],
+    "LYS": [("CA", "CB"), ("CB", "CG"), ("CG", "CD"), ("CD", "CE"), ("CE", "NZ")],
+    "MET": [("CA", "CB"), ("CB", "CG"), ("CG", "SD"), ("SD", "CE")],
+    "PHE": [("CA", "CB"), ("CB", "CG"), ("CG", "CD1"), ("CD1", "CE1"),
+            ("CE1", "CZ"), ("CZ", "CE2"), ("CE2", "CD2"), ("CD2", "CG")],
+    "PRO": [("CA", "CB"), ("CB", "CG"), ("CG", "CD"), ("CD", "N")],
+    "SER": [("CA", "CB"), ("CB", "OG")],
+    "THR": [("CA", "CB"), ("CB", "OG1"), ("CB", "CG2")],
+    "TRP": [("CA", "CB"), ("CB", "CG"), ("CG", "CD1"), ("CD1", "NE1"),
+            ("NE1", "CE2"), ("CE2", "CD2"), ("CD2", "CG"),
+            ("CE2", "CZ2"), ("CZ2", "CH2"), ("CH2", "CZ3"),
+            ("CZ3", "CE3"), ("CE3", "CD2")],
+    "TYR": [("CA", "CB"), ("CB", "CG"), ("CG", "CD1"), ("CD1", "CE1"),
+            ("CE1", "CZ"), ("CZ", "CE2"), ("CE2", "CD2"), ("CD2", "CG"),
+            ("CZ", "OH")],
+    "VAL": [("CA", "CB"), ("CB", "CG1"), ("CB", "CG2")],
+}
+
+
+def _parse_atom_lines_for_serials(pdb_str):
+    """Parse ATOM lines and return (entries, resnum_chain_to_first_serial).
+
+    Returns:
+        entries: list of dicts with keys serial, atom_name, res_name, chain, res_num
+        atoms_by_residue: dict (chain, res_num) -> dict(atom_name -> serial)
+        residue_order: list of (chain, res_num, res_name) in order of first appearance
+    """
+    entries = []
+    atoms_by_residue = {}
+    residue_order = []
+    seen_residues = set()
+    for line in pdb_str.split("\n"):
+        if not line.startswith("ATOM"):
+            continue
+        try:
+            serial = int(line[6:11])
+            atom_name = line[12:16].strip()
+            res_name = line[17:20].strip()
+            chain = line[21]
+            res_num = int(line[22:26])
+        except ValueError:
+            continue
+        key = (chain, res_num)
+        if key not in atoms_by_residue:
+            atoms_by_residue[key] = {}
+        atoms_by_residue[key][atom_name] = serial
+        entries.append({
+            "serial": serial, "atom_name": atom_name,
+            "res_name": res_name, "chain": chain, "res_num": res_num,
+        })
+        if key not in seen_residues:
+            residue_order.append((chain, res_num, res_name))
+            seen_residues.add(key)
+    return entries, atoms_by_residue, residue_order
+
+
+def _build_conect_records(pdb_str):
+    """Build CONECT lines covering intra-residue bonds and peptide bonds.
+
+    Only bonds where both atoms were actually written (atom_mask) are emitted.
+    Disulfide bonds and non-peptide chain linkages are not inferred here.
+    """
+    _, atoms_by_residue, residue_order = _parse_atom_lines_for_serials(pdb_str)
+
+    # Collect undirected bonds as set of (min_serial, max_serial) pairs.
+    bonds = set()
+
+    # Intra-residue bonds per residue type.
+    for chain, res_num, res_name in residue_order:
+        atoms = atoms_by_residue[(chain, res_num)]
+        bond_list = list(_BACKBONE_BONDS) + _SIDECHAIN_BONDS.get(res_name, [])
+        for a1, a2 in bond_list:
+            if a1 in atoms and a2 in atoms:
+                s1, s2 = atoms[a1], atoms[a2]
+                bonds.add((min(s1, s2), max(s1, s2)))
+
+    # Peptide bonds between consecutive residues in the same chain.
+    for i in range(len(residue_order) - 1):
+        chain_i, res_i, _ = residue_order[i]
+        chain_j, res_j, _ = residue_order[i + 1]
+        if chain_i != chain_j:
+            continue
+        atoms_i = atoms_by_residue[(chain_i, res_i)]
+        atoms_j = atoms_by_residue[(chain_j, res_j)]
+        if "C" in atoms_i and "N" in atoms_j:
+            s1, s2 = atoms_i["C"], atoms_j["N"]
+            bonds.add((min(s1, s2), max(s1, s2)))
+
+    # Group by source atom: one CONECT line per atom listing its bonded partners.
+    adj = {}
+    for s1, s2 in bonds:
+        adj.setdefault(s1, []).append(s2)
+        adj.setdefault(s2, []).append(s1)
+
+    lines = []
+    for src in sorted(adj):
+        partners = sorted(adj[src])
+        # PDB CONECT supports up to 4 partners per line; wrap if needed.
+        for k in range(0, len(partners), 4):
+            chunk = partners[k:k + 4]
+            fields = "".join(f"{p:>5}" for p in chunk)
+            lines.append(f"CONECT{src:>5}{fields}")
+    return lines
+
+
+def add_conect_records(pdb_str):
+    """Return pdb_str with CONECT records inserted before END / appended."""
+    conect_lines = _build_conect_records(pdb_str)
+    if not conect_lines:
+        return pdb_str
+    lines = pdb_str.split("\n")
+    # Drop trailing empty strings
+    while lines and lines[-1] == "":
+        lines.pop()
+    # Find END line (if any) and insert before it; otherwise append.
+    insert_at = len(lines)
+    for idx in range(len(lines) - 1, -1, -1):
+        stripped = lines[idx].strip()
+        if stripped == "END" or stripped == "ENDMDL":
+            insert_at = idx
+            break
+    new_lines = lines[:insert_at] + conect_lines + lines[insert_at:]
+    return "\n".join(new_lines) + "\n"
 
 
 def add_chain_gap(
@@ -67,12 +209,19 @@ def read_pdb(
         Hetero, and a mapping of chain IDs to their indices.
     """
 
-    if Path(pdb_file).suffix == ".cif":
+    pdb_path = Path(pdb_file)
+    suffixes = [s.lower() for s in pdb_path.suffixes]
+    is_cif = ".cif" in suffixes
+    if is_cif:
         parser = MMCIFParser(QUIET=True, auth_chains=True, auth_residues=False)
     else:
         parser = PDBParser(QUIET=True)
 
-    structure = parser.get_structure("protein", pdb_file)
+    if suffixes and suffixes[-1] == ".gz":
+        with gzip.open(pdb_file, "rt") as fh:
+            structure = parser.get_structure("protein", fh)
+    else:
+        structure = parser.get_structure("protein", pdb_file)
     model = next(structure.get_models())
 
     atom_positions = []
@@ -168,6 +317,88 @@ def read_pdb(
     return prot, het, chain_id_mapping
 
 
+def _inject_hoh_as_bb_o_motif(feats: dict, hetero_obj) -> dict:
+    """Append HOH waters from hetero_obj as motif residues whose only populated
+    atom is the backbone O (atom index 4 in atom37).
+
+    The model conditions on these as single-backbone-O "tip" anchors (matching
+    cc148/cc149's `backbone_O_tip` cond mode). The aatype is stored as a
+    placeholder (GLY's index, value 7) — `feats["is_water_motif"]` flags these
+    rows so downstream code can route them to the HOH branch of condmask
+    construction and skip them when pinning AAs via ProteinMPNN.
+    """
+    water_o_coords = []
+    for aa, atom_names, positions in zip(
+        hetero_obj.hetero_aatype,
+        hetero_obj.hetero_atom_types,
+        hetero_obj.hetero_atom_positions,
+    ):
+        if aa != "HOH":
+            continue
+        for name, pos in zip(atom_names, positions):
+            if name == "O":
+                water_o_coords.append(pos)
+                break
+
+    n_existing = feats["aatype"].shape[0]
+    is_water = torch.zeros(n_existing, dtype=torch.bool)
+    if not water_o_coords:
+        feats["is_water_motif"] = is_water
+        return feats
+
+    n_water = len(water_o_coords)
+    o_idx = residue_constants.atom_order["O"]
+    bb_o_in_bb_coords = ("N", "CA", "C", "O").index("O")
+    n_atom37 = residue_constants.atom_type_num
+
+    new_atom_pos = torch.zeros((n_water, n_atom37, 3), dtype=feats["atom_positions"].dtype)
+    new_atom_mask = torch.zeros((n_water, n_atom37), dtype=feats["atom_mask"].dtype)
+    new_b_factors = torch.zeros((n_water, n_atom37), dtype=feats["b_factors"].dtype)
+    for i, coord in enumerate(water_o_coords):
+        new_atom_pos[i, o_idx, :] = torch.tensor(coord, dtype=new_atom_pos.dtype)
+        new_atom_mask[i, o_idx] = 1.0
+
+    new_aatype = torch.full((n_water,), 7, dtype=torch.long)  # GLY placeholder; freely designed at sampling
+
+    if n_existing > 0:
+        last_residx = float(feats["residue_index"][-1].item())
+        last_chain = float(feats["chain_index"][-1].item())
+    else:
+        last_residx = 0.0
+        last_chain = 0.0
+    new_residue_index = torch.arange(
+        last_residx + 1, last_residx + 1 + n_water, dtype=feats["residue_index"].dtype
+    )
+    new_chain_index = torch.full(
+        (n_water,), last_chain, dtype=feats["chain_index"].dtype
+    )
+
+    feats["aatype"] = torch.cat([feats["aatype"], new_aatype])
+    feats["atom_positions"] = torch.cat([feats["atom_positions"], new_atom_pos])
+    feats["atom_mask"] = torch.cat([feats["atom_mask"], new_atom_mask])
+    feats["b_factors"] = torch.cat([feats["b_factors"], new_b_factors])
+    feats["residue_index"] = torch.cat([feats["residue_index"], new_residue_index])
+    feats["chain_index"] = torch.cat([feats["chain_index"], new_chain_index])
+
+    if "bb_coords" in feats:
+        n_bb_atoms = feats["bb_coords"].shape[1]
+        new_bb = torch.zeros((n_water, n_bb_atoms, 3), dtype=feats["bb_coords"].dtype)
+        for i, coord in enumerate(water_o_coords):
+            new_bb[i, bb_o_in_bb_coords, :] = torch.tensor(coord, dtype=new_bb.dtype)
+        feats["bb_coords"] = torch.cat([feats["bb_coords"], new_bb])
+
+    if "residue_index_orig" in feats:
+        feats["residue_index_orig"] = torch.cat(
+            [feats["residue_index_orig"], new_residue_index.clone()]
+        )
+
+    is_water_full = torch.zeros(n_existing + n_water, dtype=torch.bool)
+    is_water_full[n_existing:] = True
+    feats["is_water_motif"] = is_water_full
+
+    return feats
+
+
 def load_feats_from_pdb(
     pdb,
     bb_atoms=("N", "CA", "C", "O"),
@@ -176,6 +407,7 @@ def load_feats_from_pdb(
     chain_id: str | None = None,
     atom14: bool = False,
     include_pos_feats: bool = False,
+    inject_hoh_as_bb_o: bool = False,
 ):
     """
     Load model input features from a PDB file or mmcif file.
@@ -210,6 +442,12 @@ def load_feats_from_pdb(
         feats["residue_index_orig"] = feats["residue_index"].clone()
         feats["chain_id_mapping"] = chain_id_mapping
 
+    # Optionally append HOH oxygens (from hetero_obj) as backbone-O-only motif
+    # residues. Done before residue_index normalization so the chain-gap logic
+    # treats waters as part of the trailing chain.
+    if inject_hoh_as_bb_o:
+        feats = _inject_hoh_as_bb_o_motif(feats, hetero_obj)
+
     # Always start first residx from 1 (shouldn't matter with relative pos encoding though)
     feats["residue_index"] = (
         feats["residue_index"] - torch.min(feats["residue_index"]) + 1
@@ -232,6 +470,7 @@ def feats_to_pdb_str(
     chain_id_mapping=None,
     b_factors=None,
     atom_lines_only=True,
+    with_conect=False,
 ):
     # Expects unbatched, cropped inputs. needs at least one of atom_mask, aatype
     # Uses all-GLY aatype if aatype not given: does not infer from atom_mask
@@ -268,6 +507,9 @@ def feats_to_pdb_str(
             if len(line.split()) > 1 and line.split()[0] == "ATOM"
         ]
         pdb_str = "\n".join(atom_lines) + "\n"
+
+    if with_conect:
+        pdb_str = add_conect_records(pdb_str)
 
     return pdb_str
 
@@ -379,6 +621,7 @@ def write_coords_to_pdb(
     batched=True,
     write_to_frames=False,
     chain_id_mapping=None,
+    with_conect=False,
     **all_atom_feats,
 ) -> None:
     if not (batched or write_to_frames):
@@ -418,6 +661,11 @@ def write_coords_to_pdb(
             )
         else:
             feats_i = {k: v[i][:n_res] for k, v in all_atom_feats.items()}
-            pdb_str = feats_to_pdb_str(c, chain_id_mapping=chain_id_mapping, **feats_i)
+            pdb_str = feats_to_pdb_str(
+                c,
+                chain_id_mapping=chain_id_mapping,
+                with_conect=with_conect,
+                **feats_i,
+            )
 
         write_pdb_str(pdb_str, fname, append=write_to_frames and i > 0)

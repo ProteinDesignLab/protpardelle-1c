@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc91-overfit", "500", "sampling_sidechain_conditional_allatom_s1"] # single chain model, all-atom
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8FNS
+motif_contigs:
+  - 7-7;A35-46;86-86
+total_lengths:
+  - [[105, 105]]
+hotspots:
+  - null
+ssadj:
+  - null

@@ -1,0 +1,23 @@
+search_space:
+  models:
+    - ["cc137", "189", "sampling_sidechain_conditional_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - M0096_1chm_specific_atoms
+  - M0050_1dbt_specific_atoms_singlechain
+motif_contigs:
+  - "unindexed"
+  - "unindexed"
+total_lengths:
+  - [[80, 200]]
+  - [[80, 200]]
+hotspots:
+  - null
+  - null
+ssadj:
+  - null
+  - null

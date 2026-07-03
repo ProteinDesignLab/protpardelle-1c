@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc117", "709", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 1QY3_R96_motif_aligned
+motif_contigs:
+  - 200-250;A58-71;200-250
+total_lengths:
+  - [[433, 433]]
+hotspots:
+  - null
+ssadj:
+  - ["gfp_tim_ss", "gfp_tim_adj"]

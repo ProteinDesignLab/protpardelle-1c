@@ -1,0 +1,19 @@
+search_space:
+  models:
+    - ["cc58", "416", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 2vvb_motif_fixed
+motif_contigs:
+  - 20-100;A1-1;1-1;A2-2;9-50;A3-3;12-50;A4-4;20-100
+total_lengths:
+  - [[70, 250]]
+hotspots:  
+  - null
+ssadj:
+  - null
+

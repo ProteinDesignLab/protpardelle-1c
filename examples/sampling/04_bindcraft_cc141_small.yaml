@@ -1,0 +1,38 @@
+search_space:
+  models:
+    - ["cc141", "63", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 0_PD-1
+  - 1_PD-L1
+  - 2_IFNAR2
+  - 5_Claudin1
+
+motif_contigs:
+  - A1-115;/;80-150
+  - A1-115;/;65-155
+  - A1-103;/;60-175
+  - A1-188;/;80-175
+
+total_lengths:
+  - [[115, 115], [80, 150]]
+  - [[115, 115], [65, 155]]
+  - [[103, 103], [60, 175]]
+  - [[188, 188], [80, 175]]
+
+hotspots:
+  - "A33,A95,A98,A102"
+  - "A37,A39,A49,A98"
+  - "A45,A73,A75,A77,A89,A91"
+  - "A31,A46,A55,A152"
+
+ssadj:
+  - null
+  - null
+  - null
+  - null

@@ -1,0 +1,21 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [50, 100]
+search_space:
+  models:
+    - ["cc89_opmhc", "1100", "sampling_partial_diffusion_allatom"] # single chain model, backbone-only
+  step_scales: [1.0] # don't do SDE sampling to faithfully sample from what the model learns
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - partial_diffusion
+total_lengths:
+  - null
+hotspots:
+  - null
+ssadj:
+  - null

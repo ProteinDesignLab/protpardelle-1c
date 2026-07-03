@@ -1,0 +1,102 @@
+# cc138 finetuning from epoch 393 with AME-style tip atom emphasis (indexed).
+# Differs from cc137-ft only in conditioning_style and starting checkpoint.
+train:
+  seed: 0
+  ckpt_path: "/scratch/users/tianyulu/protpardelle-1c-experiments/protpardelle-1c/cc138/checkpoints/epoch393_training_state.pth"
+  ckpt_optim: false
+  batch_size: 64  # 2 GPUs × 32 per GPU (matches cc138's original 32/GPU on 4 GPUs)
+  max_epochs: 10000
+  eval_freq: 8000000
+  checkpoint_freq: 1
+  checkpoints: []
+  lr: 0.00005
+  warmup_steps: 200
+  decay_steps: 2_000_000
+  use_amp: False
+  clip_grad_norm: True
+  grad_clip_val: 1.0
+  weight_decay: 0.0
+  n_eval_samples: 10
+  length_ranges_per_chain: [[166, 188]]
+  fpd_length_ranges_per_chain: [[50, 256]]
+  n_fpd_samples: 0
+  sc_num_seqs: 4
+  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
+  self_cond_train_prob: 0.9
+  subsample_eval_set: 0.05
+  shapes_path: /scratch/users/tianyulu/protein_shapes
+  phema:
+    enabled: True
+    stds: [0.050, 0.100]
+  crop_conditional: True
+  crop_cond:
+    contiguous_prob: 0.05
+    discontiguous_prob: 0.9
+    cond_mode_probs:
+      backbone_only: 0.02
+      all_atom: 0.02
+      tip_only: 0.04
+      acidic_tip_only: 0.01
+      sidechain_only: 0.01
+      ame_tip: 0.90
+    max_span_len: 12
+    max_discontiguous_res: 24
+    dist_threshold: 45.0
+    recenter_coords: True
+
+data:
+  pdb_paths: ["/scratch/users/tianyulu/augmented_ingraham_cath_bugfree"]
+  mixing_ratios: [1.0]
+  fixed_size: 512
+  n_aatype_tokens: 21
+  se3_data_augment: True
+  translation_scale: 1.0
+  chain_residx_gap: 200
+  sigma_data: 10.47
+  auto_calc_sigma_data: True
+  n_examples_for_sigma_data: 500
+  dummy_fill_mode: "CA"
+  subset: ["designable_"]
+
+diffusion:
+  training:
+    function: "lognormal"
+    psigma_mean: -0.5
+    psigma_std: 1.5
+  sampling:
+    function: "uniform"
+    s_min: 0.001
+    s_max: 80
+
+model:
+  task: "ai-allatom-nomask"
+  pretrained_modules: []
+  struct_model_checkpoint: ""
+  mpnn_model_checkpoint: ""
+  full_mpnn_model_path: /scratch/users/tianyulu/farfalle/ProteinMPNN/vanilla_model_weights
+  crop_conditional: True
+  conditioning_style: "concat+condmask"
+  compute_loss_on_all_atoms: false
+  struct_model:
+    arch: "dit"
+    n_atoms: 37
+    n_channel: 768
+    noise_cond_mult: 4
+    uvit:
+      patch_size: 1
+      n_layers: 14
+      n_heads: 12
+      dim_head: 64
+      n_filt_per_layer: []
+      n_blocks_per_layer: 2
+      cat_pwd_to_conv: False
+      conv_skip_connection: False
+      position_embedding_type: "relative"
+      position_embedding_max: 32
+  mpnn_model:
+    use_self_conditioning: True
+    label_smoothing: 0.1
+    n_channel: 128
+    n_layers: 3
+    n_neighbors: 32
+    noise_cond_mult: 4

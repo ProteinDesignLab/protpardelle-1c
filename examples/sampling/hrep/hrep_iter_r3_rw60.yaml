@@ -1,0 +1,29 @@
+hotspots:
+- null
+motif_contigs:
+- partial_diffusion
+motifs:
+- sample_best_bb57_70
+partial_diffusion:
+  enabled: true
+  rewind_steps:
+  - 60
+search_space:
+  crop_cond_starts:
+  - 0.0
+  models:
+  - - bb81
+    - '450'
+    - sampling_partial_diffusion
+  schurns:
+  - 0
+  step_scales:
+  - 1.0
+  translations:
+  - - 0.0
+    - 0.0
+    - 0.0
+ssadj:
+- null
+total_lengths:
+- null

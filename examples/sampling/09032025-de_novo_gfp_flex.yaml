@@ -1,0 +1,39 @@
+search_space:
+  models:
+    - ["cc58", "416", "sampling_sidechain_conditional"] # best model for single-chain motif scaffolding
+    - ["cc91", "383", "sampling_sidechain_conditional_allatom_s1"] # single chain model, all-atom
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 2state_1QY3_1QYF_R96_same_residx_reatom
+  - 24_1QYF_renamed_reatom
+  - 24_1QYF_renamed_reatom_unk_reatom
+  - 24_1QYF_R96_renamed_reatom
+  - 24_1QYF_R96_renamed_reatom_unk_reatom
+motif_contigs:
+  - 20-80;A58-75;10-40;A96-96;50-200;A222-222;5-50
+  - 20-80;A58-71;10-40;A96-96;50-200;A222-222;5-50
+  - 20-80;A58-71;10-40;A96-96;50-200;A222-222;5-50
+  - 20-80;A58-71;10-40;A96-96;50-200;A222-222;5-50
+  - 20-80;A58-71;10-40;A96-96;50-200;A222-222;5-50
+total_lengths:
+  - [[120, 300]]
+  - [[120, 300]]
+  - [[120, 300]]
+  - [[120, 300]]
+  - [[120, 300]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null

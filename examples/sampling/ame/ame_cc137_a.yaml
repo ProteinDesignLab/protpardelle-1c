@@ -1,0 +1,37 @@
+search_space:
+  models:
+  - [cc137, '322', sampling_sidechain_conditional_allatom_s1]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+  - [0.0, 0.0, 0.0]
+motifs: [M0024_1nzy_specific_atoms, M0040_13pk_specific_atoms, M0050_1dbt_specific_atoms_singlechain, M0054_1qfe_specific_atoms, M0058_1cju_specific_atoms_singlechain, M0078_1al6_specific_atoms, M0092_1dli_specific_atoms,
+  M0093_1dqa_specific_atoms_singlechain, M0096_1chm_specific_atoms, M0097_1ctt_specific_atoms, M0110_1c0p_specific_atoms, M0129_1os7_specific_atoms, M0151_1q0n_specific_atoms, M0157_1qh5_specific_atoms,
+  M0179_1q3s_specific_atoms, M0188_1xel_specific_atoms, M0209_1lij_specific_atoms, M0255_1mg5_specific_atoms, M0315_1ey3_specific_atoms, M0349_1e3v_specific_atoms, M0365_1pfk_specific_atoms]
+motif_contigs: [unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed, unindexed,
+  unindexed, unindexed, unindexed, unindexed]
+total_lengths:
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+hotspots: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+ssadj: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]

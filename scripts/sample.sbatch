@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --output=sample-%x.%j.out
 #SBATCH --error=sample-%x.%j.err
-#SBATCH --partition=possu
+#SBATCH --partition=possu,bioe
 #SBATCH --gpu_cmode=shared
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=1-16:00:00
+#SBATCH --time=3:00:00
 
 source ~/.bashrc
 

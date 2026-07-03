@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc91", "383", "sampling_sidechain_conditional_allatom_s1"]
+  step_scales: [1.0, 1.2]
+  schurns: [0, 200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 1prw
+motif_contigs:
+  - 5-500;A16-27;10-500;A52-63;5-500
+total_lengths:
+  - [[60, 256]]
+hotspots:
+  - null
+ssadj:
+  - null

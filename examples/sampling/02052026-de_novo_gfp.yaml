@@ -1,0 +1,62 @@
+search_space:
+  models:
+    - ["cc58", "416", "sampling_sidechain_conditional"]
+    - ["cc133", "299", "sampling_sidechain_conditional"]
+    - ["cc136", "564", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - ["pre_post_equal_weights", [["pre_cyclic", 1], ["post_cyclic", 1]]]
+  - pre_cyclic
+  - post_cyclic
+  - ["pre_post_intermediate_equal_weights", [["pre_cyclic", 1], ["gfp_00020.pdb", 1], ["gfp_00019.pdb", 1], ["gfp_00018.pdb", 1], ["gfp_00017.pdb", 1], ["gfp_00016.pdb", 1], ["gfp_00015.pdb", 1], ["gfp_00014.pdb", 1], ["gfp_00013.pdb", 1], ["gfp_00012.pdb", 1], ["gfp_00011.pdb", 1], ["gfp_00010.pdb", 1], ["gfp_00009.pdb", 1], ["gfp_00008.pdb", 1], ["gfp_00007.pdb", 1], ["gfp_00006.pdb", 1], ["gfp_00005.pdb", 1], ["gfp_00004.pdb", 1], ["gfp_00003.pdb", 1], ["gfp_00002.pdb", 1], ["gfp_00001.pdb", 1], ["gfp_00000.pdb", 1], ["post_cyclic", 1]]]
+  - ["pre_post_intermediate_energy_barrier", [["pre_cyclic",      5],
+      ["gfp_00020.pdb",   3],
+      ["gfp_00019.pdb",   2],
+      ["gfp_00018.pdb",   1.5],
+      ["gfp_00017.pdb",   1],
+      ["gfp_00016.pdb",   0.7],
+      ["gfp_00015.pdb",   0.5],
+      ["gfp_00014.pdb",   0.3],
+      ["gfp_00013.pdb",   0.2],
+      ["gfp_00012.pdb",   0.15],
+      ["gfp_00011.pdb",   0.1],
+      ["gfp_00010.pdb",   0.1],
+      ["gfp_00009.pdb",   0.15],
+      ["gfp_00008.pdb",   0.25],
+      ["gfp_00007.pdb",   0.5],
+      ["gfp_00006.pdb",   1],
+      ["gfp_00005.pdb",   1.5],
+      ["gfp_00004.pdb",   2.5],
+      ["gfp_00003.pdb",   4],
+      ["gfp_00002.pdb",   6],
+      ["gfp_00001.pdb",   8],
+      ["gfp_00000.pdb",   9],
+      ["post_cyclic",    10]]]
+motif_contigs:
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+total_lengths:
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null

@@ -1,0 +1,88 @@
+search_space:
+  models:
+    - ["cc58", "838", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8fns_ef2
+  - 8fns_ef3
+  - lazr_173_ef1
+  - lazr_173_ef2
+  - lazr_173_ef3
+  - lazr_173_ef4
+  - lazr_173_xtal_ef1
+  - lazr_173_xtal_ef2
+  - lazr_173_xtal_ef3
+  - lazr_173_xtal_ef4
+  - neotrap_110_ef1
+  - neotrap_110_ef2
+  - neotrap_110_ef3
+  - neotrap_110_ef4
+  - neotrap_97_ef4
+motif_contigs:
+  - 10-100;A59-70;10-100
+  - 10-100;A84-95;10-100
+  - 10-100;A11-22;10-100
+  - 10-100;A35-46;10-100
+  - 10-100;A60-71;10-100
+  - 10-100;A84-95;10-100
+  - 10-100;A11-22;10-100
+  - 10-100;A35-46;10-100
+  - 10-100;A60-71;10-100
+  - 10-100;A84-95;10-100
+  - 10-100;A7-18;10-100
+  - 10-100;A31-42;10-100
+  - 10-100;A56-67;10-100
+  - 10-100;A80-91;10-100
+  - 10-100;A84-95;10-100
+total_lengths:
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+  - [[32, 105]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null

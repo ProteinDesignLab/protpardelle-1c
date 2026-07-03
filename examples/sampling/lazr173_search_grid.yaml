@@ -1,0 +1,36 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [40, 80, 120, 160, 200]
+search_space:
+  models:
+    - ["bb81", "450", "sampling_partial_diffusion"]
+  step_scales: [1.0, 1.2]
+  schurns: [0, 50]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8fnr_A_altloc.pdb
+  - lazr_173_model_0.pdb
+  - neotrap_97_model_0.pdb
+  - lazr173_seed176_best.pdb
+motif_contigs:
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+total_lengths:
+  - null
+  - null
+  - null
+  - null
+hotspots:
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null

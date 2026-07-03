@@ -1,0 +1,19 @@
+search_space:
+  models:
+    - ["cc95", "3490", "sampling_sidechain_conditional"] #* multichain model, backbone-only
+    - ["cc83", "2616", "sampling_sidechain_conditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - tracer_dimer_crystal_atom
+motif_contigs:
+  - F1-181;/;H1-9;/;25-25;D65-82;17-17;D105-119;1-1;A1-21;25-25 # hold F and H constant. Scaffold 25/D65-82/17/D105-119/1/A1-21/25
+total_lengths:
+  - [[181, 181], [9, 9], [122, 122]]
+hotspots:
+  - null
+ssadj:
+  - null

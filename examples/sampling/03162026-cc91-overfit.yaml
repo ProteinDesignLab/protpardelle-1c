@@ -1,0 +1,24 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [90, 100, 110, 120, 130, 140, 150, 160, 170, 180]
+search_space:
+  models:
+    # - ["cc91-overfit", "500", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+    # - ["cc91-overfit", "5000", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+    - ["cc91-overfit", "20000", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+    # - ["cc91-overfit", "50000", "sampling_partial_diffusion_allatom"] # single chain model, allatom but must always give ground truth sequence
+  step_scales: [1.0] # don't do SDE sampling to faithfully sample from what the model learns
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - partial_diffusion
+total_lengths:
+  - null
+hotspots:
+  - null
+ssadj:
+  - null

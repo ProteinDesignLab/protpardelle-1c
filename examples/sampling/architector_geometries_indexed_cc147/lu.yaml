@@ -1,0 +1,49 @@
+search_space:
+  models:
+    - ["cc147", "202", "sampling_acidic_tip_condmask_allatom_s1"]
+  phema_stds: [null]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+motif_contigs:
+  # End caps widened to 15-40 to give helices room to extend past the motif region.
+  - "15-40;A2-2;20-50;A3-3;20-50;A4-4;15-40"
+  - "5-30;A2-2;20-50;A3-3;20-50;A4-4;5-30"
+  - "15-40;A2-2;20-50;A3-3;20-50;A4-4;15-40"
+  - "5-30;A2-2;20-50;A3-3;20-50;A4-4;5-30"
+total_lengths:
+  - [[100, 160]]
+  - [[80, 120]]
+  - [[100, 160]]
+  - [[80, 120]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+motif_sse:
+  - HHH   # all alpha helix (3 motif residues: A2, A3, A4)
+  - EEE   # all beta strand
+  - HHH
+  - EEE
+# Per-motif SSE flank size (residues on each side that inherit the motif's SSE
+# label). cc147 was trained with motif_dssp_flank_max=10, so [1, 10] is in-distribution.
+# Helices need ~10+ residues to be rigid; bumping HHH to 10 (21-residue helical
+# region around each motif residue). Sheets work at flank=3.
+motif_sse_flank:
+  - 10
+  - 3
+  - 10
+  - 3

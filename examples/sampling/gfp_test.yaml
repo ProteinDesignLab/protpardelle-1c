@@ -1,0 +1,34 @@
+search_space:
+  models:
+    - ["cc133", "299", "sampling_sidechain_conditional"]
+    - ["cc136", "564", "sampling_sidechain_conditional"]
+  step_scales: [1.0]
+  schurns: [0.0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 2awj_motif # default
+  - 2awj_motif_unk # default with unk in MotifBench positions
+  - 2awj_motif_R96_reatom # R96
+  - 2awj_motif_unk_R96_reatom # R96 with unk in MotifBench positions
+motif_contigs:
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+  - 20-80;A58-71;10-50;A96-96;70-150;A222-222;5-50
+total_lengths:
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+  - [[128, 256]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null

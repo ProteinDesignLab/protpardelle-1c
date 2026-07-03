@@ -1,0 +1,39 @@
+# cc145 epoch 170, partial diffusion (rewind 150) with motif conditioning on
+# chain A (target) + chain B residues 98-118 (CDR3). Chain B framework (97 N-term
+# + 10 C-term residues) is re-noised and regenerated.
+#
+# Companion yamls (split because the runner has a single global partial_diffusion
+# flag and uses one sampling sub-config per yaml):
+#   7eow_cc145_pd.yaml        — pure partial diffusion of the full complex
+#   7eow_cc145_scaffold.yaml  — from-scratch motif scaffolding (no PD, caliby)
+#
+# Run:    sbatch scripts/sample.sbatch examples/sampling/7eow_cc145.yaml \
+#               examples/motifs/nanobody <num_samples> <num_mpnn_seqs>
+
+partial_diffusion:
+  enabled: true
+  rewind_steps: [150]
+
+search_space:
+  models:
+    - ["cc145", "170", "sampling_sidechain_conditional_partial_diffusion_allatom"]
+  step_scales: [1.0]    # PD is faithful sampling; step_scale=1.0 follows the model
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 7eow_AB_atom
+
+motif_contigs:
+  - "A1-202;/;97-97;B98-118;10-10"   # chain A all fixed; chain B = 97 N-term + B98-118 motif + 10 C-term
+
+total_lengths:
+  - [[202, 202], [128, 128]]
+
+hotspots:
+  - null
+
+ssadj:
+  - null

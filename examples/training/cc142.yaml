@@ -1,0 +1,103 @@
+# cc142: FastGen-style consistency distillation of cc91-large.
+# Student is initialized from the teacher and fine-tuned to match teacher
+# trajectories at lower noise (Euler step), enabling few-step generation.
+# Reference: FastGen CMModel with use_cd=True (https://github.com/NVlabs/FastGen).
+train:
+  seed: 0
+  ckpt_path: ""
+  batch_size: 16
+  max_epochs: 10000
+  eval_freq: 8000000 # seconds
+  checkpoint_freq: 1
+  checkpoints: []
+  lr: 0.00001
+  warmup_steps: 1000
+  decay_steps: 1_000_000
+  use_amp: False
+  clip_grad_norm: True
+  grad_clip_val: 1.0
+  weight_decay: 0.0
+  n_eval_samples: 10
+  length_ranges_per_chain: [[166, 188]]
+  sc_num_seqs: 4
+  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
+  self_cond_train_prob: 0.0  # not used during distillation; student is run without self-cond
+  subsample_eval_set: 0.05
+  crop_conditional: True
+  crop_cond:
+    contiguous_prob: 0.05
+    discontiguous_prob: 0.9
+    sidechain_prob: 0.9
+    sidechain_only_prob: 0.0
+    max_span_len: 12
+    max_discontiguous_res: 24
+    dist_threshold: 45.0
+    recenter_coords: True
+
+  # FastGen-style consistency distillation. Set teacher_ckpt_path to the
+  # checkpoint of the model you want to distill. The student is initialized
+  # from the teacher when train.ckpt_path is empty.
+  distill:
+    enabled: True
+    teacher_ckpt_path: /oak/stanford/groups/possu/tianyu/models/protpardelle-1c/weights/cc91-large_epoch442.pth
+    init_student_from_teacher: True
+    sigmoid_ratio: 0.0     # ECT/CM curriculum ratio: 0 = max gap (≈ KD to teacher), 1 = r→t
+    weighting: default     # "default" (1/(σ_t-σ_r)) | "one" | "sigma_sq"
+    huber_const: 0.0       # >0 enables Pseudo-Huber loss
+    min_r: 1.0e-6          # floor on the r timestep after sigmoid mapping
+
+data:
+  pdb_paths: ["/scratch/users/tianyulu/augmented_ingraham_cath_bugfree"]
+  mixing_ratios: [1.0]
+  fixed_size: 512
+  n_aatype_tokens: 21
+  se3_data_augment: True
+  translation_scale: 1.0
+  chain_residx_gap: 200
+  sigma_data: 10.258368492126465  # match teacher (cc91-large) to keep preconditioning consistent
+  auto_calc_sigma_data: False
+  n_examples_for_sigma_data: 500
+  dummy_fill_mode: "CA"
+  subset: ["designable_"]
+
+diffusion:
+  training:
+    function: "lognormal"
+    psigma_mean: -0.5
+    psigma_std: 1.5
+  sampling:
+    function: "uniform"
+    s_min: 0.001
+    s_max: 80
+
+model:
+  task: "ai-allatom-nomask"
+  pretrained_modules: []
+  struct_model_checkpoint: ""
+  mpnn_model_checkpoint: ""
+  crop_conditional: True
+  conditioning_style: "concat"
+  compute_loss_on_all_atoms: false
+  struct_model:
+    arch: "dit"
+    n_atoms: 37
+    n_channel: 512
+    noise_cond_mult: 4
+    uvit:
+      patch_size: 1
+      n_layers: 20
+      n_heads: 8
+      dim_head: 64
+      n_filt_per_layer: []
+      n_blocks_per_layer: 2
+      cat_pwd_to_conv: False
+      conv_skip_connection: False
+      position_embedding_type: "relative"
+      position_embedding_max: 32
+  mpnn_model:
+    use_self_conditioning: True
+    label_smoothing: 0.1
+    n_channel: 128
+    n_layers: 3
+    n_neighbors: 32
+    noise_cond_mult: 4

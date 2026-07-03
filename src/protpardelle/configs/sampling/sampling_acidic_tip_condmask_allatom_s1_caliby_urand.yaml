@@ -1,0 +1,90 @@
+model:
+  model_ckpt: ""
+  model_cfg: ""
+  minimpnn_path: ""
+  full_mpnn_path: ""
+
+sampling:
+  n_steps: 500
+  s_churn: 200
+  step_scale: 1.2
+  noise_schedule:
+    _partial_: true
+    _target_: "protpardelle.core.diffusion.noise_schedule"
+    s_max: 80
+    s_min: 0.001
+  motif_file_path:
+  partial_diffusion:
+    enabled: false
+    pdb_file_path:
+    n_steps: 100
+  dx: 0.0
+  dy: 0.0
+  dz: 0.0
+  conditional_cfg:
+    enabled: true
+    discontiguous_motif_assignment:
+      enabled: true
+      strategy: "fixed"
+      fixed_motif_pos: []
+    num_recurrence_steps: 1
+    crop_conditional_guidance:
+      enabled: true
+      start: 0.0
+      end: 2.0
+      freq: 1
+      freq_start: 0.0
+      freq_end: 0.0
+      strategy: "acidic-tip"
+    reconstruction_guidance:
+      enabled: false
+      start: 0.0
+      end: 2.0
+      schedule: "custom"
+      max_scale: 10.0
+      loss_weights:
+        motif: 1.0
+    replacement_guidance:
+      enabled: false
+      start: 0.0
+      end: 0.92
+
+  allatom_cfg:
+    sidechain_mode: true
+    skip_mpnn_proportion: 0.7
+    use_fullmpnn: false
+    use_fullmpnn_for_final: true
+    anneal_seq_resampling_rate: "linear"
+    jump_steps: true
+    uniform_steps: false
+    caliby_ensemble:
+      enabled: true
+      ensemble_size: 8
+      checkpoint: "caliby"
+      beam_strategy: "uniform_random"
+      rewind_steps: 150
+      venv_python: "/scratch/users/tianyulu/envs/caliby/bin/python"
+      caliby_script: null
+      model_params_dir: "/oak/stanford/groups/possu/tianyu/models/caliby"
+      backbone_model_name: "cc95"
+      backbone_model_epoch: 3490
+      caliby_x0_freq: 15
+      uniform_random_seed: 42
+
+  stage2_cfg:
+    enabled: false
+    rewind_steps: 50
+    n_steps: 200
+    s_churn: 200
+    step_scale: 1.2
+    sidechain_mode: true
+    skip_mpnn_proportion: 1.0
+    noise_schedule:
+      _partial_: true
+      _target_: "protpardelle.core.diffusion.noise_schedule"
+      s_max: 80
+      s_min: 0.001
+
+hydra:
+  run:
+    dir: ""

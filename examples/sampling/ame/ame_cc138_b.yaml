@@ -1,0 +1,39 @@
+search_space:
+  models:
+  - [cc138, '393', sampling_sidechain_conditional_allatom_s1]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+  - [0.0, 0.0, 0.0]
+motifs: [M0375_4ts9_specific_atoms_singlechain, M0500_1e3i_specific_atoms, M0552_1fgh_specific_atoms, M0555_1f8r_specific_atoms, M0584_1ldm_specific_atoms, M0630_1j79_specific_atoms, M0636_1uaq_specific_atoms,
+  M0663_1rk2_specific_atoms, M0664_2dhn_specific_atoms, M0674_1uf7_specific_atoms, M0710_1ra0_specific_atoms, M0711_2esd_specific_atoms, M0717_1x7d_specific_atoms, M0731_1mt5_specific_atoms, M0732_1xs1_specific_atoms_singlechain,
+  M0738_1o98_specific_atoms, M0739_1knp_specific_atoms, M0870_1oh9_specific_atoms, M0904_1qgx_specific_atoms, M0907_1rbl_specific_atoms]
+motif_contigs: [5-30;A87-87;5-30;A20-20;5-30;A43-43;5-30;A24-24;5-30;A217-217;5-30;A90-90;5-30;A204-204;5-30, 5-30;A48-48;5-30;A47-47;5-30;A46-46;5-30;A67-67;5-30;A178-178;5-30;A182-182;5-30, 5-30;A100-100;5-30;A101-101;5-30;A165-165;5-30;A644-644;5-30;A642-642;5-30;A447-447;5-30,
+  5-30;A223-223;5-30;A326-326;5-30, 5-30;A106-106;5-30;A193-193;5-30;A166-166;5-30;A169-169;5-30, 5-30;A250-250;5-30, 5-30;A64-64;5-30;A91-91;5-30;A89-89;5-30, 5-30;A252-252;5-30;A253-253;5-30;A254-254;5-30;A255-255;5-30,
+  5-30;A22-22;5-30;A100-100;5-30, 5-30;A46-46;5-30;A171-171;5-30;A126-126;5-30, 5-30;A156-156;5-30;A217-217;5-30, 5-30;A154-154;5-30;A284-284;5-30;A250-250;5-30, 5-30;A56-56;5-30;A228-228;5-30, 5-30;A142-142;5-30;A218-218;5-30;A217-217;5-30;A241-241;5-30;A240-240;5-30;A239-239;5-30;A238-238;5-30,
+  5-30;A138-138;5-30;A115-115;5-30;A111-111;5-30;A124-124;5-30;A126-126;5-30, 5-30;A154-154;5-30;A62-62;5-30;A261-261;5-30, 5-30;A351-351;5-30;A290-290;5-30;A386-386;5-30, 5-30;A45-45;5-30;A11-11;5-30;A8-8;5-30;A162-162;5-30;A217-217;5-30,
+  5-30;A72-72;5-30;A142-142;5-30;A294-294;5-30;A145-145;5-30;A144-144;5-30;A49-49;5-30;A147-147;5-30, 5-30;A294-294;5-30;A204-204;5-30;A203-203;5-30;A201-201;5-30;A175-175;5-30;A334-334;5-30]
+total_lengths:
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+- - [80, 200]
+hotspots: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+ssadj: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]

@@ -1,0 +1,26 @@
+# DBTL motif: lazr173 EF4 hotspot tip from /scratch/users/tianyulu/lazr173-ef4-tip.pdb
+# 5 residues: ASP84, ASP86, ASP88, TYR90, GLU95 + Lu metal ion (chain B)
+# Optimal CB-CB ordering (shortest Hamiltonian path): 86 -> 88 -> 90 -> 84 -> 95
+# Usage:
+#   python -m protpardelle.sample examples/sampling/dbtl/lazr173_ef4_tip_indexed.yaml \
+#       --motif-dir /scratch/users/tianyulu --num-samples 64
+search_space:
+  models:
+    - ["cc91-tip-condmask", "469", "sampling_acidic_tip_condmask_allatom_s1"]
+    - ["cc91-tip-condmask-large", "439", "sampling_acidic_tip_condmask_allatom_s1"]
+    - ["cc138", "248", "sampling_acidic_tip_condmask_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173-ef4-tip
+motif_contigs:
+  - "5-30;A86-86;5-30;A88-88;5-30;A90-90;5-30;A84-84;5-30;A95-95;5-30"
+total_lengths:
+  - [[80, 120]]
+hotspots:
+  - null
+ssadj:
+  - null

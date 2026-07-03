@@ -1,0 +1,31 @@
+# cc145 epoch 170, pure partial diffusion (rewind 150 steps) of the full
+# 7eow nanobody-antigen complex. No motif conditioning — re-noise the whole
+# structure to step 350 then denoise freely.
+
+partial_diffusion:
+  enabled: true
+  rewind_steps: [150]
+
+search_space:
+  models:
+    - ["cc145", "170", "sampling_partial_diffusion_allatom"]
+  step_scales: [1.0]
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+
+motifs:
+  - 7eow_AB_atom
+
+motif_contigs:
+  - partial_diffusion
+
+total_lengths:
+  - null
+
+hotspots:
+  - null
+
+ssadj:
+  - null

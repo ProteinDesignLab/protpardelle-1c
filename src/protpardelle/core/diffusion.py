@@ -93,6 +93,39 @@ def noise_schedule(
     return noise_level
 
 
+def flow_matching_interpolate(
+    coords: torch.Tensor,
+    t: torch.Tensor,
+    atom_mask: torch.Tensor,
+    dummy_fill_mode: str = "zero",
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Construct flow matching interpolant x_t = (1-t)*ε + t*x_0.
+
+    Args:
+        coords (torch.Tensor): Clean coordinates x_0. (B, N, A, X)
+        t (torch.Tensor): Interpolation time in (0, 1) for each batch. (B,)
+        atom_mask (torch.Tensor): Atom mask indicating present atoms. (B, N, A)
+        dummy_fill_mode (str): How to fill missing atoms before interpolation.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]:
+            - x_t: Interpolated coordinates. (B, N, A, X)
+            - epsilon: Noise sample used. (B, N, A, X)
+    """
+    dummy_fill_mask = 1.0 - atom_mask
+    if dummy_fill_mode == "zero":
+        dummy_fill_value = torch.zeros_like(coords)
+    else:
+        dummy_fill_value = coords[..., 1:2, :]  # CA
+    coords = coords * atom_mask.unsqueeze(-1) + dummy_fill_value * dummy_fill_mask.unsqueeze(-1)
+
+    epsilon = torch.randn_like(coords)
+    t_exp = unsqueeze_trailing_dims(t, coords)
+    x_t = (1 - t_exp) * epsilon + t_exp * coords
+
+    return x_t, epsilon
+
+
 def noise_coords(
     coords: torch.Tensor,
     noise_level: torch.Tensor,

@@ -1007,3 +1007,122 @@ RFDIFFUSION_BENCHMARK_TIP_ATOMS = {
     "TYR": ["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"],
     "VAL": ["CB", "CG1", "CG2"],
 }
+
+TERMINAL_HETEROATOM_TIP_ATOMS = {
+    "ALA": [],
+    "ARG": ["NH1", "NH2"],
+    "ASN": ["OD1", "ND2"],
+    "ASP": ["OD1", "OD2"],
+    "CYS": ["SG"],
+    "GLN": ["OE1", "NE2"],
+    "GLU": ["OE1", "OE2"],
+    "GLY": [],
+    "HIS": ["ND1", "NE2"],
+    "ILE": [],
+    "LEU": [],
+    "LYS": ["NZ"],
+    "MET": ["SD"],
+    "PHE": [],
+    "PRO": [],
+    "SER": ["OG"],
+    "THR": ["OG1"],
+    "TRP": ["NE1"],
+    "TYR": ["OH"],
+    "VAL": [],
+}
+
+
+# AME (M-CSA active-site) benchmark tip atom variants.
+#
+# Empirically observed subsets per residue from
+# examples/motifs/ame/ame.csv — each list is one "variant" the residue
+# may appear with in a motif (functional groups, partial sidechains).
+# The training cond_mode "ame_tip" samples one variant per motif residue.
+#
+# Counts in comments reflect AME prevalence after AA inference from atom names.
+AME_TIP_ATOM_VARIANTS = {
+    "ALA": [["CB", "CA"]],
+    "ARG": [
+        ["CZ", "NE", "NH1", "NH2"],            # 9× — guanidinium
+        ["CZ", "NH1"],                          # 4×
+        ["CZ", "NH2"],                          # 2×
+        ["CD", "CG", "CZ", "NE", "NH1", "NH2"], # 1× — extended
+        ["CD", "CZ", "NE"],                     # appears in unmapped
+    ],
+    "ASN": [
+        ["CG", "ND2"],                          # 2× — H-bond donor
+        ["CB", "CG", "ND2", "OD1"],             # 1× — full amide
+        ["CG", "OD1"],
+    ],
+    "ASP": [
+        ["CB", "CG", "OD1", "OD2"],             # 15× — full carboxylate
+        ["CG", "OD2"],                          # 13× — half carboxylate
+        ["CG", "OD1"],                          # 5× — half carboxylate
+    ],
+    "CYS": [
+        ["CA", "CB", "SG"],                     # 4×
+        ["CB", "SG"],                           # 3×
+        ["SG"],
+    ],
+    "GLN": [
+        ["CD", "CG", "OE1", "NE2"],
+        ["CD", "OE1", "NE2"],
+        ["CD", "NE2"],
+    ],
+    "GLU": [
+        ["CD", "CG", "OE1", "OE2"],             # 7× — full carboxylate
+        ["CD", "OE2"],                          # 5×
+        ["CD", "OE1"],                          # 3×
+    ],
+    "GLY": [["CA"]],
+    "HIS": [
+        ["CD2", "CE1", "NE2"],                          # 10× — half ring
+        ["CD2", "CE1", "CG", "ND1", "NE2"],             # 5× — full ring
+        ["CB", "CD2", "CE1", "CG", "ND1", "NE2"],       # 3× — ring + CB
+        ["CE1", "ND1", "NE2"],                          # 1× — coordinating Ns
+        ["CE1", "CG", "ND1"],                           # 1×
+    ],
+    "ILE": [["CB", "CG1", "CG2", "CD1"], ["CB", "CG1"]],
+    "LEU": [["CB", "CG", "CD1", "CD2"], ["CG", "CD1", "CD2"]],
+    "LYS": [
+        ["CD", "CE", "NZ"],                     # 12×
+        ["CE", "NZ"],                           # 6×
+    ],
+    "MET": [["CG", "SD", "CE"], ["SD", "CE"], ["CE"]],
+    "PHE": [["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ"], ["CG", "CD1", "CD2", "CE1", "CE2", "CZ"]],
+    "PRO": [["N", "CA", "CB", "CG", "CD"]],
+    "SER": [
+        ["CA", "CB", "OG"],                     # 5×
+        ["CB", "OG"],                           # 4×
+        ["OG"],
+    ],
+    "THR": [
+        ["CA", "CB", "CG2", "OG1"],             # 2×
+        ["CB", "OG1"],                          # 2×
+        ["CB", "CG2", "OG1"],
+    ],
+    "TRP": [
+        ["CD1", "CD2", "CE2", "CG", "CZ2", "NE1"],      # 1×
+        ["CG", "CD1", "NE1", "CD2", "CE2"],             # H-bond donor + ring portion
+        ["NE1"],
+    ],
+    "TYR": [
+        ["CE1", "CE2", "CZ", "OH"],             # 2×
+        ["CZ", "OH"],                           # 1×
+        ["CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"],
+    ],
+    "VAL": [["CB", "CG1", "CG2"]],
+}
+
+
+# AME backbone-only motif fragments — applied to any residue type when
+# the catalytic role uses backbone atoms (e.g., oxyanion hole, H-bond donor).
+# Counts from AME (BB inference: 36/172 = ~21%).
+AME_BACKBONE_VARIANTS = [
+    ["CA", "N"],                  # 13× — N-H donor
+    ["C", "CA", "CB", "N"],       # 9× — partial backbone + CB
+    ["C", "CA", "O"],             # 5× — carbonyl
+    ["C", "O"],                   # 4× — oxyanion hole
+    ["C", "CA", "N"],             # 4×
+    ["C", "CA", "CB", "N", "O"],  # full backbone + CB
+]

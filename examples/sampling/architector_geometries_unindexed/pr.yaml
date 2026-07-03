@@ -1,0 +1,143 @@
+search_space:
+  models:
+    - ["cc137", "189", "sampling_acidic_tip_condmask_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - pr_acetate_cn8_ICIGOT_geomtry_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_YEMSEP_geometry_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_axial_bicapped_trigonal_prismatic_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_bicapped_trigonal_prismatic_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_dodecahedral_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_hexagonal_bipyramidal_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_square_antiprismatic_0_nunpairedes_0_charge_-1
+  - pr_acetate_cn8_square_prismatic_0_nunpairedes_0_charge_-1
+  - pr_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+  - pr_acetate_water_cn7_capped_octahedral_0_nunpairedes_0_charge_0
+  - pr_acetate_water_cn7_capped_trigonal_prismatic_0_nunpairedes_0_charge_0
+  - pr_acetate_water_cn7_hexagonal_pyramidal_0_nunpairedes_0_charge_0
+  - pr_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+  - pr_acetate_water_cn9_am_c3_9H2O_c0_0_nunpairedes_0_charge_-1
+  - pr_acetate_water_cn9_capped_square_antiprismatic_0_nunpairedes_0_charge_-1
+  - pr_acetate_water_cn9_cn9_YICLED_0_nunpairedes_0_charge_-1
+  - pr_acetate_water_cn9_tri_tri_mer_capped_0_nunpairedes_0_charge_-1
+  - pr_acetate_water_cn9_tricapped_trigonal_prismatic_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_ICIGOT_geomtry_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_YEMSEP_geometry_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_axial_bicapped_trigonal_prismatic_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_bicapped_trigonal_prismatic_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_dodecahedral_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_hexagonal_bipyramidal_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_square_antiprismatic_0_nunpairedes_0_charge_-1
+  - pr_propanoate_cn8_square_prismatic_0_nunpairedes_0_charge_-1
+motif_contigs:
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+total_lengths:
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null

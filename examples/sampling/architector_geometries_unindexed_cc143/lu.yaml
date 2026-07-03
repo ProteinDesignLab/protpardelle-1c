@@ -1,0 +1,39 @@
+search_space:
+  models:
+    - ["cc143", "664", "sampling_acidic_tip_condmask_allatom_s1"]
+  phema_stds: [null, 0.05, 0.10]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+motif_contigs:
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+  - "unindexed"
+total_lengths:
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+  - [[80, 120]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+motif_sse:
+  - HHH   # all alpha helix
+  - EEE   # all beta strand
+  - HHH
+  - EEE

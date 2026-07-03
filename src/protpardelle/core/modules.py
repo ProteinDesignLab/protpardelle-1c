@@ -908,6 +908,7 @@ class TimeCondTransformer(nn.Module):
         seq_mask=None,
         residue_index=None,
         chain_index=None,
+        pos_bias_mask: TensorType["b 1 n n", float] | None = None,
     ):
         if self.pos_emb_type == "absolute":
             pos_emb = posemb_sincos_1d(x)
@@ -919,6 +920,8 @@ class TimeCondTransformer(nn.Module):
         if "relchain" in self.pos_emb_type:
             assert chain_index is not None
             pos_emb = self.relchain(chain_index)
+            if pos_bias_mask is not None:
+                pos_emb = pos_emb * pos_bias_mask
             attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
         if "relative" in self.pos_emb_type:
             assert residue_index is not None
@@ -926,6 +929,8 @@ class TimeCondTransformer(nn.Module):
                 pos_emb += self.relpos(residue_index)
             else:
                 pos_emb = self.relpos(residue_index)
+            if pos_bias_mask is not None:
+                pos_emb = pos_emb * pos_bias_mask
             attn_bias = pos_emb if attn_bias is None else attn_bias + pos_emb
         if seq_mask is not None:
             x = x * seq_mask.unsqueeze(-1)
@@ -1097,6 +1102,7 @@ class TimeCondUViT(nn.Module):
         residue_index=None,
         chain_index=None,
         return_emb=False,
+        pos_bias_mask: TensorType["b 1 n n", float] | None = None,
     ):
 
         if self.n_conv_layers > 0:  # pad up to even dims
@@ -1131,6 +1137,7 @@ class TimeCondUViT(nn.Module):
             seq_mask=seq_mask,
             residue_index=residue_index,
             chain_index=chain_index,
+            pos_bias_mask=pos_bias_mask,
         )
 
         x = self.from_patch(emb)

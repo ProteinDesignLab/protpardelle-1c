@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc91-tip-condmask", "469", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_cn8_ICIGOT_geomtry_0_nunpairedes_0_charge_-1
+motif_contigs:
+  - "5-40;A2-2;30-60;A4-4;30-60;A3-3;30-60;A5-5;5-40"
+total_lengths:
+  - [[80, 200]]
+hotspots:
+  - null
+ssadj:
+  - null

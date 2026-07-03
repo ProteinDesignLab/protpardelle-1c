@@ -1,0 +1,53 @@
+search_space:
+  models:
+    - ["cc137", "322", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+    - ["cc143", "746", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+  - lu_acetate_water_cn7_pentagonal_bipyramidal_0_nunpairedes_0_charge_0
+motif_contigs:
+  - "unindexed"
+  - "unindexed"
+total_lengths:
+  - [[12, 12]]
+  - [[12, 12]]
+hotspots:
+  - null
+  - null
+ssadj:
+  - null
+  - null
+motif_sse:
+  - null
+  - null
+
+# Inference-time guidance via branch-evaluate-select (Proteina-Complexa-style).
+# After the main 500-step trajectory completes, each primary is forked into
+# `n_branches` copies. Each branch independently rewinds to step `branch_step`
+# (via partial_diffusion with n_steps = 500 - branch_step) and rolls forward
+# to step 500. Single-backbone Caliby (no ensemble) is then run on each branch
+# to produce a sequence; the reward is the sum of `aatype_biases` over non-motif
+# positions (motif AAs are pinned via fixed_pos_override_seq, so they're held
+# constant across branches and don't affect ranking). Top-`k_keep` branch per
+# primary is selected; the primary PDB on disk and in-memory aux are overwritten
+# with the winner. The existing ensemble-Caliby step then runs as usual on the
+# winning structures.
+#
+# To bias toward prolines outside motif residues, set `P: 5.0` (or any positive
+# scalar) — the larger the bonus, the stronger the selection pressure.
+inference_guidance:
+  enabled: true
+  # `branch_step` is the iteration index in the main 500-step loop at which we
+  # fork; rewind_steps = n_steps - branch_step. Smaller branch_step = earlier
+  # fork (noisier state, more guidance leverage, more compute per branch).
+  branch_step: 250          # fork at iter 250 -> each branch denoises 250 more steps
+  n_branches: 4             # K candidates per primary
+  k_keep: 1                 # top-k branches retained (only 1 supported for now)
+  reward:
+    aatype_biases:
+      P: 5.0                # one-letter codes; missing entries default to 0.0

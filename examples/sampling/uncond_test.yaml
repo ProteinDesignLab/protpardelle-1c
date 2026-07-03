@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc130", "26", "sampling_unconditional"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - null
+total_lengths:
+  - [[128, 128]]
+hotspots:
+  - null
+ssadj:
+  - null

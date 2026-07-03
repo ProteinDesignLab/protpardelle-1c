@@ -1,0 +1,41 @@
+partial_diffusion:
+  enabled: true
+  rewind_steps: [160]
+search_space:
+  models:
+    - ["bb81", "450", "sampling_partial_diffusion"]
+  step_scales: [1.0]
+  schurns: [0]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173_topk_00.pdb
+  - lazr173_topk_01.pdb
+  - lazr173_topk_02.pdb
+  - lazr173_topk_03.pdb
+  - lazr173_topk_04.pdb
+motif_contigs:
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+  - partial_diffusion
+total_lengths:
+  - null
+  - null
+  - null
+  - null
+  - null
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null

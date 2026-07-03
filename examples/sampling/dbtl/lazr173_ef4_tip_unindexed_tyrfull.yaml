@@ -1,0 +1,19 @@
+# DBTL motif: lazr173 EF4 — unindexed cc137, ASP/GLU tips + full TYR90 residue.
+search_space:
+  models:
+    - ["cc137", "189", "sampling_acidic_tip_tyr_full_condmask_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173-ef4-tip
+motif_contigs:
+  - "unindexed"
+total_lengths:
+  - [[80, 120]]
+hotspots:
+  - null
+ssadj:
+  - null

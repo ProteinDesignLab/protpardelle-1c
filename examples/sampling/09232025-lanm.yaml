@@ -1,0 +1,53 @@
+search_space:
+  models:
+    # - ["cc58", "416", "sampling_sidechain_conditional"]
+    - ["cc58", "521", "sampling_sidechain_conditional"]
+    - ["cc58", "595", "sampling_sidechain_conditional"]
+    - ["cc58", "649", "sampling_sidechain_conditional"]
+    - ["cc58", "777", "sampling_sidechain_conditional"]
+    - ["cc58", "838", "sampling_sidechain_conditional"]
+  step_scales: [1.0, 1.2]
+  schurns: [0, 200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - 8FNR_EF2_EF3
+  - 8FNS_EF2_EF3
+  - boltz_hans_EF2_EF3
+  - boltz_o36_EF2_EF3
+  - lbt_mex_EF2_EF3
+  - lbt_mex_t2p_EF2_EF3
+  - lbt_mex_t2p_n3d_EF2_EF3
+motif_contigs:
+  - 10-60;A58-69;10-30;A83-94;10-60 # native scaffold lengths: 30/A/13/B/38
+  - 10-60;A59-70;10-30;A84-95;10-60
+  - 10-60;A35-46;10-30;A60-71;10-60
+  - 10-60;A37-48;10-30;A62-73;10-60
+  - 10-60;A39-50;10-30;A64-75;10-60
+  - 10-60;A39-50;10-30;A64-75;10-60
+  - 10-60;A39-50;10-30;A64-75;10-60
+total_lengths:
+  - [[105, 105]]
+  - [[105, 105]]
+  - [[105, 105]]
+  - [[105, 105]]
+  - [[105, 105]]
+  - [[105, 105]]
+  - [[105, 105]]
+hotspots:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+ssadj:
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null
+  - null

@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc137", "189", "sampling_acidic_tip_condmask_allatom_s1_caliby_bb"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_cn8_ICIGOT_geomtry_0_nunpairedes_0_charge_-1
+motif_contigs:
+  - "unindexed"
+total_lengths:
+  - [[60, 80]]
+hotspots:
+  - null
+ssadj:
+  - null

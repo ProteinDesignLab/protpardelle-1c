@@ -1,0 +1,23 @@
+# DBTL motif: lazr173 EF4 hotspot tip — indexed + Caliby ensemble design
+# Same as lazr173_ef4_tip_indexed.yaml but routed through the caliby sampling config.
+# Flow: cc137/cc91/cc138 0->350 -> cc95 350->500 beam 32 -> Caliby -> main re-denoise.
+search_space:
+  models:
+    - ["cc91-tip-condmask", "469", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+    - ["cc91-tip-condmask-large", "439", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+    - ["cc138", "248", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lazr173-ef4-tip
+motif_contigs:
+  - "5-30;A86-86;5-30;A88-88;5-30;A90-90;5-30;A84-84;5-30;A95-95;5-30"
+total_lengths:
+  - [[80, 120]]
+hotspots:
+  - null
+ssadj:
+  - null

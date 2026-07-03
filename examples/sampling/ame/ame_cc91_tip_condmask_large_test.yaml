@@ -1,0 +1,23 @@
+search_space:
+  models:
+    - ["cc91-tip-condmask-large", "439", "sampling_sidechain_conditional_allatom_s1"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - M0096_1chm_specific_atoms
+  - M0050_1dbt_specific_atoms_singlechain
+motif_contigs:
+  - "5-30;A232-232;5-30;A262-262;5-30;A358-358;5-30"
+  - "5-30;A215-215;5-30;A33-33;5-30;A60-60;5-30;A62-62;5-30;A65-65;5-30;A123-123;5-30"
+total_lengths:
+  - [[80, 200]]
+  - [[80, 200]]
+hotspots:
+  - null
+  - null
+ssadj:
+  - null
+  - null

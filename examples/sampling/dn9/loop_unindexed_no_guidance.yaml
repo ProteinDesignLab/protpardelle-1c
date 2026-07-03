@@ -1,0 +1,23 @@
+search_space:
+  models:
+    - ["cc137", "322", "sampling_acidic_tip_condmask_allatom_s1_caliby"]
+  step_scales: [1.2]
+  schurns: [200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - lu_acetate_water_cn7_am_c3_7H2O_c0_0_nunpairedes_0_charge_0
+motif_contigs:
+  - "unindexed"
+total_lengths:
+  - [[12, 12]]
+hotspots:
+  - null
+ssadj:
+  - null
+motif_sse:
+  - null
+
+inference_guidance:
+  enabled: false

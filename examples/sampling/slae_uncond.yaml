@@ -1,0 +1,18 @@
+search_space:
+  models:
+    - ["cc91", "383", "sampling_unconditional_allatom_s1"] #* single chain model, all-atom
+  step_scales: [1.0, 1.2]
+  schurns: [0, 200]
+  crop_cond_starts: [0.0]
+  translations:
+    - [0.0, 0.0, 0.0]
+motifs:
+  - null
+motif_contigs:
+  - null
+total_lengths:
+  - [[20, 256]]
+hotspots:
+  - null
+ssadj:
+  - null
