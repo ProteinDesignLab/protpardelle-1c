@@ -168,6 +168,18 @@ def save_samples(
     return all_samp_save_names, all_pred_save_names
 
 
+def _resolve_caliby_venv_python(caliby_cfg: dict) -> str:
+    """Path to the Python interpreter of the Caliby venv.
+
+    Precedence: ``$CALIBY_VENV_PYTHON`` env var, then
+    ``caliby_ensemble.venv_python`` in the sampling config. The env var lets each
+    user point at their own Caliby venv without editing the shared config, whose
+    default may be a personal path that is not readable by others.
+    """
+
+    return os.environ.get("CALIBY_VENV_PYTHON") or caliby_cfg["venv_python"]
+
+
 def _resolve_caliby_cuda_device(caliby_cfg: dict) -> str | None:
     """Which GPU should the Caliby subprocess target (CUDA_VISIBLE_DEVICES)?
 
@@ -368,7 +380,7 @@ def run_inference_guidance(
             f"inference_guidance.k_keep={k_keep} not supported; only k_keep=1 implemented"
         )
 
-    venv_python = caliby_cfg["venv_python"]
+    venv_python = _resolve_caliby_venv_python(caliby_cfg)
     caliby_script = caliby_cfg.get("caliby_script") or str(
         Path(__file__).resolve().parents[2] / "scripts" / "run_caliby_ensemble.py"
     )
@@ -735,7 +747,7 @@ def run_caliby_ensemble_design(
     rewind_steps = int(caliby_cfg.get("rewind_steps", 150))
     checkpoint = caliby_cfg.get("checkpoint", "caliby")
     beam_strategy = caliby_cfg.get("beam_strategy", "minimpnn")
-    venv_python = caliby_cfg["venv_python"]
+    venv_python = _resolve_caliby_venv_python(caliby_cfg)
     caliby_script = caliby_cfg.get("caliby_script") or str(
         Path(__file__).resolve().parents[2] / "scripts" / "run_caliby_ensemble.py"
     )
