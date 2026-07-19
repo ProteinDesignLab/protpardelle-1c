@@ -168,6 +168,22 @@ def save_samples(
     return all_samp_save_names, all_pred_save_names
 
 
+def _resolve_caliby_cuda_device(caliby_cfg: dict) -> str | None:
+    """Which GPU should the Caliby subprocess target (CUDA_VISIBLE_DEVICES)?
+
+    Precedence: ``caliby_ensemble.cuda_device`` in the sampling config, then the
+    ``CALIBY_CUDA_VISIBLE_DEVICES`` env var. Returns ``None`` to inherit the
+    parent's ``CUDA_VISIBLE_DEVICES`` (share the main process's GPU) — fine on
+    Default-compute-mode nodes but not on EXCLUSIVE_PROCESS nodes, where the
+    subprocess must be pointed at a second allocated GPU.
+    """
+
+    device = caliby_cfg.get("cuda_device")
+    if device is None:
+        device = os.environ.get("CALIBY_CUDA_VISIBLE_DEVICES")
+    return None if device is None else str(device)
+
+
 def _call_caliby_subprocess_batched(
     jobs: list[dict],
     out_dir: str,
@@ -177,6 +193,7 @@ def _call_caliby_subprocess_batched(
     checkpoint: str = "caliby",
     num_seqs: int = 1,
     temperature: float | None = None,
+    cuda_visible_devices: str | None = None,
 ) -> list[dict]:
     """Invoke scripts/run_caliby_ensemble.py once for multiple primaries.
 
@@ -215,6 +232,24 @@ def _call_caliby_subprocess_batched(
     env["MODEL_PARAMS_DIR"] = model_params_dir
     env.setdefault("PDB_MIRROR_PATH", "")
     env.setdefault("CCD_MIRROR_PATH", "")
+    # Optionally pin the Caliby subprocess to a specific GPU. On nodes whose
+    # GPUs are in EXCLUSIVE_PROCESS compute mode, a second process cannot open a
+    # CUDA context on the same physical device the main sampling process already
+    # holds one on — the subprocess dies at model load with
+    # "CUDA error: CUDA-capable device(s) is/are busy or unavailable". Allocate
+    # a second GPU (-G 2) and set caliby_ensemble.cuda_device (or
+    # $CALIBY_CUDA_VISIBLE_DEVICES) to its index to route the subprocess there.
+    if cuda_visible_devices is not None:
+        env["CUDA_VISIBLE_DEVICES"] = str(cuda_visible_devices)
+    # Free the main process's cached GPU memory so the subprocess (esp. when
+    # sharing a single GPU in Default compute mode) has headroom to load Caliby.
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
     result = subprocess.run(
         [venv_python, caliby_script, args_path],
         capture_output=True, text=True, env=env,
@@ -339,6 +374,7 @@ def run_inference_guidance(
     )
     model_params_dir = caliby_cfg["model_params_dir"]
     checkpoint = caliby_cfg.get("checkpoint", "caliby")
+    caliby_cuda_device = _resolve_caliby_cuda_device(caliby_cfg)
 
     trimmed_coords, trimmed_residue_index, trimmed_chain_index, seq_mask, samp_aux, _ = aux
     num_main = len(main_sample_pdbs)
@@ -521,6 +557,7 @@ def run_inference_guidance(
         checkpoint=checkpoint,
         num_seqs=num_seqs_per_branch,
         temperature=caliby_temperature,
+        cuda_visible_devices=caliby_cuda_device,
     )
 
     # Phase 3: for each (branch, caliby seq) pair, compute reward. The branch's
@@ -703,6 +740,7 @@ def run_caliby_ensemble_design(
         Path(__file__).resolve().parents[2] / "scripts" / "run_caliby_ensemble.py"
     )
     model_params_dir = caliby_cfg["model_params_dir"]
+    caliby_cuda_device = _resolve_caliby_cuda_device(caliby_cfg)
 
     if beam_strategy not in ("minimpnn", "uniform_random", "caliby_x0", "backbone_only"):
         raise ValueError(f"Unknown beam_strategy: {beam_strategy}")
@@ -888,6 +926,7 @@ def run_caliby_ensemble_design(
         model_params_dir=model_params_dir,
         checkpoint=checkpoint,
         num_seqs=1,
+        cuda_visible_devices=caliby_cuda_device,
     )
 
     caliby_seqs: list[str] = []
@@ -1818,15 +1857,20 @@ def sample(
             else:
                 sampling_config["sampling"]["motif_file_path"] = motif_fp
                 sampling_config["sampling"]["multi_motif_list"] = None
-                # Copy original motif PDB and filtered conditioning-atoms PDB
-                shutil.copy(motif_fp, per_motif_save_dir)
-                cond_strategy = sampling_config["sampling"]["conditional_cfg"][
-                    "crop_conditional_guidance"
-                ].get("strategy")
-                if cond_strategy is not None:
-                    _write_conditioning_atoms_pdb(
-                        motif_fp, per_motif_save_dir, cond_strategy
-                    )
+                # Unconditional runs (motifs: [null]) use a placeholder path
+                # (motif_dir/"NNN_unconditional") that never points at a real
+                # file, so skip the provenance copy / conditioning-atoms write
+                # rather than crashing on a missing file.
+                if Path(motif_fp).exists():
+                    # Copy original motif PDB and filtered conditioning-atoms PDB
+                    shutil.copy(motif_fp, per_motif_save_dir)
+                    cond_strategy = sampling_config["sampling"]["conditional_cfg"][
+                        "crop_conditional_guidance"
+                    ].get("strategy")
+                    if cond_strategy is not None:
+                        _write_conditioning_atoms_pdb(
+                            motif_fp, per_motif_save_dir, cond_strategy
+                        )
             sampling_config["sampling"]["dx"] = dx
             sampling_config["sampling"]["dy"] = dy
             sampling_config["sampling"]["dz"] = dz

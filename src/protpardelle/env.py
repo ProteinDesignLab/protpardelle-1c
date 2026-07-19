@@ -4,12 +4,31 @@ Author: Zhaoyang Li
 """
 
 import os
+import re
 import shutil
 import subprocess
 from importlib import resources
 from pathlib import Path
 
 from protpardelle.utils import norm_path
+
+
+def _looks_like_hf_hub_id(value: str) -> bool:
+    """Heuristic: is ``value`` a bare Hugging Face Hub repo id (``org/repo``)?
+
+    A bare Hub id such as ``facebook/esmfold_v1`` must reach
+    ``transformers.from_pretrained`` verbatim. Running it through
+    ``norm_path()`` (which calls ``Path.resolve()``) would rewrite it relative
+    to the current working directory and produce a bogus local path, so we must
+    detect and pass these through untouched. Treat a string as a Hub id when it
+    has exactly one ``/`` in ``org/repo`` shape and does not already exist on
+    disk (a real local snapshot path always wins).
+    """
+
+    expanded = os.path.expanduser(os.path.expandvars(value))
+    if os.path.exists(expanded):
+        return False
+    return bool(re.fullmatch(r"[A-Za-z0-9][\w.-]*/[\w.-]+", value))
 
 
 def _detect_project_root_dir() -> Path:
@@ -58,7 +77,14 @@ _default_protpardelle_output_dir = PROJECT_ROOT_DIR / "results"
 PROTPARDELLE_MODEL_PARAMS = norm_path(
     os.getenv("PROTPARDELLE_MODEL_PARAMS", str(_default_protpardelle_model_params))
 )
-ESMFOLD_PATH = norm_path(os.getenv("ESMFOLD_PATH", str(_default_esmfold_path)))
+_esmfold_path_env = os.getenv("ESMFOLD_PATH", str(_default_esmfold_path))
+# Preserve bare Hub ids (e.g. "facebook/esmfold_v1") verbatim; only normalize
+# real filesystem paths.
+ESMFOLD_PATH = (
+    _esmfold_path_env
+    if _looks_like_hf_hub_id(_esmfold_path_env)
+    else norm_path(_esmfold_path_env)
+)
 PROTEINMPNN_WEIGHTS = norm_path(
     os.getenv("PROTEINMPNN_WEIGHTS", str(_default_protein_mpnn_weights))
 )
