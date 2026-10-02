@@ -1,0 +1,129 @@
+# cc153 -- cc89 extended to arbitrary biomolecular systems, LIGANDS DENOISED.
+#
+# Identical to cc152 except `model.ligand_treatment: denoised`: ligand,
+# cofactor and metal atoms are noised and supervised exactly like protein
+# atoms, so the model learns to *generate* them. cc152 instead treats them
+# as fixed context (see examples/training/cc152.yaml).
+#
+# Same trunk, same task ("ai-allatom"), same noise schedule and same crop-
+# conditioning as cc89. Two things change:
+#
+#  1. Data. Instead of augmented-Ingraham CATH (canonical protein only) we train
+#     on the wwPDB mmCIF mirror through `atomize_io`, which keeps modified amino
+#     acids in their parent residue's atom37 slots and adds ligands / cofactors /
+#     metals as pseudo-residue tokens on their own chain index.
+#  2. Conditioning style gains "atomized": 13 extra per-atom input channels
+#     (9 element one-hot + 3 CCD reference-conformer xyz + 1 non-canonical-slot
+#     flag) that tell the trunk what each of the 37 slots actually holds. Their
+#     input weights are zero-initialised by scripts/atomize/expand_cc89_to_cc152.py,
+#     so at step 0 this model is numerically identical to cc89.
+#
+# sigma_data is auto-calculated from 500 draws of THIS dataset (it is not the
+# CATH value); the noise schedule itself is untouched.
+
+train:
+  seed: 0
+  ckpt_path: "/scratch/users/tianyulu/protpardelle-1c-experiments/cc152_init/cc152_from_cc89_epoch415.pth"
+  batch_size: 128
+  max_epochs: 10000
+  eval_freq: 8000000 # seconds
+  checkpoint_freq: 1
+  checkpoints: []
+  lr: 0.0001
+  warmup_steps: 1000
+  decay_steps: 2_000_000
+  use_amp: False
+  clip_grad_norm: True
+  grad_clip_val: 1.0
+  weight_decay: 0.0
+  n_eval_samples: 10
+  length_ranges_per_chain: [[166, 188]]
+  sc_num_seqs: 4
+  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
+  self_cond_train_prob: 0.9
+  subsample_eval_set: 0.05
+  crop_conditional: True
+  crop_cond:  # identical to cc89
+    contiguous_prob: 0.05
+    discontiguous_prob: 0.9
+    sidechain_prob: 0.9
+    sidechain_only_prob: 0.0
+    max_span_len: 12
+    max_discontiguous_res: 24
+    dist_threshold: 45.0
+    recenter_coords: True
+
+data:
+  pdb_paths: ["/scratch/users/tianyulu/datasets/pdb_atomized"]
+  mixing_ratios: [1.0]
+  fixed_size: 384
+  n_aatype_tokens: 21
+  se3_data_augment: True
+  translation_scale: 1.0
+  chain_residx_gap: 200 # 200-residue gap per chain in the relative pos encoding
+  sigma_data: 10.01  # placeholder; overridden at runtime by auto_calc_sigma_data
+  auto_calc_sigma_data: True
+  n_examples_for_sigma_data: 500
+  dummy_fill_mode: "zero"
+  subset: ["atomized_"] # -> train_atomized_pdb_keys.list
+  mirror_path: "/scratch/users/tianyulu/datasets/pdb_mirror/mmCIF"
+  ccd_cache: "/scratch/users/tianyulu/datasets/pdb_atomized/ccd_cache.pkl"
+  atomize:
+    # Assemblies/asymmetric units above this many residues are skipped outright
+    # rather than parsed (virus capsids etc.); everything else is cropped to
+    # `fixed_size` tokens around an anchor.
+    max_input_residues: 4000
+    # Probability the crop is centred on a non-canonical residue / ligand rather
+    # than a random residue, so the rare tokens are actually seen.
+    anchor_on_hetero_prob: 0.8
+    contact_cutoff: 10.0
+    include_hetero: True
+    min_hetero_atoms: 1
+
+diffusion:  # unchanged from cc89
+  training:
+    function: "lognormal"
+    psigma_mean: -0.5
+    psigma_std: 1.5
+  sampling:
+    function: "uniform"
+    s_min: 0.001
+    s_max: 80
+
+model:
+  task: "ai-allatom"
+  pretrained_modules: []
+  struct_model_checkpoint: ""
+  mpnn_model_checkpoint: ""
+  crop_conditional: True
+  conditioning_style: "concat+atomized"
+  # Ligands are noised and supervised like protein atoms.
+  ligand_treatment: "denoised"
+  compute_loss_on_all_atoms: false
+  struct_model:
+    arch: "dit"
+    # 37 canonical atom37 slots + 24 global extra-atom slots. Slots 0-36 keep
+    # their cc89 meaning exactly (slot k == atom named atom_types[k]); slots
+    # 37-60 are the shared extra-atom block used identically by every residue
+    # type, modified residue, ligand and metal. See data/atomize_io.py.
+    n_atoms: 61
+    n_channel: 256
+    noise_cond_mult: 4
+    uvit:
+      patch_size: 1
+      n_layers: 10
+      n_heads: 8
+      dim_head: 32
+      n_filt_per_layer: []
+      n_blocks_per_layer: 2
+      cat_pwd_to_conv: False
+      conv_skip_connection: False
+      position_embedding_type: "rotary"
+      position_embedding_max: 32
+  mpnn_model:
+    use_self_conditioning: True
+    label_smoothing: 0.1
+    n_channel: 128
+    n_layers: 3
+    n_neighbors: 32
+    noise_cond_mult: 4

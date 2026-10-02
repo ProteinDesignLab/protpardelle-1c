@@ -18,6 +18,7 @@ from torch.utils.data import Dataset, RandomSampler, Sampler
 from torchtyping import TensorType
 from tqdm.auto import tqdm
 
+import protpardelle.data.atomize_io
 import protpardelle.data.pdb_io
 import protpardelle.utils
 from protpardelle.common.residue_constants import (
@@ -44,6 +45,16 @@ FEATURES_1D = (
     "displacement",
     "sse",
     "sse_dssp",
+    "sasa_class",
+    # Atomized per-atom slot descriptors (cc152): element group id [N, 37],
+    # CCD reference-conformer xyz [N, 37, 3], non-canonical-slot flag [N, 37].
+    "atom_elem",
+    "atom_ref",
+    "atom_noncanon",
+    # [N] 1.0 for ligand/metal pseudo-residue rows (cc152/cc153).
+    "is_ligand",
+    # [N, 61, 3] bond-topology scalars (cc154).
+    "atom_bondfeat",
 )
 FEATURES_2D = ("adj",)
 FEATURES_FLOAT = (
@@ -56,6 +67,14 @@ FEATURES_FLOAT = (
     "fluctuation",
     "displacement",
     "sse_dssp",
+    "sasa_class",
+    "atom_ref",
+    "atom_noncanon",
+    "is_ligand",
+    "atom_bondfeat",
+    # Fixed [MAX_BOND_PAIRS] ideal bond lengths; NOT per-residue, so kept out
+    # of FEATURES_1D alongside bond_pairs (mirrors hbond_pairs).
+    "bond_lengths",
 )
 FEATURES_LONG = (
     "aatype",
@@ -65,6 +84,13 @@ FEATURES_LONG = (
     "sse",
     "adj",
     "forced_motif_chain",
+    # Per-example fixed [H_max, 4] h-bond pair list (donor res/atom, acceptor
+    # res/atom), padded with -1. NOT per-residue, so kept out of FEATURES_1D
+    # (must not be residue-cropped) — mirrors `orig_size`.
+    "hbond_pairs",
+    "atom_elem",
+    # Fixed [MAX_BOND_PAIRS, 4] (token_i, slot_i, token_j, slot_j), -1 padded.
+    "bond_pairs",
 )
 
 DSSP_CSV_CACHE: dict[str, dict[str, str]] = {}
@@ -95,6 +121,84 @@ def _load_dssp_csv(path: str) -> dict[str, str]:
 
 
 _SSE_CHAR_TO_IDX = {"H": 0, "E": 1, "L": 2}
+
+SASA_CSV_CACHE: dict[str, dict[str, "np.ndarray"]] = {}
+
+# Default relative-SASA thresholds for the buried / partial / exposed classes.
+# Overridable per training config via data.sasa_thresholds.
+_DEFAULT_SASA_THRESHOLDS = {"buried_max": 0.1, "exposed_min": 0.25}
+
+
+def _load_sasa_csv(path: str) -> dict[str, "np.ndarray"]:
+    """Load the SASA CSV produced by scripts/sasa/compute_sasa.py.
+
+    Columns: pdb_code, source_pdb, length, rsa. `rsa` is a comma-separated
+    per-residue relative-SASA string. Returns {pdb_code: np.ndarray[float]}.
+    Rows whose `rsa` starts with "ERROR" are skipped.
+    """
+    if path in SASA_CSV_CACHE:
+        return SASA_CSV_CACHE[path]
+    import csv as _csv
+    table: dict[str, np.ndarray] = {}
+    with open(path) as f:
+        r = _csv.reader(f)
+        next(r, None)  # header
+        for row in r:
+            if len(row) < 4:
+                continue
+            code, _src, _length, rsa = row[0], row[1], row[2], row[3]
+            if rsa.startswith("ERROR") or not rsa:
+                continue
+            try:
+                table[code] = np.array(
+                    [float(x) for x in rsa.split(",")], dtype=np.float32
+                )
+            except ValueError:
+                continue
+    SASA_CSV_CACHE[path] = table
+    return table
+
+
+HBOND_CSV_CACHE: dict[str, dict[str, "np.ndarray"]] = {}
+
+
+def _load_hbond_csv(path: str) -> dict[str, "np.ndarray"]:
+    """Load the h-bond CSV produced by scripts/hbond/compute_hbond.py.
+
+    Columns: pdb_key, n_res, hbonds. `hbonds` is a semicolon-separated list of
+    `rD:aD:rA:aA` (donor residue idx : donor atom37 idx : acceptor residue idx :
+    acceptor atom37 idx). Returns {pdb_key: np.ndarray[int, shape=(H, 4)]}.
+    Keyed by the FULL filename (per-file), NOT deduped to the _0 redesign, since
+    h-bonds depend on the redesigned side chains. Rows with ERROR / no bonds map
+    to an empty (0, 4) array.
+    """
+    if path in HBOND_CSV_CACHE:
+        return HBOND_CSV_CACHE[path]
+    import csv as _csv
+    table: dict[str, np.ndarray] = {}
+    with open(path) as f:
+        r = _csv.reader(f)
+        next(r, None)  # header
+        for row in r:
+            if len(row) < 3:
+                continue
+            key, _nres, hbstr = row[0], row[1], row[2]
+            if hbstr.startswith("ERROR"):
+                table[key] = np.zeros((0, 4), dtype=np.int64)
+                continue
+            if not hbstr:
+                table[key] = np.zeros((0, 4), dtype=np.int64)
+                continue
+            try:
+                bonds = [
+                    [int(x) for x in tok.split(":")]
+                    for tok in hbstr.split(";")
+                ]
+                table[key] = np.array(bonds, dtype=np.int64).reshape(-1, 4)
+            except ValueError:
+                table[key] = np.zeros((0, 4), dtype=np.int64)
+    HBOND_CSV_CACHE[path] = table
+    return table
 
 
 def make_fixed_size_1d(data, fixed_size=128):
@@ -330,6 +434,8 @@ def make_crop_cond_mask_and_recenter_coords(
     sidechain_only_prob: float = 0.0,
     sidechain_tip_prob: float = 0.0,
     cond_mode_probs: dict | None = None,
+    bb_atom_dropout_prob: float = 0.0,
+    bb_atom_dropout_count: int = 1,
     max_span_len: int = 10,
     max_discontiguous_res: int = 8,
     dist_threshold: float = 8.0,
@@ -643,6 +749,25 @@ def make_crop_cond_mask_and_recenter_coords(
                 mask[:, 3] = 0
                 mask[:, 5:] = 0
 
+        # Backbone-atom conditioning dropout (cc91-sasa). For a random fraction of
+        # examples, hide a single backbone atom (N/CA/C/O) at a random motif
+        # residue from the conditioning coords. The `condmask` channel then flags
+        # this atom as "not conditioning" so the model learns to place a missing
+        # backbone atom within an otherwise fully-conditioned motif — distinct from
+        # dummy-atom zeros, which the atom_mask channel already handles.
+        if bb_atom_dropout_prob > 0 and np.random.uniform() < bb_atom_dropout_prob:
+            bb_idxs = (0, 1, 2, 4)  # N, CA, C, O
+            motif_idx = torch.nonzero(mask.sum(-1)).flatten()
+            for _ in range(bb_atom_dropout_count):
+                if len(motif_idx) == 0:
+                    break
+                mi = int(motif_idx[np.random.randint(len(motif_idx))])
+                present_bb = [ai for ai in bb_idxs if mask[mi, ai] > 0]
+                if not present_bb:
+                    continue
+                drop_ai = int(present_bb[np.random.randint(len(present_bb))])
+                mask[mi, drop_ai] = 0
+
         masks.append(mask)
 
     crop_cond_mask = torch.stack(masks)
@@ -683,10 +808,17 @@ class PDBDataset(Dataset):
         dummy_fill_mode: str = "zero",
         subset: str | float = "",
         dssp_csv: str | None = None,
+        sasa_csv: str | None = None,
+        sasa_thresholds: dict | None = None,
+        hbond_csv: str | None = None,
+        hbond_max: int = 384,
         metadata_tsv: str | None = None,
         teddymer_filters: dict | None = None,
         long_chain_spatial_crop: bool = False,
         long_chain_max_len: int = 256,
+        mirror_path: str | None = None,
+        ccd_cache: str | None = None,
+        atomize_kwargs: dict | None = None,
     ) -> None:
         """Initialize the PDBDataset.
 
@@ -723,10 +855,33 @@ class PDBDataset(Dataset):
         self.chain_residx_gap = chain_residx_gap
         self.dummy_fill_mode = dummy_fill_mode
         self.dssp_table = _load_dssp_csv(dssp_csv) if dssp_csv else None
+        self.sasa_table = _load_sasa_csv(sasa_csv) if sasa_csv else None
+        st = dict(_DEFAULT_SASA_THRESHOLDS)
+        if sasa_thresholds is not None:
+            if not isinstance(sasa_thresholds, dict):
+                sasa_thresholds = vars(sasa_thresholds)
+            st.update(sasa_thresholds)
+        self.sasa_thresholds = st
+        self.hbond_table = _load_hbond_csv(hbond_csv) if hbond_csv else None
+        self.hbond_max = hbond_max
         self.metadata_tsv = metadata_tsv
         self.teddymer_filters = teddymer_filters or {}
         self.long_chain_spatial_crop = long_chain_spatial_crop
         self.long_chain_max_len = long_chain_max_len
+
+        # cc152 atomized mode: mmCIFs are read from the wwPDB mirror and
+        # featurized with the CCD so non-canonical residues, ligands and metals
+        # all land in the atom37 layout.
+        self.is_atomized = Path(self.pdb_path).name == "pdb_atomized"
+        self.atomize_kwargs = dict(atomize_kwargs or {})
+        if isinstance(self.atomize_kwargs.get("rng"), (int, float)):
+            self.atomize_kwargs.pop("rng")
+        self.mirror_path = mirror_path or f"{self.pdb_path}/mmCIF"
+        self.ccd = None
+        if self.is_atomized:
+            self.ccd = protpardelle.data.atomize_io.load_ccd_cache(
+                ccd_cache or protpardelle.data.atomize_io.default_ccd_path()
+            )
 
         if self.pdb_path.endswith("test_boltz_interfaces"):
             self.cif_df = pd.read_csv(f"{self.pdb_path}/test_interface_info.csv")
@@ -953,6 +1108,11 @@ class PDBDataset(Dataset):
             data_file = f"{self.pdb_path}/pdbs/{pdb_key}.pdb.gz"
         elif Path(self.pdb_path).name == "atomistica_data_release":  # NVIDIA proteina AF/ESMFold monomers
             data_file = f"{self.pdb_path}/pdb/{pdb_key}"
+        elif Path(self.pdb_path).name == "pdb_atomized":  # cc152 atomized PDB mirror
+            # Keys are bare 4-char PDB ids; the mmCIFs live in the rsync'd wwPDB
+            # mirror, sharded by characters 2-3 of the id (the wwPDB "divided"
+            # layout).
+            data_file = f"{self.mirror_path}/{pdb_key[1:3]}/{pdb_key}.cif.gz"
         elif Path(self.pdb_path).name.startswith("pinder_2024-02"):  # genie3 Pinder dimers
             # 1.5M files in one dir hit Lustre per-OST limits, so the extract
             # step shards by first two chars of <id>. See
@@ -962,13 +1122,32 @@ class PDBDataset(Dataset):
         else:
             raise ValueError("Invalid pdb path.")
 
-        try:
-            example, _ = protpardelle.data.pdb_io.load_feats_from_pdb(
-                data_file, chain_residx_gap=self.chain_residx_gap, chain_id=chain_id
-            )
-        except Exception as e:
-            print(f"File {data_file} throws {e}")
-            return
+        if self.is_atomized:
+            try:
+                example = protpardelle.data.atomize_io.load_feats_from_cif_atomized(
+                    data_file,
+                    self.ccd,
+                    chain_residx_gap=self.chain_residx_gap,
+                    max_tokens=self.fixed_size,
+                    **self.atomize_kwargs,
+                )
+            except Exception as e:
+                print(f"File {data_file} throws {e}")
+                return
+            if example is None:
+                return
+            # Bookkeeping that must not reach the collate function.
+            for k in ("comp_names", "atom_names", "n_modified", "n_hetero"):
+                example.pop(k, None)
+            example["forced_motif_chain"] = torch.tensor([-1], dtype=torch.long)
+        else:
+            try:
+                example, _ = protpardelle.data.pdb_io.load_feats_from_pdb(
+                    data_file, chain_residx_gap=self.chain_residx_gap, chain_id=chain_id
+                )
+            except Exception as e:
+                print(f"File {data_file} throws {e}")
+                return
 
         # Spatially crop the target chain (>max_chain_len) around the interface,
         # discarding examples whose to-be-generated chain would also exceed the cap.
@@ -1043,6 +1222,54 @@ class PDBDataset(Dataset):
                     if idx is not None:
                         sse_oh[i, idx] = 1.0
         example["sse_dssp"] = sse_oh
+
+        # Per-residue SASA burial class one-hot [buried, partial, exposed], built
+        # from the precomputed relative-SASA (RSA) table with the config-specified
+        # thresholds. Missing pdb / residue -> all-zero (acts like CFG-dropout),
+        # same semantics as sse_dssp above. Uses the identical key-fallback lookup.
+        sasa_oh = torch.zeros(seqlen, 3, dtype=torch.float32)
+        if self.sasa_table is not None:
+            stem = pdb_key
+            for _ in range(2):
+                stem_next = Path(stem).stem
+                if stem_next == stem:
+                    break
+                stem = stem_next
+            rsa_arr = self.sasa_table.get(pdb_key)
+            if rsa_arr is None:
+                rsa_arr = self.sasa_table.get(stem)
+            if rsa_arr is None and "_" in stem:
+                rsa_arr = self.sasa_table.get(stem.split("_", 1)[0])
+            if rsa_arr is not None:
+                buried_max = self.sasa_thresholds["buried_max"]
+                exposed_min = self.sasa_thresholds["exposed_min"]
+                for i, r in enumerate(rsa_arr[:seqlen]):
+                    if r < 0:  # unknown residue sentinel from precompute
+                        continue
+                    if r <= buried_max:
+                        sasa_oh[i, 0] = 1.0
+                    elif r >= exposed_min:
+                        sasa_oh[i, 2] = 1.0
+                    else:
+                        sasa_oh[i, 1] = 1.0
+        example["sasa_class"] = sasa_oh
+
+        # Per-example side-chain h-bond pair list, fixed [H_max, 4] padded with
+        # -1: (donor_res, donor_atom37, acceptor_res, acceptor_atom37). Residue
+        # indices are absolute (0-based into this chain) and line up with the
+        # per-residue tensors (no residue-crop for CATH chains <= fixed_size).
+        # Keyed by the FULL filename — NOT the code prefix — since h-bonds differ
+        # across redesigns of the same backbone. Always emitted (all -1 when the
+        # table/key is missing) so cross-dataset collate works.
+        hbond_pairs = torch.full((self.hbond_max, 4), -1, dtype=torch.long)
+        if self.hbond_table is not None:
+            bonds = self.hbond_table.get(pdb_key)
+            if bonds is None:
+                bonds = self.hbond_table.get(Path(pdb_key).stem)
+            if bonds is not None and len(bonds) > 0:
+                b = bonds[: self.hbond_max]
+                hbond_pairs[: len(b)] = torch.from_numpy(b)
+        example["hbond_pairs"] = hbond_pairs
 
         if self.dummy_fill_mode != "zero":
             coords_in = dummy_fill(

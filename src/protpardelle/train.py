@@ -38,6 +38,7 @@ from protpardelle.data.dataset import (
 )
 from protpardelle.utils import (
     dict_to_namespace,
+    expand_env_in_config,
     seed_everything,
     unsqueeze_trailing_dims,
 )
@@ -411,8 +412,9 @@ class ProtpardelleRunner:
         if (
             self.config.train.crop_conditional
             and ("dssp" in self.config.model.conditioning_style
-                 or "binderprop" in self.config.model.conditioning_style)
-            and "sse_dssp" in inputs
+                 or "binderprop" in self.config.model.conditioning_style
+                 or "sasa" in self.config.model.conditioning_style)
+            and ("sse_dssp" in inputs or "sasa_class" in inputs)
         ):
             keep = (torch.rand(bs, device=device) >= 0.5).float()  # [B] — 50% kept
             keep_b = keep.view(bs, 1, 1)
@@ -559,6 +561,105 @@ class ProtpardelleRunner:
                 )  # [B, N, 3]
             binder_sse_prop_cond = binder_sse_prop_cond * keep_b
 
+        # Per-residue motif SASA burial-class conditioning (cc91-sasa). Place the
+        # buried/partial/exposed one-hot from `sasa_class` at the motif residue
+        # positions, sharing the same `keep_b` CFG-dropout draw as the SSE channels.
+        # Mirrors motif_sse_cond: indexed -> [B, N, 3] at motif positions; unindexed
+        # -> [B, N+M, 3] with the labels on the appended motif tail.
+        motif_sasa_cond = None
+        if (
+            self.config.train.crop_conditional
+            and "sasa" in self.config.model.conditioning_style
+            and "sasa_class" in inputs
+        ):
+            sasa_oh = inputs["sasa_class"].float()  # [B, N, 3]
+            if is_unindexed:
+                motif_sasa_at_motif = torch.zeros(
+                    bs, M, 3, device=device, dtype=sasa_oh.dtype
+                )
+                for bi in range(bs):
+                    motif_idx = torch.nonzero(motif_res_mask[bi]).squeeze(-1)
+                    n_m = min(len(motif_idx), M)
+                    if n_m > 0:
+                        motif_sasa_at_motif[bi, :n_m] = sasa_oh[bi, motif_idx[:n_m]]
+                motif_sasa_at_motif = motif_sasa_at_motif * keep_b
+                motif_sasa_cond = torch.cat(
+                    [
+                        torch.zeros(bs, protein_N, 3, device=device, dtype=sasa_oh.dtype),
+                        motif_sasa_at_motif,
+                    ],
+                    dim=1,
+                )
+            else:
+                motif_res_mask_indexed = (
+                    crop_cond_mask.any(-1).float() if crop_cond_mask is not None else None
+                )
+                if motif_res_mask_indexed is not None:
+                    motif_sasa_cond = sasa_oh * motif_res_mask_indexed.unsqueeze(-1)
+                else:
+                    motif_sasa_cond = torch.zeros_like(sasa_oh)
+                motif_sasa_cond = motif_sasa_cond * keep_b
+
+        # Per-atom motif h-bond conditioning (cc91-sasa-hbond). For each example,
+        # pull the side-chain h-bonds that TOUCH the subsampled motif (>=1 partner
+        # atom at a motif residue), then drop each independently with a per-bond-
+        # TYPE probability: `drop_prob_bb_sc` for backbone<->side-chain bonds and
+        # `drop_prob_sc_sc` for side-chain<->side-chain bonds. Mark the motif-side
+        # atom(s) of the surviving bonds in a per-atom [B, N, 37] channel. Shown
+        # for a configurable fraction of examples (`cond_prob`, default 1.0);
+        # independent of the SSE/SASA keep_b. Indexed conditioning only.
+        motif_hbond_cond = None
+        if (
+            self.config.train.crop_conditional
+            and "hbond" in self.config.model.conditioning_style
+            and "hbond_pairs" in inputs
+            and not is_unindexed
+            and crop_cond_mask is not None
+        ):
+            hb_cfg = getattr(self.config.train, "hbond_cond", None)
+            cond_prob = float(getattr(hb_cfg, "cond_prob", 1.0)) if hb_cfg else 1.0
+            drop_bb_sc = float(getattr(hb_cfg, "drop_prob_bb_sc", 0.9)) if hb_cfg else 0.9
+            drop_sc_sc = float(getattr(hb_cfg, "drop_prob_sc_sc", 0.5)) if hb_cfg else 0.5
+            n_atoms_ch = crop_cond_mask.shape[-1]
+            bb_polar = (0, 4, 36)  # backbone polar atoms in atom37: N, O, OXT
+            hbp = inputs["hbond_pairs"].cpu().numpy()  # [B, H_max, 4], -1 padded
+            motif_bool = crop_cond_mask.any(-1).cpu().numpy()  # [B, N] bool
+            N = motif_bool.shape[1]
+            chan = np.zeros((bs, N, n_atoms_ch), dtype=np.float32)
+            shows = np.random.rand(bs) < cond_prob
+            for bi in range(bs):
+                if not shows[bi]:
+                    continue
+                pairs = hbp[bi]
+                pairs = pairs[pairs[:, 0] >= 0]  # drop padding rows
+                if len(pairs) == 0:
+                    continue
+                rD, aD, rA, aA = pairs[:, 0], pairs[:, 1], pairs[:, 2], pairs[:, 3]
+                inb = (rD < N) & (rA < N)  # ignore residues past the crop window
+                rD, aD, rA, aA = rD[inb], aD[inb], rA[inb], aA[inb]
+                if len(rD) == 0:
+                    continue
+                mset = motif_bool[bi]
+                touch = mset[rD] | mset[rA]  # bonds involving the motif
+                idx = np.nonzero(touch)[0]
+                if len(idx) == 0:
+                    continue
+                # Classify each touching bond: exactly one backbone atom -> bb-sc,
+                # else sc-sc (bb-bb was excluded at precompute).
+                is_bb_D = np.isin(aD, bb_polar)
+                is_bb_A = np.isin(aA, bb_polar)
+                is_bb_sc = is_bb_D ^ is_bb_A
+                p_drop = np.where(is_bb_sc, drop_bb_sc, drop_sc_sc)
+                keep = idx[np.random.rand(len(idx)) >= p_drop[idx]]
+                for j in keep:
+                    if mset[rD[j]]:
+                        chan[bi, rD[j], aD[j]] = 1.0
+                    if mset[rA[j]]:
+                        chan[bi, rA[j], aA[j]] = 1.0
+            motif_hbond_cond = torch.from_numpy(chan).to(
+                device=device, dtype=coords.dtype
+            )
+
         # Noise data
         # Sample time
         is_flow_matching = getattr(self.config.model, "objective", "denoising") == "flow_matching"
@@ -591,12 +692,45 @@ class ProtpardelleRunner:
         bb_atom_mask = atom37_mask_from_aatype(bb_seq, protein_seq_mask if is_unindexed else seq_mask)
 
         # some backbone atoms may be missing -- mask them to zeros!
-        bb_atom_mask = torch.logical_and(bb_atom_mask, protein_atom_mask if is_unindexed else atom_mask)
+        _am = protein_atom_mask if is_unindexed else atom_mask
+        if bb_atom_mask.shape[-1] < _am.shape[-1]:
+            # cc152 uses 37 canonical slots + an extra-atom block; the backbone
+            # mask only ever covers the canonical slots, so pad the rest false.
+            bb_atom_mask = F.pad(
+                bb_atom_mask, (0, _am.shape[-1] - bb_atom_mask.shape[-1])
+            )
+        bb_atom_mask = torch.logical_and(bb_atom_mask, _am)
 
         if self.config.model.task == "backbone":
             noised_coords = noised_coords * bb_atom_mask[..., None]
         elif self.config.model.task == "ai-allatom":
             noised_coords = noised_coords * (protein_atom_mask if is_unindexed else atom_mask)[..., None]
+
+        # cc152 vs cc153: how ligand / cofactor / metal rows are treated.
+        #   "denoised"          (cc153) -- noised and supervised like protein.
+        #   "conditioning_only" (cc152) -- handed to the model clean at every
+        #       noise level and excluded from the loss, so the ligand is fixed,
+        #       known context that the protein is generated around. This is what
+        #       an ensemble-fitting caller has: the crystallographic ligand is
+        #       given, the protein conformation is the unknown.
+        ligand_treatment = getattr(self.config.model, "ligand_treatment", "denoised")
+        ligand_row = inputs.get("is_ligand")
+        ligand_atom_mask = None
+        if (
+            ligand_treatment == "conditioning_only"
+            and ligand_row is not None
+            and not is_unindexed
+        ):
+            # [B, N, 1] -> atoms of ligand rows that actually exist
+            ligand_atom_mask = (ligand_row.unsqueeze(-1) > 0) & (atom_mask > 0)
+            keep = ligand_atom_mask.unsqueeze(-1)
+            noised_coords = torch.where(keep, coords, noised_coords)
+            if crop_cond_mask is not None:
+                # also surface them through the explicit "this is given" channel
+                crop_cond_mask = torch.clamp(
+                    crop_cond_mask + ligand_atom_mask.to(crop_cond_mask.dtype), max=1.0
+                )
+                struct_crop_cond = coords * crop_cond_mask[..., None]
 
         # For unindexed: concatenate clean motif coords after noised protein
         if is_unindexed:
@@ -636,6 +770,14 @@ class ProtpardelleRunner:
             "adj_cond": adj_cond,
             "motif_sse_cond": motif_sse_cond,
             "binder_sse_prop_cond": binder_sse_prop_cond,
+            "motif_sasa_cond": motif_sasa_cond,
+            "motif_hbond_cond": motif_hbond_cond,
+            # Atomized per-atom slot descriptors (cc152). Present only for the
+            # atomized datasets; absent -> the denoiser fills zeros.
+            "atom_elem": inputs.get("atom_elem"),
+            "atom_ref": inputs.get("atom_ref"),
+            "atom_noncanon": inputs.get("atom_noncanon"),
+            "atom_bondfeat": inputs.get("atom_bondfeat"),
         }
 
         forward_fn = self.forward if is_training else self.model
@@ -700,6 +842,12 @@ class ProtpardelleRunner:
                 else:
                     struct_loss_mask = torch.ones_like(coords) * atom_mask[..., None]
 
+            # cc152: ligands are context, not a prediction target.
+            if ligand_atom_mask is not None:
+                struct_loss_mask = struct_loss_mask * (
+                    ~ligand_atom_mask
+                ).unsqueeze(-1).to(struct_loss_mask.dtype)
+
             if is_flow_matching:
                 # Flow matching: velocity loss with uniform weighting
                 velocity_target = coords - noise_epsilon  # x_0 - ε
@@ -716,6 +864,48 @@ class ProtpardelleRunner:
                 )
             loss = loss + struct_loss
             aux["struct_loss"] = struct_loss.mean().detach().cpu().item()
+
+            # cc154: explicit bonded-distance penalty. Per-atom MSE cannot
+            # distinguish "both partners displaced together" (bond intact) from
+            # "displaced oppositely" (bond destroyed), which is why the
+            # extra-atom block reached 70% broken bonds while canonical slots
+            # stayed at 0.4%. Applied to the predicted x0 over the CCD bond
+            # list, only where both partners are in the structure loss (so
+            # cc152-style clamped ligands contribute nothing).
+            bond_w = float(getattr(self.config.train, "bond_loss_weight", 0.0))
+            bond_pairs = inputs.get("bond_pairs")
+            if bond_w > 0.0 and bond_pairs is not None:
+                warm = int(getattr(self.config.train, "bond_loss_warmup", 0))
+                step = getattr(self, "_bond_step", 0)
+                if is_training:
+                    self._bond_step = step + 1
+                scale = bond_w * (min(1.0, (step + 1) / warm) if warm > 0 else 1.0)
+
+                target_len = inputs["bond_lengths"]
+                n_tok = model_output.shape[1]
+                ti = bond_pairs[..., 0]
+                si = bond_pairs[..., 1]
+                tj = bond_pairs[..., 2]
+                sj = bond_pairs[..., 3]
+                valid = (ti >= 0) & (ti < n_tok) & (tj >= 0) & (tj < n_tok)
+                tic, sic = ti.clamp(min=0), si.clamp(min=0)
+                tjc, sjc = tj.clamp(min=0), sj.clamp(min=0)
+                bidx = torch.arange(bs, device=device).unsqueeze(-1)
+                xi = model_output[bidx, tic, sic]
+                xj = model_output[bidx, tjc, sjc]
+                # both partners must actually be supervised
+                mi = struct_loss_mask[bidx, tic, sic, 0] > 0
+                mj = struct_loss_mask[bidx, tjc, sjc, 0] > 0
+                valid = valid & mi & mj
+                d_pred = (xi - xj).norm(dim=-1)
+                sq = (d_pred - target_len) ** 2 * valid.float()
+                bond_loss = sq.sum(-1) / valid.float().sum(-1).clamp(min=1.0)
+                loss = loss + scale * bond_loss
+                aux["bond_loss"] = bond_loss.mean().detach().cpu().item()
+                aux["bond_loss_scale"] = scale
+                aux["bond_pairs_used"] = (
+                    valid.float().sum(-1).mean().detach().cpu().item()
+                )
 
         # Compute mpnn loss
         if self.config.model.task in ["seqdes", "codesign"]:
@@ -787,6 +977,15 @@ class ProtpardelleRunner:
 
 
 @record
+def _expand_env_in_config(obj):
+    """Back-compat alias for :func:`protpardelle.utils.expand_env_in_config`.
+
+    Kept because the release package's verify_training.sh imports this name.
+    """
+
+    return expand_env_in_config(obj)
+
+
 def train(
     config_path: str,
     out_dir: str,
@@ -803,6 +1002,7 @@ def train(
 
     with open(config_path, "r", encoding="utf-8") as f:
         config_dict = yaml.safe_load(f)
+    config_dict = _expand_env_in_config(config_dict)
     config = dict_to_namespace(config_dict)
 
     if debug:
@@ -811,7 +1011,10 @@ def train(
 
     # DDP setup
     if use_ddp:
-        dist.init_process_group(backend="nccl")
+        # Longer NCCL collective timeout (default 10 min) so a transient data-loading
+        # / Lustre IO stall on one rank doesn't trip the watchdog and abort the run.
+        import datetime as _dt
+        dist.init_process_group(backend="nccl", timeout=_dt.timedelta(minutes=60))
         local_rank = int(os.environ["LOCAL_RANK"])
         torch.cuda.set_device(local_rank)
         device = f"cuda:{local_rank}"
@@ -858,6 +1061,37 @@ def train(
             return _dssp_cfg[di] if di < len(_dssp_cfg) else None
         return _dssp_cfg
 
+    # sasa_csv follows the same single-path-or-list convention as dssp_csv.
+    _sasa_cfg = getattr(config.data, "sasa_csv", None)
+    def _sasa_for(di: int):
+        if _sasa_cfg is None:
+            return None
+        if isinstance(_sasa_cfg, (list, tuple)):
+            return _sasa_cfg[di] if di < len(_sasa_cfg) else None
+        return _sasa_cfg
+
+    _sasa_thresholds = getattr(config.data, "sasa_thresholds", None)
+
+    # hbond_csv follows the same single-path-or-list convention as dssp/sasa.
+    _hbond_cfg = getattr(config.data, "hbond_csv", None)
+    def _hbond_for(di: int):
+        if _hbond_cfg is None:
+            return None
+        if isinstance(_hbond_cfg, (list, tuple)):
+            return _hbond_cfg[di] if di < len(_hbond_cfg) else None
+        return _hbond_cfg
+
+    _hbond_max = int(getattr(config.data, "hbond_max", 384))
+
+    def _as_dict(node):
+        """Config sub-tree -> plain dict (configs arrive as argparse.Namespace)."""
+
+        if node is None:
+            return None
+        if isinstance(node, dict):
+            return dict(node)
+        return dict(vars(node))
+
     train_datasets = [
         PDBDataset(
             pdb_path=config.data.pdb_paths[di],
@@ -871,12 +1105,19 @@ def train(
             dummy_fill_mode=config.data.dummy_fill_mode,
             subset=config.data.subset[di],
             dssp_csv=_dssp_for(di),
+            sasa_csv=_sasa_for(di),
+            sasa_thresholds=_sasa_thresholds,
+            hbond_csv=_hbond_for(di),
+            hbond_max=_hbond_max,
             metadata_tsv=getattr(config.data, "metadata_tsv", None),
             teddymer_filters=teddymer_filters,
             long_chain_spatial_crop=getattr(
                 config.data, "long_chain_spatial_crop", False
             ),
             long_chain_max_len=getattr(config.data, "long_chain_max_len", 256),
+            mirror_path=getattr(config.data, "mirror_path", None),
+            ccd_cache=getattr(config.data, "ccd_cache", None),
+            atomize_kwargs=_as_dict(getattr(config.data, "atomize", None)),
         )
         for di in range(len(config.data.pdb_paths))
     ]

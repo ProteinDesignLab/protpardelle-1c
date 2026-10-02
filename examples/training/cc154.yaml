@@ -1,0 +1,139 @@
+# cc154 -- cc152 plus bonded-geometry supervision for the extra-atom block.
+#
+# cc152/cc153 at epoch 585 place canonical protein well (bond deviation 0.047 A,
+# 0.38% of bonds >0.3 A off) and the extra-atom block badly (0.865 A, 70.2%).
+# Diagnosis and design in docs/cc154_bonded_geometry.md. Two changes:
+#
+#  1. `bondgeom` conditioning: 3 more per-atom channels carrying the ideal
+#     distance to the atom's bonded parent, the ideal distance to the token
+#     anchor, and the bond degree. The reference-conformer channels give ideal
+#     *coordinates*; turning those into a bond length needs a pairwise
+#     |ref_a - ref_b| that the architecture never computes within a token, which
+#     is why ablating them barely mattered. These give the distance directly.
+#  2. `bond_loss_weight`: an explicit (|x_i - x_j| - d_ideal)^2 term over the CCD
+#     bond list. Per-atom MSE cannot tell a displaced-but-intact bond from a
+#     destroyed one.
+#
+# Initialised from cc152 epoch 586 (not cc89): the canonical pathway is already
+# good and cost ~160M examples, and the new channels zero-init so cc154 at step 0
+# is numerically identical to cc152 epoch 586.
+
+train:
+  seed: 0
+  ckpt_path: "/scratch/users/tianyulu/protpardelle-1c-experiments/cc154_init/cc154_from_cc152_epoch586.pth"
+  batch_size: 128
+  max_epochs: 10000
+  eval_freq: 8000000 # seconds
+  checkpoint_freq: 1
+  checkpoints: []
+  lr: 0.0001
+  warmup_steps: 1000
+  decay_steps: 2_000_000
+  use_amp: False
+  clip_grad_norm: True
+  grad_clip_val: 1.0
+  weight_decay: 0.0
+  n_eval_samples: 10
+  length_ranges_per_chain: [[166, 188]]
+  sc_num_seqs: 4
+  eval_loss_t: [0.1, 0.3, 0.5, 0.7, 0.9]
+  self_cond_train_prob: 0.9
+  subsample_eval_set: 0.05
+  # Bonded-distance loss on the CCD bond list (cc154). Warmed up so the new
+  # gradient landing on the extra-slot output rows does not destabilise the
+  # fine-tune.
+  # Measured on modified-residue batches at init: struct_loss ~0.03 while the
+  # raw bond term is 0.25 (t=0.3) to 1.0 (t=0.7). Weight 0.1 makes it comparable
+  # to struct_loss at moderate noise instead of swamping it -- its gradient is
+  # already concentrated on the ~23 extra-slot pairs per example that are the
+  # actual problem. This is the main knob to tune.
+  bond_loss_weight: 0.1
+  bond_loss_warmup: 2000
+  crop_conditional: True
+  crop_cond:  # identical to cc89
+    contiguous_prob: 0.05
+    discontiguous_prob: 0.9
+    sidechain_prob: 0.9
+    sidechain_only_prob: 0.0
+    max_span_len: 12
+    max_discontiguous_res: 24
+    dist_threshold: 45.0
+    recenter_coords: True
+
+data:
+  pdb_paths: ["/scratch/users/tianyulu/datasets/pdb_atomized"]
+  mixing_ratios: [1.0]
+  fixed_size: 384
+  n_aatype_tokens: 21
+  se3_data_augment: True
+  translation_scale: 1.0
+  chain_residx_gap: 200 # 200-residue gap per chain in the relative pos encoding
+  sigma_data: 10.01  # placeholder; overridden at runtime by auto_calc_sigma_data
+  auto_calc_sigma_data: True
+  n_examples_for_sigma_data: 500
+  dummy_fill_mode: "zero"
+  subset: ["atomized_"] # -> train_atomized_pdb_keys.list
+  mirror_path: "/scratch/users/tianyulu/datasets/pdb_mirror/mmCIF"
+  ccd_cache: "/scratch/users/tianyulu/datasets/pdb_atomized/ccd_cache_bonds.pkl"
+  atomize:
+    # Assemblies/asymmetric units above this many residues are skipped outright
+    # rather than parsed (virus capsids etc.); everything else is cropped to
+    # `fixed_size` tokens around an anchor.
+    max_input_residues: 4000
+    # Probability the crop is centred on a non-canonical residue / ligand rather
+    # than a random residue, so the rare tokens are actually seen.
+    anchor_on_hetero_prob: 0.8
+    contact_cutoff: 10.0
+    include_hetero: True
+    min_hetero_atoms: 1
+
+diffusion:  # unchanged from cc89
+  training:
+    function: "lognormal"
+    psigma_mean: -0.5
+    psigma_std: 1.5
+  sampling:
+    function: "uniform"
+    s_min: 0.001
+    s_max: 80
+
+model:
+  task: "ai-allatom"
+  pretrained_modules: []
+  struct_model_checkpoint: ""
+  mpnn_model_checkpoint: ""
+  crop_conditional: True
+  conditioning_style: "concat+atomized+bondgeom"
+  # Ligand / cofactor / metal rows are handed to the model clean at every
+  # noise level and excluded from the structure loss: the ligand is given,
+  # the protein conformation around it is what gets generated. cc153 is the
+  # same model with `denoised` here.
+  ligand_treatment: "conditioning_only"
+  compute_loss_on_all_atoms: false
+  struct_model:
+    arch: "dit"
+    # 37 canonical atom37 slots + 24 global extra-atom slots. Slots 0-36 keep
+    # their cc89 meaning exactly (slot k == atom named atom_types[k]); slots
+    # 37-60 are the shared extra-atom block used identically by every residue
+    # type, modified residue, ligand and metal. See data/atomize_io.py.
+    n_atoms: 61
+    n_channel: 256
+    noise_cond_mult: 4
+    uvit:
+      patch_size: 1
+      n_layers: 10
+      n_heads: 8
+      dim_head: 32
+      n_filt_per_layer: []
+      n_blocks_per_layer: 2
+      cat_pwd_to_conv: False
+      conv_skip_connection: False
+      position_embedding_type: "rotary"
+      position_embedding_max: 32
+  mpnn_model:
+    use_self_conditioning: True
+    label_smoothing: 0.1
+    n_channel: 128
+    n_layers: 3
+    n_neighbors: 32
+    noise_cond_mult: 4

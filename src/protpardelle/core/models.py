@@ -8,10 +8,12 @@ Authors: Alex Chu, Jinho Kim, Richard Shuai, Tianyu Lu, Zhaoyang Li
 import argparse
 import copy
 import logging
+import os
 import re
 from collections import defaultdict
 from collections.abc import Callable
 from functools import partial
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -28,6 +30,7 @@ from tqdm.auto import tqdm
 from protpardelle.common import residue_constants
 from protpardelle.core import diffusion, modules
 from protpardelle.data.atom import atom37_mask_from_aatype, atom73_mask_from_aatype
+from protpardelle.data.atomize_io import N_ELEMENT_GROUPS
 from protpardelle.data.dataset import make_fixed_size_1d, uniform_rand_rotation
 from protpardelle.data.pdb_io import load_feats_from_pdb
 from protpardelle.data.sequence import batched_seq_to_aatype_and_mask
@@ -88,12 +91,51 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
         # The suffix is case-insensitive; the aa3 before "-full" should be the
         # standard 3-letter code (lowercased).
         full_aa3_set = set()
+        # "+<aa3>-tip" gives a residue type its RFDIFFUSION tip atoms, and
+        # "+<aa3>-bbo" gives it the backbone O alone. Both are needed to express
+        # the natural lanmodulin loop pattern, where position 1 contributes an
+        # Asn amide tip (OD1 to the metal, ND2 to a water) and position 7
+        # contributes only its backbone carbonyl. Neither could be said before:
+        # the base branch handles ASP/GLU tips, "-full" is all-or-nothing, and
+        # backbone-O was reachable only through the HOH placeholder.
+        # Both regimes are in cc151's training mix -- tip_only (p=0.35) applies
+        # tips to every residue type including ASN/GLN, and acidic_tip_O_mix
+        # (p=0.10) is per-residue "tip or backbone-O only".
+        # "+<aa3>-otip" keeps ONLY the oxygens of a tip group, dropping the two
+        # carbons. Standard tip conditioning pins CB/CG/OD1/OD2 (ASP) or
+        # CG/CD/OE1/OE2 (GLU), so the metal-O-C angle is fully determined and comes
+        # out native: measured 91.9 +- 6.2 deg over 382 bidentate contacts, 88%
+        # inside the natural 85-101 window. Dropping the carbons frees that angle,
+        # the same way the singly-conditioned backbone O is free (114 +- 34 deg).
+        # "+otip@<k>" does it for the k-th motif residue only (1-based, in motif
+        # order), so one carboxylate can be freed while the rest stay pinned and
+        # the effect is attributable.
+        #
+        # The carbons are left at zero, and the condmask is derived per atom as
+        # (coords.abs().sum(-1) > 0), so a dropped carbon reads as NOT CONDITIONED
+        # rather than as an atom sitting at the origin.
+        #
+        # Note this is a mild extrapolation: cc151's tip_only / acidic_tip_only
+        # modes always include the carbons, so it never saw a bare carboxylate
+        # oxygen -- though backbone_O_tip (p=0.10) and acidic_tip_O_mix (p=0.10)
+        # did show it isolated single oxygens.
+        tip_aa3_set, bbo_aa3_set, otip_aa3_set = set(), set(), set()
+        otip_indices: set[int] = set()
         for token in strategy.split("+"):
             token = token.strip().lower()
-            if token.endswith("-full"):
-                aa_code = token[:-len("-full")].upper()
-                if aa_code in residue_constants.restype_3to1:
-                    full_aa3_set.add(aa_code)
+            if token.startswith("otip@"):
+                try:
+                    otip_indices.add(int(token[len("otip@"):]))
+                except ValueError:
+                    pass
+                continue
+            for suffix, target in (("-full", full_aa3_set), ("-otip", otip_aa3_set),
+                                   ("-tip", tip_aa3_set), ("-bbo", bbo_aa3_set)):
+                if token.endswith(suffix):
+                    aa_code = token[: -len(suffix)].upper()
+                    if aa_code in residue_constants.restype_3to1:
+                        target.add(aa_code)
+                    break
         coords_src = coords.clone()
         for bi, _ in enumerate(motif_idx):
             # Zero all motif atoms for this batch entry
@@ -102,7 +144,15 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
             # Restore kept atoms per aatype
             for mi, aa3 in enumerate(motif_aatype[bi]):
                 pos = motif_idx[bi][mi]
-                if aa3 in ("ASP", "GLU"):
+                if aa3 in otip_aa3_set or (mi + 1) in otip_indices:
+                    # oxygens of the tip group only; carbons stay zero/unconditioned
+                    for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS.get(aa3, []):
+                        if not at.startswith("O"):
+                            continue
+                        ai = residue_constants.atom_order.get(at)
+                        if ai is not None:
+                            crop_cond_coords[bi, pos, ai, :] = coords_src[bi, pos, ai, :]
+                elif aa3 in ("ASP", "GLU"):
                     atom_idx = [
                         residue_constants.atom_order.get(at)
                         for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS[aa3]
@@ -115,6 +165,17 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
                 elif aa3 in full_aa3_set:
                     # Full residue (backbone + sidechain) — restore all original atoms
                     crop_cond_coords[bi, pos, :, :] = coords_src[bi, pos, :, :]
+                elif aa3 in tip_aa3_set:
+                    # This residue type's tip atoms (e.g. ASN -> CB/CG/ND2/OD1)
+                    for at in residue_constants.RFDIFFUSION_BENCHMARK_TIP_ATOMS.get(aa3, []):
+                        ai = residue_constants.atom_order.get(at)
+                        if ai is not None:
+                            crop_cond_coords[bi, pos, ai, :] = coords_src[bi, pos, ai, :]
+                elif aa3 in bbo_aa3_set:
+                    # Backbone carbonyl O only — the position-7 contribution in
+                    # the natural loop, where the sidechain plays no part.
+                    crop_cond_coords[bi, pos, bb_o_atom_idx, :] = coords_src[
+                        bi, pos, bb_o_atom_idx, :]
                 # else: leave zero
     elif "sidechain" in strategy:
         if "sidechain-tip" in strategy:
@@ -133,6 +194,173 @@ def apply_crop_cond_strategy(coords, motif_idx, motif_aatype, strategy: str):
             crop_cond_coords[:, :, (0, 1, 2, 4), :] = 0
 
     return crop_cond_coords
+
+def place_motif_feats_on_contigs(
+    motif_feats: dict,
+    chain_id_mapping: dict,
+    motif_placements_full: list[str],
+) -> list[dict]:
+    """Place a motif PDB's per-residue features onto each sample's contig layout.
+
+    Returns one feature dict per entry of ``motif_placements_full`` (one per batch
+    element), with every tensor concatenated over the motif segments of all chains.
+
+    Factored out of Protpardelle.sample (verbatim) so the NEGATIVE motif used by
+    negative-design guidance can be placed with the exact same padding/ordering
+    logic as the positive motif.
+    """
+    all_motif_feats = []
+    for mp_chains in motif_placements_full:
+        chain_motif_feats = defaultdict(list)
+        prev_motif_segments = 0
+        for mp in mp_chains.split(";/;"):
+            curr_motif_feats = copy.deepcopy(motif_feats)
+            motif_chain_resids = [
+                s for s in mp.split("/") if s[0].isalpha()
+            ]
+            if not motif_chain_resids:
+                continue
+            # Pad each motif segment to its NOMINAL contig length
+            # (end - start + 1) rather than to the count of residues
+            # actually present in the motif PDB. Residues unmodeled in
+            # the PDB (gaps within the contig range) become zero-filled,
+            # atom_mask=0 rows: they reserve a scaffold slot so the contig
+            # placement (motif_idx) and per-chain total_lengths stay
+            # consistent, but they are not conditioned on downstream
+            # (crop_cond_mask is derived from non-zero coords). Without
+            # this, a gapped motif yields fewer motif coords than the
+            # contig reserves and the scatter into crop_cond_coords raises
+            # a shape mismatch.
+            for seg in motif_chain_resids:
+                seg_match = re.match(
+                    r"([A-Za-z])(\d+)(?:-(\d+))?$", seg
+                )
+                if not seg_match:
+                    raise ValueError(
+                        f"Invalid motif segment: {seg}"
+                    )
+                seg_chain = seg_match.group(1)
+                seg_start = int(seg_match.group(2))
+                seg_end = (
+                    int(seg_match.group(3))
+                    if seg_match.group(3)
+                    else seg_start
+                )
+                nominal_len = seg_end - seg_start + 1
+                seg_present_idx = parse_fixed_pos_str(
+                    seg,
+                    chain_id_mapping,
+                    motif_feats["residue_index_orig"],
+                    motif_feats["chain_index"],
+                )
+                present_resnums = (
+                    motif_feats["residue_index_orig"][seg_present_idx]
+                    .long()
+                    .tolist()
+                )
+                offsets = [rn - seg_start for rn in present_resnums]
+                seg_chain_int = int(chain_id_mapping[seg_chain])
+                for k, v in curr_motif_feats.items():
+                    pad_shape = (nominal_len,) + tuple(v.shape[1:])
+                    if k in ("residue_index", "residue_index_orig"):
+                        padded = torch.arange(
+                            seg_start, seg_end + 1, dtype=v.dtype
+                        )
+                    elif k == "chain_index":
+                        padded = torch.full(
+                            pad_shape, seg_chain_int, dtype=v.dtype
+                        )
+                    else:
+                        padded = torch.zeros(pad_shape, dtype=v.dtype)
+                    if offsets:
+                        padded[
+                            torch.tensor(offsets, dtype=torch.long)
+                        ] = v[
+                            torch.tensor(
+                                seg_present_idx, dtype=torch.long
+                            )
+                        ]
+                    chain_motif_feats[k].append(padded)
+                prev_motif_segments += nominal_len
+        for k, v in chain_motif_feats.items():
+            chain_motif_feats[k] = torch.cat(v, dim=0)
+        all_motif_feats.append(chain_motif_feats)
+    return all_motif_feats
+
+
+
+def assert_identical_motif_atom_sets(
+    pos_feats: dict,
+    neg_feats: dict,
+    pos_path: str,
+    neg_path: str,
+) -> None:
+    """Hard guard for negative-design guidance: the positive and negative motifs
+    must describe the SAME atoms, differing only in coordinates.
+
+    x0_pos - x0_neg is only a meaningful direction if both conditioning tensors
+    occupy the same (residue, atom) slots. If the atom sets differ, the difference
+    silently mixes "this atom moved" with "this atom exists / does not exist", and
+    the guidance is meaningless. So we require an exact match on residue count,
+    residue numbering, chain, residue identity (aatype) and per-residue atom
+    presence (atom_mask over the 37-atom layout), including ordering.
+
+    Raises ValueError naming both files and the first mismatch found.
+    """
+    where = f"positive={pos_path!r}\nnegative={neg_path!r}"
+    n_pos = int(pos_feats["aatype"].shape[0])
+    n_neg = int(neg_feats["aatype"].shape[0])
+    if n_pos != n_neg:
+        raise ValueError(
+            "Negative-design guidance requires identical atom sets, but the motifs "
+            f"have different residue counts ({n_pos} vs {n_neg}).\n{where}"
+        )
+
+    def _res_label(feats, i):
+        aa_idx = int(feats["aatype"][i])
+        aa3 = (
+            residue_constants.restype_1to3[residue_constants.restypes[aa_idx]]
+            if aa_idx < len(residue_constants.restypes)
+            else "UNK"
+        )
+        return f"{aa3}{int(feats['residue_index_orig'][i])} (chain idx {int(feats['chain_index'][i])})"
+
+    for key in ("aatype", "residue_index_orig", "chain_index"):
+        pv, nv = pos_feats[key], neg_feats[key]
+        bad = torch.nonzero((pv != nv).reshape(pv.shape[0], -1).any(-1)).flatten()
+        if bad.numel() > 0:
+            i = int(bad[0])
+            raise ValueError(
+                "Negative-design guidance requires identical atom sets, but the motifs "
+                f"differ in {key!r} at motif residue {i} "
+                f"(positive {_res_label(pos_feats, i)} vs negative {_res_label(neg_feats, i)})."
+                f"\n{where}"
+            )
+
+    pm, nm = pos_feats["atom_mask"], neg_feats["atom_mask"]
+    bad = torch.nonzero(pm != nm)
+    if bad.numel() > 0:
+        i, a = int(bad[0, 0]), int(bad[0, 1])
+        atom_name = (
+            residue_constants.atom_types[a] if a < len(residue_constants.atom_types) else str(a)
+        )
+        present = "positive" if float(pm[i, a]) > 0 else "negative"
+        raise ValueError(
+            "Negative-design guidance requires identical atom sets, but atom "
+            f"{atom_name!r} of motif residue {i} ({_res_label(pos_feats, i)}) is present "
+            f"only in the {present} motif.\n{where}\n"
+            "Fix: rebuild the two motif PDBs so they contain exactly the same "
+            "residues and atom names in the same order."
+        )
+
+    is_w_pos = pos_feats.get("is_water_motif")
+    is_w_neg = neg_feats.get("is_water_motif")
+    if is_w_pos is not None and is_w_neg is not None and not torch.equal(is_w_pos, is_w_neg):
+        raise ValueError(
+            "Negative-design guidance requires identical atom sets, but the two motifs "
+            f"flag different residues as HOH water placeholders.\n{where}"
+        )
+
 
 
 def get_time_dependent_scale(
@@ -292,6 +520,16 @@ def contig_to_idx(contig: list[list[int]]) -> list[list[int]]:
     return result
 
 
+def _pad_seq_tail(x: torch.Tensor | None, m: int) -> torch.Tensor | None:
+    """Zero-pad a per-residue tensor [B, N, ...] to [B, N+m, ...] along the seq dim."""
+
+    if x is None or m <= 0:
+        return x
+    pad_shape = (x.shape[0], m) + tuple(x.shape[2:])
+    pad = torch.zeros(pad_shape, device=x.device, dtype=x.dtype)
+    return torch.cat([x, pad], dim=1)
+
+
 class MiniMPNN(nn.Module):
     """Wrapper for ProteinMPNN network to predict sequence from structure."""
 
@@ -409,6 +647,42 @@ class CoordinateDenoiser(nn.Module):
         )
         if self.has_binder_sse_prop_cond:
             n_xyz += 3
+        # Per-residue motif SASA burial-class conditioning (3 channels:
+        # buried/partial/exposed one-hot), broadcast across the atom dim at motif
+        # positions. Mirrors has_dssp_cond. Applies to indexed and unindexed styles.
+        self.has_sasa_cond = (
+            config.model.crop_conditional
+            and "sasa" in config.model.conditioning_style
+        )
+        if self.has_sasa_cond:
+            n_xyz += 3
+        # Per-atom motif h-bond conditioning (1 channel): marks which of the 37
+        # atoms at a motif residue participate in a side-chain h-bond. Per-atom
+        # like condmask (NOT broadcast per-residue like sasa/dssp), so +1 channel.
+        self.has_hbond_cond = (
+            config.model.crop_conditional
+            and "hbond" in config.model.conditioning_style
+        )
+        if self.has_hbond_cond:
+            n_xyz += 1
+        # Atomized conditioning (cc152): per-atom channels that say what each of
+        # the 37 slots actually holds, so non-canonical residues, ligands and
+        # metals can share the atom37 layout. Element one-hot + CCD reference
+        # conformer xyz + a flag for slots used outside their canonical meaning.
+        # For a purely canonical protein these are a deterministic function of
+        # aatype, so zero-initialising their input weights reproduces cc89.
+        self.has_atomized_cond = "atomized" in config.model.conditioning_style
+        if self.has_atomized_cond:
+            n_xyz += N_ELEMENT_GROUPS + 3 + 1
+        # cc154: rotation-invariant bond-topology scalars per atom
+        # (ideal distance to bonded parent, ideal distance to the token anchor,
+        # bond degree). The reference-conformer channels give ideal *coordinates*,
+        # from which a bond length needs |ref_a - ref_b| -- a pairwise operation
+        # the architecture never performs within a token, which is why ablating
+        # them changes almost nothing. These supply the distance directly.
+        self.has_bondgeom_cond = "bondgeom" in config.model.conditioning_style
+        if self.has_bondgeom_cond:
+            n_xyz += 3
         nc_in = n_xyz * n_atoms  # xyz + selfcond xyz + maybe cropcond xyz
 
         # Neural networks
@@ -467,6 +741,12 @@ class CoordinateDenoiser(nn.Module):
         adj_cond: TensorType["b n n", int] | None = None,
         motif_sse_cond: TensorType["b n d", float] | None = None,
         binder_sse_prop_cond: TensorType["b n d", float] | None = None,
+        motif_sasa_cond: TensorType["b n d", float] | None = None,
+        motif_hbond_cond: TensorType["b n a", float] | None = None,
+        atom_elem: TensorType["b n a", int] | None = None,
+        atom_ref: TensorType["b n a x", float] | None = None,
+        atom_noncanon: TensorType["b n a", float] | None = None,
+        atom_bondfeat: TensorType["b n a d", float] | None = None,
         return_emb: bool = False,
     ):
 
@@ -613,6 +893,62 @@ class CoordinateDenoiser(nn.Module):
                 -1, -1, emb.shape[-2], -1
             )
             emb = torch.cat([emb, binder_sse_prop_per_atom], dim=-1)
+
+        if self.has_sasa_cond:
+            if motif_sasa_cond is None:
+                motif_sasa_cond = torch.zeros(
+                    emb.shape[0], emb.shape[1], 3,
+                    device=emb.device, dtype=emb.dtype,
+                )
+            motif_sasa_per_atom = motif_sasa_cond.unsqueeze(-2).expand(
+                -1, -1, emb.shape[-2], -1
+            )
+            emb = torch.cat([emb, motif_sasa_per_atom], dim=-1)
+
+        if self.has_hbond_cond:
+            # Per-atom [B, N, 37] -> [B, N, 37, 1], concatenated directly (no
+            # broadcast) exactly like the condmask channel.
+            if motif_hbond_cond is None:
+                hbond_channel = torch.zeros(
+                    emb.shape[0], emb.shape[1], emb.shape[2], 1,
+                    device=emb.device, dtype=emb.dtype,
+                )
+            else:
+                hbond_channel = motif_hbond_cond.unsqueeze(-1).to(emb.dtype)
+            emb = torch.cat([emb, hbond_channel], dim=-1)
+
+        if self.has_atomized_cond:
+            # All three are per-atom [B, N, 37, *] and concatenated directly (no
+            # broadcast), like the condmask/hbond channels.
+            b, n, a = emb.shape[0], emb.shape[1], emb.shape[2]
+            if atom_elem is None:
+                elem_oh = torch.zeros(
+                    b, n, a, N_ELEMENT_GROUPS, device=emb.device, dtype=emb.dtype
+                )
+            else:
+                elem_oh = F.one_hot(
+                    atom_elem.long().clamp(0, N_ELEMENT_GROUPS - 1),
+                    num_classes=N_ELEMENT_GROUPS,
+                ).to(emb.dtype)
+            if atom_ref is None:
+                ref_ch = torch.zeros(b, n, a, 3, device=emb.device, dtype=emb.dtype)
+            else:
+                ref_ch = atom_ref.to(emb.dtype)
+            if atom_noncanon is None:
+                nc_ch = torch.zeros(b, n, a, 1, device=emb.device, dtype=emb.dtype)
+            else:
+                nc_ch = atom_noncanon.unsqueeze(-1).to(emb.dtype)
+            emb = torch.cat([emb, elem_oh, ref_ch, nc_ch], dim=-1)
+
+        if self.has_bondgeom_cond:
+            if atom_bondfeat is None:
+                bg = torch.zeros(
+                    emb.shape[0], emb.shape[1], emb.shape[2], 3,
+                    device=emb.device, dtype=emb.dtype,
+                )
+            else:
+                bg = atom_bondfeat.to(emb.dtype)
+            emb = torch.cat([emb, bg], dim=-1)
 
         emb, hidden = self.net(
             emb,
@@ -860,6 +1196,12 @@ class Protpardelle(nn.Module):
         adj_cond: TensorType["b n n", int] | None = None,
         motif_sse_cond: TensorType["b n d", float] | None = None,
         binder_sse_prop_cond: TensorType["b n d", float] | None = None,
+        motif_sasa_cond: TensorType["b n d", float] | None = None,
+        motif_hbond_cond: TensorType["b n a", float] | None = None,
+        atom_elem: TensorType["b n a", int] | None = None,
+        atom_ref: TensorType["b n a x", float] | None = None,
+        atom_noncanon: TensorType["b n a", float] | None = None,
+        atom_bondfeat: TensorType["b n a d", float] | None = None,
         seq_self_cond: TensorType["b n t", float] | None = None,  # logprobs
         seq_crop_cond: TensorType["b n", int] | None = None,  # motif aatypes
         motif_clean_coords: TensorType["b m a x", float] | None = None,
@@ -968,6 +1310,14 @@ class Protpardelle(nn.Module):
                 adj_cond=adj_cond,
                 motif_sse_cond=motif_sse_cond,
                 binder_sse_prop_cond=ext_binder_sse_prop_cond,
+                motif_sasa_cond=motif_sasa_cond,
+                motif_hbond_cond=motif_hbond_cond,
+                # Atomized channels are protein-indexed; pad the appended motif
+                # tail with zeros (= "no atomized information").
+                atom_elem=_pad_seq_tail(atom_elem, M),
+                atom_ref=_pad_seq_tail(atom_ref, M),
+                atom_noncanon=_pad_seq_tail(atom_noncanon, M),
+                atom_bondfeat=_pad_seq_tail(atom_bondfeat, M),
             )
         else:
             struct_inputs = dict(
@@ -984,6 +1334,12 @@ class Protpardelle(nn.Module):
                 adj_cond=adj_cond,
                 motif_sse_cond=motif_sse_cond,
                 binder_sse_prop_cond=binder_sse_prop_cond,
+                motif_sasa_cond=motif_sasa_cond,
+                motif_hbond_cond=motif_hbond_cond,
+                atom_elem=atom_elem,
+                atom_ref=atom_ref,
+                atom_noncanon=atom_noncanon,
+                atom_bondfeat=atom_bondfeat,
             )
 
         # Coordinate denoiser
@@ -1002,6 +1358,12 @@ class Protpardelle(nn.Module):
                 adj_cond=struct_inputs["adj_cond"],
                 motif_sse_cond=struct_inputs["motif_sse_cond"],
                 binder_sse_prop_cond=struct_inputs["binder_sse_prop_cond"],
+                motif_sasa_cond=struct_inputs["motif_sasa_cond"],
+                motif_hbond_cond=struct_inputs["motif_hbond_cond"],
+                atom_elem=struct_inputs["atom_elem"],
+                atom_ref=struct_inputs["atom_ref"],
+                atom_noncanon=struct_inputs["atom_noncanon"],
+                atom_bondfeat=struct_inputs["atom_bondfeat"],
                 return_emb=True,
             )
             if unindexed_active:
@@ -1119,6 +1481,61 @@ class Protpardelle(nn.Module):
         chain_index = chain_index.to(self.device) * mask
         return mask, residue_index, chain_index
 
+    def _forward_guided(
+        self,
+        guidance_model,
+        autoguidance_weight,
+        negative_crop_conds=None,
+        negative_guidance_weight: float = 0.0,
+        **kw,
+    ):
+        """forward() with optional AUTOGUIDANCE (Karras et al. 2024, "Guiding a
+        Diffusion Model with a Bad Version of Itself"). D_bad = an undertrained
+        early checkpoint fed the IDENTICAL noisy input + conditioning; we push the
+        denoised prediction away from it:  x0 = x0_good + w*(x0_good - x0_bad).
+        w = 0 (or no guidance_model) reduces to a plain forward pass.
+
+        NEGATIVE MOTIF GUIDANCE (negative design). Same extrapolation, but the
+        "bad" predictions come from the SAME model conditioned on DIFFERENT
+        crop-conditional motif tensors (the negative motifs):
+
+            x0 = x0_pos + w * sum_i[ w_i * (x0_pos - x0_neg_i) ]
+
+        i.e. classifier-free-guidance-style repulsion away from every
+        p(structure | negative motif i) and towards p(structure | positive motif).
+        `negative_crop_conds` is a list of (coords, condmask, w_i) triples;
+        `negative_guidance_weight` is the global scale w. Multiple negatives
+        support band-pass selectivity (push away from both larger and smaller
+        ions at once). Cost is (1 + n_negatives) denoiser forwards per step.
+
+        w = 0 (or no negative tensors) is an exact no-op: no extra forward is run
+        and the RNG stream is untouched, so results are bit-identical to
+        positive-only sampling.
+        """
+        x0, s_logprobs, x_self_cond, s_self_cond = self.forward(**kw)
+        if guidance_model is not None and autoguidance_weight != 0.0:
+            with torch.no_grad():
+                x0_bad = guidance_model.forward(**kw)[0]
+            x0 = x0 + autoguidance_weight * (x0 - x0_bad)
+        if negative_crop_conds and negative_guidance_weight != 0.0:
+            delta = None
+            for neg_coords, neg_mask, neg_w in negative_crop_conds:
+                if neg_coords is None or neg_w == 0.0:
+                    continue
+                neg_kw = dict(kw)
+                neg_kw["struct_crop_cond"] = neg_coords
+                neg_kw["crop_cond_mask"] = neg_mask
+                # We only need x0_neg; skip MiniMPNN (its logprobs/self-cond are
+                # taken from the positive pass) to halve the extra cost.
+                neg_kw["run_mpnn_model"] = False
+                with torch.no_grad():
+                    x0_neg = self.forward(**neg_kw)[0]
+                term = neg_w * (x0 - x0_neg)
+                delta = term if delta is None else delta + term
+            if delta is not None:
+                x0 = x0 + negative_guidance_weight * delta
+        return x0, s_logprobs, x_self_cond, s_self_cond
+
     def sample(
         self,
         *,
@@ -1168,6 +1585,13 @@ class Protpardelle(nn.Module):
         motif_sse_label: str | None = None,
         motif_sse_flank: int | None = None,
         binder_sse_prop: list[float] | tuple[float, float, float] | None = None,
+        motif_sasa_label: str | None = None,
+        motif_hbond_label: str | list[str] | None = None,
+        guidance_model: "Protpardelle | None" = None,
+        autoguidance_weight: float = 0.0,
+        negative_motifs: str | list[tuple[str, float]] | None = None,
+        negative_guidance_weight: float = 0.0,
+        negative_motif_all_atom_stage1: list[TensorType["b n a x", float]] | None = None,
     ):
         """Sampling function for backbone or all-atom diffusion.
 
@@ -1219,7 +1643,30 @@ class Protpardelle(nn.Module):
         motif_idx_stage1: used in two-stage allatom sampling, cache the motif index used in stage1
         stage2: flag to indicate stage2
         tip_atom_conditioning: true to use reconstruction and replacement guidance for tip atom conditioning
+        negative_motifs: motif(s) to steer AWAY from ("negative design"). Either a
+            single path, or a list of (path, relative_weight) pairs — mirrors the
+            multi_motif_list format. Every negative motif must contain exactly the
+            same residues and atoms as motif_file_path (asserted); only the
+            coordinates may differ. Each is placed on the same contig positions and
+            rigid-transformed with the SAME centering/rotation/translation as the
+            positive motif, so the only difference reaching the denoiser is motif
+            geometry.
+        negative_guidance_weight: global scale w in
+            x0 = x0_pos + w * sum_i[w_i * (x0_pos - x0_neg_i)].
+            0.0 disables negative guidance entirely (exact no-op, no extra forward).
+        negative_motif_all_atom_stage1: like motif_all_atom_stage1 but a LIST of
+            cached transformed negative-motif coords (one per negative motif), so
+            stage2 / the Caliby re-denoise pass keep the negative conditioning
+            active without having to recompute the (unavailable) centering/rotation.
         """
+
+        # Autoguidance model can be attached to the model object (sample.py sets
+        # model._guidance_model / _autoguidance_weight) instead of threaded through
+        # the many sampling wrappers.
+        if guidance_model is None:
+            guidance_model = getattr(self, "_guidance_model", None)
+        if autoguidance_weight == 0.0:
+            autoguidance_weight = getattr(self, "_autoguidance_weight", 0.0)
 
         cc = apply_dotdict_recursively(conditional_cfg)  # shorthand
         pd = apply_dotdict_recursively(partial_diffusion)
@@ -1327,83 +1774,9 @@ class Protpardelle(nn.Module):
         if cc.enabled:
             if motif_placements_full is not None:
 
-                all_motif_feats = []
-
-                for mp_chains in motif_placements_full:
-                    chain_motif_feats = defaultdict(list)
-                    prev_motif_segments = 0
-                    for mp in mp_chains.split(";/;"):
-                        curr_motif_feats = copy.deepcopy(motif_feats)
-                        motif_chain_resids = [
-                            s for s in mp.split("/") if s[0].isalpha()
-                        ]
-                        if not motif_chain_resids:
-                            continue
-                        # Pad each motif segment to its NOMINAL contig length
-                        # (end - start + 1) rather than to the count of residues
-                        # actually present in the motif PDB. Residues unmodeled in
-                        # the PDB (gaps within the contig range) become zero-filled,
-                        # atom_mask=0 rows: they reserve a scaffold slot so the contig
-                        # placement (motif_idx) and per-chain total_lengths stay
-                        # consistent, but they are not conditioned on downstream
-                        # (crop_cond_mask is derived from non-zero coords). Without
-                        # this, a gapped motif yields fewer motif coords than the
-                        # contig reserves and the scatter into crop_cond_coords raises
-                        # a shape mismatch.
-                        for seg in motif_chain_resids:
-                            seg_match = re.match(
-                                r"([A-Za-z])(\d+)(?:-(\d+))?$", seg
-                            )
-                            if not seg_match:
-                                raise ValueError(
-                                    f"Invalid motif segment: {seg}"
-                                )
-                            seg_chain = seg_match.group(1)
-                            seg_start = int(seg_match.group(2))
-                            seg_end = (
-                                int(seg_match.group(3))
-                                if seg_match.group(3)
-                                else seg_start
-                            )
-                            nominal_len = seg_end - seg_start + 1
-                            seg_present_idx = parse_fixed_pos_str(
-                                seg,
-                                chain_id_mapping,
-                                motif_feats["residue_index_orig"],
-                                motif_feats["chain_index"],
-                            )
-                            present_resnums = (
-                                motif_feats["residue_index_orig"][seg_present_idx]
-                                .long()
-                                .tolist()
-                            )
-                            offsets = [rn - seg_start for rn in present_resnums]
-                            seg_chain_int = int(chain_id_mapping[seg_chain])
-                            for k, v in curr_motif_feats.items():
-                                pad_shape = (nominal_len,) + tuple(v.shape[1:])
-                                if k in ("residue_index", "residue_index_orig"):
-                                    padded = torch.arange(
-                                        seg_start, seg_end + 1, dtype=v.dtype
-                                    )
-                                elif k == "chain_index":
-                                    padded = torch.full(
-                                        pad_shape, seg_chain_int, dtype=v.dtype
-                                    )
-                                else:
-                                    padded = torch.zeros(pad_shape, dtype=v.dtype)
-                                if offsets:
-                                    padded[
-                                        torch.tensor(offsets, dtype=torch.long)
-                                    ] = v[
-                                        torch.tensor(
-                                            seg_present_idx, dtype=torch.long
-                                        )
-                                    ]
-                                chain_motif_feats[k].append(padded)
-                            prev_motif_segments += nominal_len
-                    for k, v in chain_motif_feats.items():
-                        chain_motif_feats[k] = torch.cat(v, dim=0)
-                    all_motif_feats.append(chain_motif_feats)
+                all_motif_feats = place_motif_feats_on_contigs(
+                    motif_feats, chain_id_mapping, motif_placements_full
+                )
 
                 motif_residx = [
                     mf["residue_index"].numpy().astype(int) for mf in all_motif_feats
@@ -1557,6 +1930,119 @@ class Protpardelle(nn.Module):
                     mm_entry['all_atom'] = mm_all_atom
 
                 print(f"Using multi-motif conditioning with {len(multi_motif_data)} motifs.")
+
+        # ------------------------------------------------------------------
+        # NEGATIVE MOTIF(S) (negative design / repulsive guidance)
+        # Each negative motif is loaded, contig-placed and rigid-transformed
+        # EXACTLY like the positive motif, so the only thing differing between
+        # the positive and negative conditioning tensors is motif geometry.
+        # Multiple negatives are supported (band-pass selectivity: push away from
+        # both larger and smaller variants at once); the per-step cost is
+        # (1 + n_negatives) denoiser forwards.
+        # ------------------------------------------------------------------
+        neg_motif_coords_list: list = []          # transformed coords per negative
+        neg_motif_weights: list[float] = []       # relative weight w_i per negative
+        negative_guidance_weight = float(negative_guidance_weight or 0.0)
+        negative_motif_entries: list[tuple[str, float]] = []
+        if negative_motifs is not None:
+            if isinstance(negative_motifs, (str, Path)):
+                negative_motif_entries = [(str(negative_motifs), 1.0)]
+            else:
+                for entry in negative_motifs:
+                    if isinstance(entry, (str, Path)):
+                        negative_motif_entries.append((str(entry), 1.0))
+                    else:
+                        negative_motif_entries.append((str(entry[0]), float(entry[1])))
+        if (
+            cc.enabled
+            and negative_motif_entries
+            and negative_guidance_weight != 0.0
+        ):
+            if getattr(self.struct_model, "is_unindexed", False):
+                raise NotImplementedError(
+                    "negative_motifs is only supported for indexed "
+                    "(struct_crop_cond) conditioning; this model is unindexed."
+                )
+            if negative_motif_all_atom_stage1 is not None:
+                # stage2 / Caliby re-denoise: reuse the transformed coords from
+                # the main pass (centering_delta / random_rots are unavailable here).
+                cached = negative_motif_all_atom_stage1
+                if torch.is_tensor(cached):
+                    cached = [cached]
+                if len(cached) != len(negative_motif_entries):
+                    raise ValueError(
+                        f"negative_motif_all_atom_stage1 has {len(cached)} entries but "
+                        f"{len(negative_motif_entries)} negative motifs were requested."
+                    )
+                neg_motif_coords_list = [c.clone().to(self.device) for c in cached]
+                neg_motif_weights = [w for _, w in negative_motif_entries]
+            elif motif_all_atom_stage1 is not None:
+                raise ValueError(
+                    "Negative-design guidance is enabled and the positive motif was "
+                    "supplied via motif_all_atom_stage1, but negative_motif_all_atom_stage1 "
+                    "was not. The negative motifs cannot be re-derived because the "
+                    "centering/rotation of the main pass is not available here. Pass the "
+                    "cached negative coords (aux['negative_motif_all_atom'])."
+                )
+            else:
+                _neg_strategy = (
+                    cc.crop_conditional_guidance.strategy
+                    if cc.crop_conditional_guidance is not None
+                    else ""
+                ) or ""
+                for neg_path, neg_w in negative_motif_entries:
+                    neg_motif_feats, _ = load_feats_from_pdb(
+                        neg_path,
+                        include_pos_feats=True,
+                        inject_hoh_as_bb_o=("water-bbO" in _neg_strategy),
+                    )
+                    neg_chain_id_mapping = neg_motif_feats.pop("chain_id_mapping")
+                    # Hard guard: identical residues/atoms, coords may differ.
+                    assert_identical_motif_atom_sets(
+                        motif_feats,
+                        neg_motif_feats,
+                        str(motif_file_path),
+                        str(neg_path),
+                    )
+                    if motif_placements_full is not None:
+                        neg_all_motif_feats = place_motif_feats_on_contigs(
+                            neg_motif_feats, neg_chain_id_mapping, motif_placements_full
+                        )
+                        neg_coords = torch.stack(
+                            [
+                                mf["atom_positions"].to(self.device)
+                                for mf in neg_all_motif_feats
+                            ]
+                        )
+                    else:
+                        neg_coords = torch.tile(
+                            neg_motif_feats["atom_positions"]
+                            .to(self.device)
+                            .unsqueeze(0),
+                            dims=(batch_size, 1, 1, 1),
+                        )
+                    # Apply the SAME rigid transform as the positive motif.
+                    neg_coords = neg_coords - centering_delta
+                    neg_coords = torch.einsum(
+                        "bij,blnj->blni", random_rots, neg_coords
+                    )
+                    neg_coords = neg_coords * motif_atom_mask.unsqueeze(-1).to(
+                        neg_coords
+                    )
+                    if dx is not None and dx != "":
+                        neg_coords[..., 0] = neg_coords[..., 0] + dx
+                    if dy is not None and dy != "":
+                        neg_coords[..., 1] = neg_coords[..., 1] + dy
+                    if dz is not None and dz != "":
+                        neg_coords[..., 2] = neg_coords[..., 2] + dz
+                    neg_motif_coords_list.append(neg_coords)
+                    neg_motif_weights.append(neg_w)
+            print(
+                f"Using {len(neg_motif_coords_list)} NEGATIVE motif(s) "
+                f"{[p for p, _ in negative_motif_entries]} with relative weights "
+                f"{neg_motif_weights} and global negative_guidance_weight="
+                f"{negative_guidance_weight}."
+            )
 
         def ode_step(
             sigma_in,
@@ -2016,6 +2502,7 @@ class Protpardelle(nn.Module):
                         motif_aatype_for_fix.append([src_aat[k] for k in keep])
 
         all_crop_cond_coords = None
+        multistate_motif_coords = []   # per-state full-atom motif coords (multi-state branch)
         if (
             cc.crop_conditional_guidance.enabled
             and cc.crop_conditional_guidance.start == 0.0
@@ -2026,6 +2513,11 @@ class Protpardelle(nn.Module):
                 all_crop_cond_coords = []
                 for mm_entry in multi_motif_data:
                     mm_all_atom = mm_entry['all_atom']
+
+                    # Keep each state's MOTIF-ONLY placed coords [B, n_motif, 37, 3]
+                    # (same layout as motif_all_atom) so multi-state sampling can pin
+                    # that state's chromophore in the branch re-denoise.
+                    multistate_motif_coords.append(mm_all_atom.detach().clone())
 
                     ccc = torch.zeros_like(xt).to(xt.device)
                     for bi in range(batch_size):
@@ -2067,6 +2559,32 @@ class Protpardelle(nn.Module):
             elif crop_cond_coords is not None:
                 crop_cond_mask = (crop_cond_coords.abs().sum(-1) > 0).float()
 
+        # Negative-motif crop-conditional tensor. Same motif_idx, same
+        # apply_crop_cond_strategy, same condmask -- only coords differ. We reuse the
+        # POSITIVE condmask verbatim (rather than re-deriving it from non-zero
+        # negative coords) so that a coordinate that lands exactly on the origin in
+        # one of the two motifs cannot flip a mask bit and turn "atom moved" into
+        # "atom appeared". The atom sets are asserted identical, so the correct
+        # condmask is by construction the positive one.
+        negative_crop_conds: list[tuple] = []
+        if (
+            neg_motif_coords_list
+            and cc.crop_conditional_guidance.enabled
+            and cc.crop_conditional_guidance.start == 0.0
+            and not is_unindexed
+        ):
+            for neg_coords, neg_w in zip(neg_motif_coords_list, neg_motif_weights):
+                nccc = torch.zeros_like(xt).to(xt.device)
+                for bi, _ in enumerate(motif_idx):
+                    nccc[bi, motif_idx[bi]] = neg_coords[bi]
+                nccc = apply_crop_cond_strategy(
+                    nccc,
+                    motif_idx,
+                    motif_aa3,
+                    cc.crop_conditional_guidance.strategy,
+                )
+                negative_crop_conds.append((nccc, crop_cond_mask, neg_w))
+
         crop_cond_seq_oh = None
         if (
             "minimpnn_seqcond" in cc.crop_conditional_guidance
@@ -2085,6 +2603,19 @@ class Protpardelle(nn.Module):
             for bi in range(batch_size):
                 for ii, mi in enumerate(motif_idx[bi]):
                     hotspot_mask[bi, mi] = motif_hotspot_mask[bi, ii]
+
+        if os.environ.get("PROTPARDELLE_DEBUG_COND"):
+            logger.info(
+                "[cond-debug] conditioning_style=%s hotspots=%r "
+                "motif_hotspot_mask.sum=%s hotspot_mask.sum=%s per_sample=%s",
+                self.config.model.conditioning_style,
+                hotspots,
+                int(locals()["motif_hotspot_mask"].sum())
+                if locals().get("motif_hotspot_mask") is not None
+                else None,
+                int(hotspot_mask.sum()),
+                hotspot_mask.sum(-1).tolist(),
+            )
 
         # Build motif SSE conditioning (cc143/cc144 dssp channel). For unindexed,
         # the model extends inputs to seq_dim N+M inside Protpardelle.forward, so
@@ -2221,8 +2752,139 @@ class Protpardelle(nn.Module):
             binder_sse_prop_cond = (
                 prop.view(1, 1, 3) * binder_res_mask.unsqueeze(-1)
             )  # [B, N, 3]
+            if os.environ.get("PROTPARDELLE_DEBUG_COND"):
+                logger.info(
+                    "[cond-debug] binder_sse_prop=%r quantized=%s n_binder_res=%s "
+                    "cond.abs().sum=%.1f",
+                    binder_sse_prop,
+                    prop.tolist(),
+                    binder_res_mask.sum(-1).tolist(),
+                    float(binder_sse_prop_cond.abs().sum()),
+                )
+
+        # Per-residue motif SASA burial-class conditioning (cc91-sasa). Mirrors
+        # motif_sse_cond but with classes buried/partial/exposed (channels 0/1/2).
+        # `motif_sasa_label` accepts:
+        #   - None: no SASA conditioning (all zero channels)
+        #   - keyword "buried"/"partial"/"exposed"/"any" — broadcast to every motif residue
+        #   - single letter "B"/"P"/"E"/"X" — same broadcast
+        #   - per-residue string of length K (motif size) over {B, P, E, X}, X = no info
+        motif_sasa_cond = None
+        sasa_char_to_idx = {"B": 0, "P": 1, "E": 2, "X": -1}
+        sasa_keyword_to_letter = {
+            "buried": "B", "core": "B", "b": "B",
+            "partial": "P", "partially_buried": "P", "intermediate": "P", "p": "P",
+            "exposed": "E", "surface": "E", "solvent": "E", "e": "E",
+            "any": "X", "none": "X", "x": "X", "": "X",
+        }
+        if (
+            motif_sasa_label is not None
+            and "sasa" in self.config.model.conditioning_style
+        ):
+            if is_unindexed:
+                K = motif_all_atom.shape[1] if motif_all_atom is not None else 0
+            else:
+                K = len(motif_idx[0]) if len(motif_idx) > 0 else 0
+            raw = str(motif_sasa_label).strip()
+            lo = raw.lower()
+            if lo in sasa_keyword_to_letter:
+                letters = sasa_keyword_to_letter[lo] * K
+            elif all(ch.upper() in sasa_char_to_idx for ch in raw):
+                if len(raw) != K:
+                    raise ValueError(
+                        f"motif_sasa_label string {raw!r} has length {len(raw)} but "
+                        f"the motif has {K} residues; must match exactly"
+                    )
+                letters = raw.upper()
+            else:
+                raise ValueError(
+                    f"motif_sasa_label must be one of buried/partial/exposed/any or a "
+                    f"per-residue string of letters in {{B,P,E,X}}, got {motif_sasa_label!r}"
+                )
+            if is_unindexed:
+                M_cap = self.config.model.max_motif_size
+                motif_sasa_cond = torch.zeros(
+                    batch_size, seq_length + M_cap, 3, device=xt.device, dtype=xt.dtype
+                )
+                for r, ch in enumerate(letters):
+                    idx = sasa_char_to_idx[ch]
+                    if idx >= 0:
+                        motif_sasa_cond[:, seq_length + r, idx] = 1.0
+            else:
+                motif_sasa_cond = torch.zeros(
+                    batch_size, seq_length, 3, device=xt.device, dtype=xt.dtype
+                )
+                for bi in range(batch_size):
+                    for r, mi in enumerate(motif_idx[bi]):
+                        if r >= len(letters):
+                            break
+                        idx = sasa_char_to_idx[letters[r]]
+                        if idx >= 0:
+                            motif_sasa_cond[bi, mi, idx] = 1.0
+
+        # Per-atom motif hydrogen-bond conditioning (cc91-sasa-hbond). Marks
+        # specific motif ATOMS (not whole residues) as participating in a
+        # side-chain hydrogen bond, matching the per-atom [B, N, 37] `hbond`
+        # channel the model was trained with. `motif_hbond_label` is a single
+        # string or a list of "<resspec>:<atom_name>" entries, where <resspec>
+        # uses the motif PDB's original chain+residue numbering (e.g. "A66") and
+        # <atom_name> is an atom37 name (e.g. "OH" for a Tyr tip hydroxyl).
+        # Residues are resolved to scaffold positions exactly like hotspots
+        # (parse on the source motif feats, then map through motif_idx). Indexed
+        # path only (unindexed h-bond conditioning was never trained).
+        motif_hbond_cond = None
+        if (
+            motif_hbond_label is not None
+            and "hbond" in self.config.model.conditioning_style
+        ):
+            if is_unindexed:
+                raise ValueError(
+                    "motif_hbond_label is only supported for indexed sampling; "
+                    "the hbond channel was not trained for unindexed motifs."
+                )
+            specs = (
+                [motif_hbond_label]
+                if isinstance(motif_hbond_label, str)
+                else list(motif_hbond_label)
+            )
+            n_atoms = motif_all_atom.shape[-2]
+            motif_hbond_cond = torch.zeros(
+                batch_size, seq_length, n_atoms, device=xt.device, dtype=xt.dtype
+            )
+            for spec in specs:
+                if spec is None:
+                    continue
+                if ":" not in str(spec):
+                    raise ValueError(
+                        f"motif_hbond_label entry {spec!r} must be "
+                        f"'<chain><resnum>:<atom_name>', e.g. 'A66:OH'"
+                    )
+                resspec, atom_name = str(spec).rsplit(":", 1)
+                atom_name = atom_name.strip()
+                if atom_name not in residue_constants.atom_order:
+                    raise ValueError(
+                        f"motif_hbond_label atom {atom_name!r} is not a valid atom37 "
+                        f"name (in spec {spec!r})"
+                    )
+                atom_idx = residue_constants.atom_order[atom_name]
+                rows = parse_fixed_pos_str(
+                    resspec.strip(),
+                    chain_id_mapping,
+                    motif_feats["residue_index_orig"],
+                    motif_feats["chain_index"],
+                )
+                if not rows:
+                    logger.warning(
+                        "motif_hbond_label spec %r matched no motif residue; skipping.",
+                        spec,
+                    )
+                for bi in range(batch_size):
+                    for row in rows:
+                        if row < len(motif_idx[bi]):
+                            motif_hbond_cond[bi, motif_idx[bi][row], atom_idx] = 1.0
 
         xt_traj, x0_traj, st_traj, s0_traj = [], [], [], []
+        xt_raw_traj = []   # unscaled xt (physical coords) for trajectory visualisation
 
         residue_index_orig = residue_index.clone()
         chain_id_mapping = None
@@ -2539,7 +3201,9 @@ class Protpardelle(nn.Module):
                             x_self_cond_accum = None
 
                             for ccc, ccc_mask, weight in all_crop_cond_coords:
-                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
+                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self._forward_guided(guidance_model, autoguidance_weight,
+                                    negative_crop_conds=negative_crop_conds,
+                                    negative_guidance_weight=negative_guidance_weight,
                                     noisy_coords=xt_rep,
                                     noise_level=sigma_hat,
                                     seq_mask=seq_mask,
@@ -2557,6 +3221,8 @@ class Protpardelle(nn.Module):
                                     adj_cond=adj_cond,
                                     motif_sse_cond=motif_sse_cond,
                                     binder_sse_prop_cond=binder_sse_prop_cond,
+                                    motif_sasa_cond=motif_sasa_cond,
+                                    motif_hbond_cond=motif_hbond_cond,
                                     seq_self_cond=(
                                         s_self_cond
                                         if self.config.model.mpnn_model.use_self_conditioning
@@ -2579,7 +3245,9 @@ class Protpardelle(nn.Module):
                             x_self_cond = x_self_cond_accum
                         else:
                             # Single motif (existing logic)
-                            x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
+                            x0, s_logprobs, x_self_cond, s_self_cond = self._forward_guided(guidance_model, autoguidance_weight,
+                                negative_crop_conds=negative_crop_conds,
+                                negative_guidance_weight=negative_guidance_weight,
                                 noisy_coords=xt_rep,
                                 noise_level=sigma_hat,
                                 seq_mask=seq_mask,
@@ -2597,6 +3265,8 @@ class Protpardelle(nn.Module):
                                 adj_cond=adj_cond,
                                 motif_sse_cond=motif_sse_cond,
                                 binder_sse_prop_cond=binder_sse_prop_cond,
+                                motif_sasa_cond=motif_sasa_cond,
+                                motif_hbond_cond=motif_hbond_cond,
                                 seq_self_cond=(
                                     s_self_cond
                                     if self.config.model.mpnn_model.use_self_conditioning
@@ -2773,7 +3443,9 @@ class Protpardelle(nn.Module):
                             x_self_cond_accum = None
 
                             for ccc, ccc_mask, weight in all_crop_cond_coords:
-                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self.forward(
+                                x0_m, s_logprobs_m, x_self_cond_m, s_self_cond_m = self._forward_guided(guidance_model, autoguidance_weight,
+                                    negative_crop_conds=negative_crop_conds,
+                                    negative_guidance_weight=negative_guidance_weight,
                                     noisy_coords=xt_rep,
                                     noise_level=sigma,
                                     seq_mask=seq_mask,
@@ -2791,6 +3463,8 @@ class Protpardelle(nn.Module):
                                     adj_cond=adj_cond,
                                     motif_sse_cond=motif_sse_cond,
                                     binder_sse_prop_cond=binder_sse_prop_cond,
+                                    motif_sasa_cond=motif_sasa_cond,
+                                    motif_hbond_cond=motif_hbond_cond,
                                     seq_self_cond=(
                                         s_self_cond
                                         if self.config.model.mpnn_model.use_self_conditioning
@@ -2813,7 +3487,9 @@ class Protpardelle(nn.Module):
                             x_self_cond = x_self_cond_accum
                         else:
                             # Single motif (existing logic)
-                            x0, s_logprobs, x_self_cond, s_self_cond = self.forward(
+                            x0, s_logprobs, x_self_cond, s_self_cond = self._forward_guided(guidance_model, autoguidance_weight,
+                                negative_crop_conds=negative_crop_conds,
+                                negative_guidance_weight=negative_guidance_weight,
                                 noisy_coords=xt_rep,
                                 noise_level=sigma,
                                 seq_mask=seq_mask,
@@ -2831,6 +3507,8 @@ class Protpardelle(nn.Module):
                                 adj_cond=adj_cond,
                                 motif_sse_cond=motif_sse_cond,
                                 binder_sse_prop_cond=binder_sse_prop_cond,
+                                motif_sasa_cond=motif_sasa_cond,
+                                motif_hbond_cond=motif_hbond_cond,
                                 seq_self_cond=(
                                     s_self_cond
                                     if self.config.model.mpnn_model.use_self_conditioning
@@ -3066,6 +3744,7 @@ class Protpardelle(nn.Module):
             )
             scaled_xt = xt * xt_scale
             xt_traj.append(scaled_xt.cpu())
+            xt_raw_traj.append(xt.cpu())
             x0_traj.append(x0.cpu())
             st_traj.append(s_hat.cpu())
             s0_traj.append(s_logprobs.cpu())
@@ -3083,12 +3762,15 @@ class Protpardelle(nn.Module):
                 "seq_mask": seq_mask,
                 "atom_mask": atom_mask,
                 "xt_traj": xt_traj,
+                "xt_raw_traj": xt_raw_traj,
                 "x0_traj": x0_traj,
                 "st_traj": st_traj,
                 "s0_traj": s0_traj,
                 "motif_idx": motif_idx,
                 "motif_aatype": motif_aatype,
                 "motif_all_atom": motif_all_atom,
+                "negative_motif_all_atom": (neg_motif_coords_list or None),
+                "multistate_motif_coords": (multistate_motif_coords or None),
                 "motif_atom_mask": motif_atom_mask,
                 "motif_aa3": motif_aa3,
                 "motif_random_rots": random_rots,
